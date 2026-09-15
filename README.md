@@ -60,7 +60,7 @@ protocol between them.
 |-----------|-------|
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
-| 2. Mac client: Bonjour, decode, fullscreen, input | written, not yet compiled on a Mac |
+| 2. Mac client: Bonjour, pairing, decode, fullscreen, input | compiles clean on the Mac; handshake verified byte-for-byte against the protocol test vector. Not yet run against the host |
 | 3. First real session over the cable | pending |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and one frame of latency) | pending |
