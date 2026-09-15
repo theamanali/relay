@@ -192,7 +192,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             self.window.makeKeyAndOrderFront(nil)
             self.window.makeFirstResponder(self.view)
             self.setCursorHidden(true)
-            completion(response == .alertFirstButtonReturn ? field.stringValue.trimmingCharacters(in: .whitespaces) : nil)
+            guard response == .alertFirstButtonReturn else {
+                // Cancel means "let me out", not "ask again in a second".
+                completion(nil)
+                NSApp.terminate(nil)
+                return
+            }
+            completion(field.stringValue.trimmingCharacters(in: .whitespaces))
         }
     }
 
