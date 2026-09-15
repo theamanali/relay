@@ -24,6 +24,8 @@ use crate::protocol::{self, msg, stop_reason, ClientHello, Codec, FLAG_KEYFRAME}
 use crate::topology;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// A human may be reading the PIN off the PC and typing it on the Mac.
+const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const PONG_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -246,6 +248,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     // A known client may still send a PIN (it lost its copy of our key); an unknown one must.
     if !hs.paired {
         log::info!("unpaired client {client_fp} from {peer}: waiting for the PIN");
+        rx.set_read_timeout(Some(PAIR_TIMEOUT))?;
     }
     let (mut ty, mut flags, mut payload) = rx.recv().context("waiting for the first message")?;
     if ty == msg::PAIR {
