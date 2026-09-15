@@ -1,0 +1,15 @@
+# Rust
+/host/target/
+# Swift
+/client/.build/
+/client/.swiftpm/
+/client/*.xcodeproj
+/client/TravelDisplay.app/
+# Editors / OS
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+# Local artifacts
+/tools/downloads/

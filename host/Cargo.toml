@@ -1,0 +1,61 @@
+[package]
+name = "traveldisplay-host"
+version = "0.1.0"
+edition = "2021"
+description = "Windows host: turns a connected client into a virtual monitor over a direct network link"
+publish = false
+
+[lib]
+name = "traveldisplay_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "traveldisplay-host"
+path = "src/main.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+mdns-sd = "0.11"
+socket2 = { version = "0.5", features = ["all"] }
+regex = "1"
+winreg = "0.55"
+ctrlc = "3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+hex = "0.4"
+
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Power",
+    "Wdk_Graphics_Direct3D",
+    "Win32_Devices_Display",
+]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
