@@ -5,9 +5,9 @@ cable. Plug in, open the Mac app, and Windows gets a new display at the Mac's
 native resolution with trackpad and keyboard passthrough. Unplug or quit, and the
 monitor disappears again.
 
-Deliberately smaller than Sunshine + Moonlight: no pairing, no config UI, no game
-launcher. One Rust binary on the PC, one Swift app on the Mac, a 60-line
-protocol between them.
+Deliberately smaller than Sunshine + Moonlight: no config UI, no game launcher,
+pairing is one PIN once. One Rust binary on the PC, one Swift app on the Mac, a
+small encrypted protocol between them.
 
 ## How it works
 
