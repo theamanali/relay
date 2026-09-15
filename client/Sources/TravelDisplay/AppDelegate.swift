@@ -168,6 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
         DispatchQueue.main.async {
+            // runModal() pins the alert to the modal-panel level, which is below
+            // our kiosk window, so step out of kiosk mode while it is up.
+            let kioskLevel = self.window.level
+            self.window.level = .normal
+            NSApp.presentationOptions = []
+            self.setCursorHidden(false)
+
             let alert = NSAlert()
             alert.messageText = "Pair with \(host)"
             alert.informativeText = "Enter the pairing PIN shown by TravelDisplay on the PC (host fingerprint \(fingerprint)). You only need to do this once per PC."
@@ -177,9 +184,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             field.placeholderString = "6-digit PIN"
             alert.accessoryView = field
             alert.window.initialFirstResponder = field
-            // Our kiosk window sits above the menu bar; the alert must sit above it.
-            alert.window.level = NSWindow.Level(rawValue: self.window.level.rawValue + 1)
+            NSApp.activate(ignoringOtherApps: true)
             let response = alert.runModal()
+
+            self.window.level = kioskLevel
+            NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+            self.window.makeKeyAndOrderFront(nil)
+            self.window.makeFirstResponder(self.view)
+            self.setCursorHidden(true)
             completion(response == .alertFirstButtonReturn ? field.stringValue.trimmingCharacters(in: .whitespaces) : nil)
         }
     }
