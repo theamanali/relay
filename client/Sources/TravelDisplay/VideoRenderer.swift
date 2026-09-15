@@ -209,7 +209,7 @@ final class VideoRenderer {
     private func flush(removeImage: Bool) {
         if #available(macOS 14.0, *) {
             if removeImage {
-                layer.sampleBufferRenderer.flushAndRemoveImage()
+                layer.sampleBufferRenderer.flush(removingDisplayedImage: true)
             } else {
                 layer.sampleBufferRenderer.flush()
             }

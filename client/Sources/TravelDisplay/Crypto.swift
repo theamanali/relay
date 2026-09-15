@@ -107,7 +107,15 @@ enum Handshake {
     /// One handshake in progress: keeps the ephemeral key and msg1 until msg2 arrives.
     struct Pending {
         let identity: Curve25519.KeyAgreement.PrivateKey
-        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let ephemeral: Curve25519.KeyAgreement.PrivateKey
+
+        /// `ephemeral` defaults to a fresh key; it is only ever passed in to
+        /// replay the test vector in docs/PROTOCOL.md.
+        init(identity: Curve25519.KeyAgreement.PrivateKey,
+             ephemeral: Curve25519.KeyAgreement.PrivateKey = Curve25519.KeyAgreement.PrivateKey()) {
+            self.identity = identity
+            self.ephemeral = ephemeral
+        }
 
         /// msg1 = "TDH2" | version | S_c | E_c  (70 bytes)
         var message1: Data {
