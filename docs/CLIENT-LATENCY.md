@@ -1,8 +1,10 @@
-# Client latency plan — replace AVSampleBufferDisplayLayer with VTDecompressionSession
+# Client latency status and next step
 
 **For the Mac session (`client/`).** The host is not the bottleneck; the remaining
-perceptible latency is in the Mac decode/present path. Do this on the Mac; the wire
-format must not change (see `docs/PROTOCOL.md`).
+perceptible latency is in the Mac presentation path. The client now owns an explicit
+real-time `VTDecompressionSession`; decoded IOSurface-backed frames are submitted to
+`AVSampleBufferDisplayLayer` for immediate display. The wire format remains unchanged
+(see `docs/PROTOCOL.md`).
 
 ## Why (measured, 2026-09-16)
 
@@ -18,46 +20,47 @@ pipeline, and the network is ~0.06 ms on the wire. The `encoder wait avg 8.27 ms
 is just the gap between 120 Hz frames, not added latency. That leaves the Mac
 client as the place with the most latency to reclaim.
 
-`AVSampleBufferDisplayLayer` (current renderer, `client/Sources/TravelDisplay/VideoRenderer.swift`)
-owns its own decode queue and presentation scheduling. Even with
-`sampleBufferRenderer` + `flush(removingDisplayedImage:)` and immediate display, it
-buffers frames internally and times presentation to its own clock, which adds one
-to a few frames we cannot see or control. We want frame-in → frame-on-glass with no
-discretionary queueing.
+The original renderer gave compressed frames directly to
+`AVSampleBufferDisplayLayer`, which owned both decoding and presentation scheduling.
+The current renderer has removed the opaque decode queue by decoding asynchronously
+through its own `VTDecompressionSession`, rebuilding that session explicitly after
+codec changes, and dropping output from obsolete decoder generations. The display
+layer now receives decoded pixel buffers with the display-immediately attachment.
+Its final presentation queue is the remaining opaque part of the client pipeline.
 
 ## Goal
 
-Decode each access unit ourselves and present it to the screen as soon as it is
-decoded, with no internal reorder/display queue. Target: remove ≥1 frame (~8 ms)
-versus the sample-buffer layer, and cut its variable presentation jitter.
+Preserve the explicit decoder and present each decoded frame directly through Metal,
+with no internal display queue. Target: remove at least one frame (~8 ms) versus the
+current decoded-buffer display layer and cut variable presentation jitter.
 
 ## What to build
 
-Replace the `AVSampleBufferDisplayLayer` renderer with an explicit
-`VTDecompressionSession` feeding a `CAMetalLayer` (or an `IOSurface`-backed layer):
+The explicit decoder work in steps 1–3 is complete. The remaining work is to feed
+its decoded pixel buffers to a `CAMetalLayer`:
 
-1. **Format description.** Build a `CMVideoFormatDescription` from the parameter
+1. **Format description (complete).** Build a `CMVideoFormatDescription` from the parameter
    sets delivered in the `CODEC_CONFIG` message.
    - HEVC: `CMVideoFormatDescriptionCreateFromHEVCParameterSets` with VPS, SPS, PPS
      (in that order), `nalUnitHeaderLength: 4`. H.264:
      `CMVideoFormatDescriptionCreateFromH264ParameterSets` with SPS, PPS.
    - The host sends parameter sets as length-prefixed NALs; the wire already uses
      4-byte length prefixes, which is exactly `nalUnitHeaderLength: 4`. Rebuild the
-     format description (and the decompression session) whenever `CODEC_CONFIG`
-     changes — the host re-sends it after every capture restart.
+     format description and decompression session whenever `CODEC_CONFIG` arrives;
+     the host re-sends it after every capture restart.
 
-2. **Decompression session.** `VTDecompressionSessionCreate` with:
+2. **Decompression session (complete).** `VTDecompressionSessionCreate` with:
    - `kVTDecompressionPropertyKey_RealTime = true`
-   - destination pixel-buffer attrs requesting `kCVPixelBufferMetalCompatibilityKey`
-     and an appropriate format (e.g. `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`
-     or `...10BitBiPlanar` if we ever send 10-bit; HEVC main is 8-bit today).
+   - IOSurface-backed destination pixel buffers, which the current display layer can
+     consume without a copy. Add `kCVPixelBufferMetalCompatibilityKey` when the Metal
+     presentation path lands.
    - Prefer hardware: on Apple silicon the HEVC/H.264 hardware decoder is default.
 
-3. **Feed frames.** For each `FRAME` message, wrap the NAL data in a `CMBlockBuffer`
+3. **Feed frames (complete).** For each `FRAME` message, wrap the NAL data in a `CMBlockBuffer`
    and a `CMSampleBuffer` (the wire NALs are already 4-byte length-prefixed AVCC/HVCC
    style, so no Annex-B start-code conversion is needed), then
    `VTDecompressionSessionDecodeFrame` with flags
-   `._1_EnableAsynchronousDecompression` and, to minimise latency, handle output in
+   `._EnableAsynchronousDecompression` and, to minimise latency, handle output in
    the callback rather than draining a queue. Timestamps: we don't reorder (host
    encodes with `zeroReorderDelay`/no B-frames), so presentation order == decode
    order; you can pass simple monotonically increasing PTS or even invalid timing.

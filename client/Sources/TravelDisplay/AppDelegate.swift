@@ -109,6 +109,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         view.attach(videoLayer: renderer.layer)
         view.status = "Starting…"
         view.latencyVisible = options.showLatency
+        // Decoded frames land on VideoToolbox threads; hop to main for the view.
+        renderer.firstFrameHandler = { [weak self] in
+            DispatchQueue.main.async { self?.view.status = "" }
+        }
+        renderer.frameSizeHandler = { [weak self] size in
+            DispatchQueue.main.async { self?.view.streamSize = size }
+        }
+        renderer.frameDecodedHandler = { [weak self] sequence, milliseconds in
+            self?.latencyStats.recordFrame(
+                sequence: sequence,
+                decodeMilliseconds: milliseconds
+            )
+        }
 
         window = StreamWindow(
             contentRect: screen.frame,
@@ -262,22 +275,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {
-        let first = renderer.framesDisplayed == 0
-        let before = renderer.framesDisplayed
-        renderer.enqueue(frame: nalUnits, keyframe: keyframe, receivedAt: receivedAt)
-        if renderer.framesDisplayed > before {
-            let enqueuedAt = CMClockGetTime(CMClockGetHostTimeClock())
-            latencyStats.recordFrame(
-                sequence: sequence,
-                enqueueMilliseconds: max(
-                    0,
-                    CMTimeGetSeconds(CMTimeSubtract(enqueuedAt, receivedAt)) * 1_000
-                )
-            )
-        }
-        if first, renderer.framesDisplayed > 0 {
-            DispatchQueue.main.async { self.view.status = "" }
-        }
+        renderer.enqueue(
+            frame: nalUnits,
+            keyframe: keyframe,
+            sequence: sequence,
+            receivedAt: receivedAt
+        )
     }
 
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {

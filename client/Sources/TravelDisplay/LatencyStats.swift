@@ -1,7 +1,8 @@
 import Foundation
 
-/// Thread-safe rolling latency samples. Frame callbacks arrive on the network
-/// queue while the overlay polls snapshots on the main thread.
+/// Thread-safe rolling latency samples. Host timing arrives on the network
+/// queue, decoded-frame timing arrives on VideoToolbox threads, and the overlay
+/// polls snapshots on the main thread.
 final class LatencyStats {
     struct Snapshot {
         let fps: Double
@@ -9,7 +10,7 @@ final class LatencyStats {
         let hostP95: Double?
         let networkMedian: Double?
         let clientAverage: Double?
-        let enqueueMedian: Double?
+        let decodeMedian: Double?
         let totalEstimate: Double?
         let droppedFrames: Int?
         let samples: Int
@@ -26,7 +27,7 @@ final class LatencyStats {
                 "Client       \(ms(clientAverage))",
             ]
             if clientAverage == nil {
-                lines.append("  enqueue    \(ms(enqueueMedian))")
+                lines.append("  decode/q   \(ms(decodeMedian))")
                 lines.append("  display       hidden")
             }
             lines.append("Host p95     \(ms(hostP95))")
@@ -42,40 +43,33 @@ final class LatencyStats {
     private static let capacity = 600
     private var host: [Double] = []
     private var network: [Double] = []
-    private var enqueue: [Double] = []
+    private var decode: [Double] = []
     private var clientAverage: Double?
     private var droppedFrames: Int?
     private var framesSinceSnapshot = 0
     private var lastSnapshotAt = DispatchTime.now().uptimeNanoseconds
-    private var lastFrameSequence: UInt64?
 
     func reset() {
         lock.lock()
         host.removeAll(keepingCapacity: true)
         network.removeAll(keepingCapacity: true)
-        enqueue.removeAll(keepingCapacity: true)
+        decode.removeAll(keepingCapacity: true)
         clientAverage = nil
         droppedFrames = nil
         framesSinceSnapshot = 0
-        lastFrameSequence = nil
         lastSnapshotAt = DispatchTime.now().uptimeNanoseconds
         lock.unlock()
     }
 
-    func recordFrame(sequence: UInt64, enqueueMilliseconds: Double) {
+    func recordFrame(sequence _: UInt64, decodeMilliseconds: Double) {
         lock.lock()
-        Self.append(enqueueMilliseconds, to: &enqueue)
-        lastFrameSequence = sequence
+        Self.append(decodeMilliseconds, to: &decode)
         framesSinceSnapshot += 1
         lock.unlock()
     }
 
     func record(_ timing: Proto.FrameTiming) {
         lock.lock()
-        guard lastFrameSequence == timing.sequence else {
-            lock.unlock()
-            return
-        }
         let fields = [timing.captureMicros, timing.encodeMicros, timing.sendMicros]
         if fields.allSatisfy({ $0 != Proto.FrameTiming.unknownMicros }) {
             Self.append(fields.reduce(0) { $0 + Double($1) / 1_000 }, to: &host)
@@ -117,7 +111,7 @@ final class LatencyStats {
             hostP95: percentile(host, 0.95),
             networkMedian: networkMedian,
             clientAverage: clientAverage,
-            enqueueMedian: percentile(enqueue, 0.5),
+            decodeMedian: percentile(decode, 0.5),
             totalEstimate: totalEstimate,
             droppedFrames: droppedFrames,
             samples: host.count

@@ -1,10 +1,21 @@
-// Hardware decode + display through AVSampleBufferDisplayLayer. Frames arrive
-// already in the length-prefixed layout VideoToolbox wants, so each FRAME
-// message becomes one CMSampleBuffer with no rewriting.
+// Hardware decode through an owned VTDecompressionSession, display through
+// AVSampleBufferDisplayLayer. Frames arrive already in the length-prefixed
+// layout VideoToolbox wants, so each FRAME message becomes one CMSampleBuffer
+// with no rewriting.
+//
+// The layer only ever sees decoded pixel buffers. Letting it decode compressed
+// samples itself means it also owns the decoder, and on a parameter-set change
+// (a fullscreen game switching display mode, or the host restarting its
+// encoder after Desktop Duplication drops) it drains and rebuilds that decoder
+// on its own schedule; under load that is where the picture froze. Owning the
+// session makes the transition explicit: invalidate the old session without
+// waiting for its in-flight frames, build a new one, resync on the next
+// keyframe, and drop whatever the old session still emits.
 
 import AVFoundation
 import CoreMedia
 import Foundation
+import VideoToolbox
 
 struct VideoPerformanceSnapshot {
     let clientMilliseconds: Double
@@ -14,47 +25,93 @@ struct VideoPerformanceSnapshot {
 final class VideoRenderer {
     let layer = AVSampleBufferDisplayLayer()
 
+    /// Called (on a decoder thread) when the first frame is submitted for display.
+    var firstFrameHandler: (() -> Void)?
+    /// Called (on a decoder thread) when the decoded picture size changes,
+    /// including for the first frame. The host does not resend STREAM_START
+    /// when its encoder restarts at a new display mode, so this is how the
+    /// view learns the size it must letterbox pointer positions against.
+    var frameSizeHandler: ((CGSize) -> Void)?
+    /// Receive-to-decode-and-display-enqueue timing for each completed frame.
+    /// Final presentation timing comes from AVFoundation performance metrics.
+    var frameDecodedHandler: ((UInt64, Double) -> Void)?
+
+    /// Size announced in STREAM_START; the decoded size may differ later.
+    private(set) var streamSize = CGSize.zero
+    /// Frames handed to the display layer since STREAM_START.
+    var framesDisplayed: Int { lock.withLock { displayedCount } }
+
+    // Decoder state, touched only from the connection queue.
     private var codec: Proto.Codec = .hevc
     private var formatDescription: CMVideoFormatDescription?
-    private var lastParameterSets: [Data] = []
+    private var session: VTDecompressionSession?
     private var waitingForKeyframe = true
-    private(set) var framesDisplayed = 0
-    private(set) var streamSize = CGSize.zero
+    private var layerWasFailed = false
+
+    // Shared with the decoder output handlers, which run on VideoToolbox threads.
+    private let lock = NSLock()
+    /// Bumped whenever the session is replaced; output tagged with an older
+    /// generation is dropped so a late frame from before a mode change never
+    /// lands on top of the new keyframe.
+    private var generation = 0
+    /// Set by an output handler when the current session reported a decode
+    /// error; the next enqueue waits for a keyframe again.
+    private var resyncRequested = false
+    /// Set when the current session itself is gone (sleep/wake, GPU reset).
+    private var sessionLost = false
+    private var displayedCount = 0
+    private var displayedSize = CGSize.zero
+    private var displayFormat: CMVideoFormatDescription?
 
     init() {
         layer.videoGravity = .resizeAspect
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
     }
 
+    deinit {
+        if let session { VTDecompressionSessionInvalidate(session) }
+    }
+
     func streamDidStart(_ start: Proto.StreamStart) {
         codec = start.codec
         streamSize = CGSize(width: start.width, height: start.height)
         formatDescription = nil
-        lastParameterSets = []
-        waitingForKeyframe = true
-        framesDisplayed = 0
+        replaceSession()
+        lock.withLock {
+            displayedCount = 0
+            displayedSize = .zero
+            displayFormat = nil
+        }
         flush(removeImage: true)
     }
 
     func reset() {
         formatDescription = nil
-        lastParameterSets = []
-        waitingForKeyframe = true
+        replaceSession()
         flush(removeImage: true)
     }
 
     // MARK: codec config
 
+    /// CODEC_CONFIG only arrives when the host starts or restarts its encoder,
+    /// so identical bytes still mean "new stream": always a fresh session,
+    /// never a comparison against the last one.
     func setParameterSets(_ sets: [Data]) {
-        guard sets != lastParameterSets else { return }
-        lastParameterSets = sets
+        let previous = formatDescription.map(CMVideoFormatDescriptionGetDimensions)
         formatDescription = makeFormatDescription(sets)
-        waitingForKeyframe = true
-        if formatDescription == nil {
-            NSLog("VideoRenderer: could not build a format description from %d parameter sets", sets.count)
+        if let formatDescription {
+            let d = CMVideoFormatDescriptionGetDimensions(formatDescription)
+            var note = "VideoRenderer: codec config \(d.width)x\(d.height)"
+            if let previous { note += " (was \(previous.width)x\(previous.height))" }
+            NSLog("%@", note + ", rebuilding decoder")
         } else {
-            flush(removeImage: false)
+            NSLog("VideoRenderer: could not build a format description from %d parameter sets", sets.count)
         }
+        replaceSession()
+        // Frames the old encoder produced must not show after the new
+        // keyframe, but keep the last picture up through the gap rather than
+        // flashing black while the host restarts.
+        flush(removeImage: false)
     }
 
     private func makeFormatDescription(_ sets: [Data]) -> CMVideoFormatDescription? {
@@ -104,22 +161,77 @@ final class VideoRenderer {
         return desc
     }
 
+    // MARK: decoder session
+
+    /// Tear down the current session (if any) and build one for the current
+    /// format description. Never waits for in-flight frames: under load that
+    /// wait is the stall. Their output handlers see a stale generation instead.
+    private func replaceSession() {
+        // Retire the generation before invalidating, and never hold the lock
+        // across the VideoToolbox call: an output handler may be blocked on it.
+        lock.withLock {
+            generation += 1
+            resyncRequested = false
+            sessionLost = false
+        }
+        if let old = session {
+            VTDecompressionSessionInvalidate(old)
+        }
+        session = formatDescription.flatMap(makeSession)
+        waitingForKeyframe = true
+    }
+
+    private func makeSession(_ fd: CMVideoFormatDescription) -> VTDecompressionSession? {
+        let decoderSpec: [CFString: Any] = [
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true,
+        ]
+        // IOSurface-backed output so the layer displays it without a copy.
+        let imageAttrs: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+        ]
+        var s: VTDecompressionSession?
+        let status = VTDecompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            formatDescription: fd,
+            decoderSpecification: decoderSpec as CFDictionary,
+            imageBufferAttributes: imageAttrs as CFDictionary,
+            outputCallback: nil,
+            decompressionSessionOut: &s
+        )
+        guard status == noErr, let s else {
+            NSLog("VideoRenderer: decoder session failed: %d", status)
+            return nil
+        }
+        VTSessionSetProperty(s, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        return s
+    }
+
     // MARK: frames
 
     /// `nalUnits` is the raw FRAME payload: 4-byte length-prefixed NAL units.
-    func enqueue(frame nalUnits: Data, keyframe: Bool, receivedAt: CMTime) {
+    func enqueue(frame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {
         guard let formatDescription, !nalUnits.isEmpty else { return }
 
-        if layerFailed {
-            NSLog("VideoRenderer: display layer failed (%@), resyncing on next keyframe",
-                  layer.error?.localizedDescription ?? "unknown")
-            flush(removeImage: false)
+        let (resync, lost) = lock.withLock {
+            defer { resyncRequested = false }
+            return (resyncRequested, sessionLost)
+        }
+        if lost || session == nil {
+            // The hardware session went away underneath us, or never built.
+            // Only a keyframe can start the rebuilt session, so retry there
+            // rather than once per frame.
+            guard keyframe else { return }
+            replaceSession()
+            guard session != nil else { return }
+        } else if resync {
             waitingForKeyframe = true
         }
+        serviceLayer()
         if waitingForKeyframe {
             guard keyframe else { return }
             waitingForKeyframe = false
         }
+        guard let session else { return }
 
         let length = nalUnits.count
         var blockBuffer: CMBlockBuffer?
@@ -173,36 +285,139 @@ final class VideoRenderer {
             NSLog("VideoRenderer: sample buffer failed: %d", status)
             return
         }
-
-        // Show each frame as soon as it is decoded; the host paces the stream.
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
-           CFArrayGetCount(attachments) > 0 {
-            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(
-                dict,
-                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
-            )
-            if !keyframe {
-                CFDictionarySetValue(
-                    dict,
-                    Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque(),
-                    Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
-                )
-            }
+        if !keyframe {
+            setAttachment(kCMSampleAttachmentKey_NotSync, on: sampleBuffer)
         }
 
+        // Asynchronous so the connection queue goes straight back to the
+        // socket; the frame is shown from the output handler when it lands.
+        let gen = lock.withLock { generation }
+        var infoFlags = VTDecodeInfoFlags()
+        status = VTDecompressionSessionDecodeFrame(
+            session,
+            sampleBuffer: sampleBuffer,
+            flags: [._EnableAsynchronousDecompression],
+            infoFlagsOut: &infoFlags,
+            outputHandler: { [weak self] status, _, image, pts, _ in
+                self?.decoded(
+                    image,
+                    status: status,
+                    pts: pts,
+                    sequence: sequence,
+                    generation: gen
+                )
+            }
+        )
+        if status != noErr {
+            NSLog("VideoRenderer: decode submit failed: %d", status)
+            if status == kVTInvalidSessionErr {
+                replaceSession()
+            } else {
+                waitingForKeyframe = true
+            }
+        }
+    }
+
+    /// Output handler: runs on a VideoToolbox thread, possibly for a session
+    /// that has since been replaced.
+    private func decoded(
+        _ image: CVImageBuffer?,
+        status: OSStatus,
+        pts: CMTime,
+        sequence: UInt64,
+        generation gen: Int
+    ) {
+        var first = false
+        var sizeChanged = false
+        var size = CGSize.zero
+        var decodedMilliseconds: Double?
+        lock.lock()
+        defer {
+            lock.unlock()
+            if first { firstFrameHandler?() }
+            if sizeChanged { frameSizeHandler?(size) }
+            if let decodedMilliseconds {
+                frameDecodedHandler?(sequence, decodedMilliseconds)
+            }
+        }
+        guard gen == generation else { return } // torn-down session, expected
+        guard status == noErr else {
+            NSLog("VideoRenderer: decode failed: %d, resyncing on next keyframe", status)
+            resyncRequested = true
+            if status == kVTInvalidSessionErr { sessionLost = true }
+            return
+        }
+        guard let image else { return } // nothing to show for this frame
+
+        if displayFormat.map({ !CMVideoFormatDescriptionMatchesImageBuffer($0, imageBuffer: image) }) ?? true {
+            var fd: CMVideoFormatDescription?
+            CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: kCFAllocatorDefault, imageBuffer: image, formatDescriptionOut: &fd
+            )
+            displayFormat = fd
+        }
+        guard let displayFormat else { return }
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+        var sampleBuffer: CMSampleBuffer?
+        let created = CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: image,
+            formatDescription: displayFormat,
+            sampleTiming: &timing,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard created == noErr, let sampleBuffer else { return }
+        // Show each frame as soon as it is decoded; the host paces the stream.
+        setAttachment(kCMSampleAttachmentKey_DisplayImmediately, on: sampleBuffer)
         enqueueOnLayer(sampleBuffer)
-        framesDisplayed += 1
+
+        displayedCount += 1
+        first = displayedCount == 1
+        size = CGSize(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))
+        sizeChanged = size != displayedSize
+        displayedSize = size
+        let completedAt = CMClockGetTime(CMClockGetHostTimeClock())
+        decodedMilliseconds = max(
+            0,
+            CMTimeGetSeconds(CMTimeSubtract(completedAt, pts)) * 1_000
+        )
+    }
+
+    private func setAttachment(_ key: CFString, on sampleBuffer: CMSampleBuffer) {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
+              CFArrayGetCount(attachments) > 0 else { return }
+        let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+        CFDictionarySetValue(
+            dict,
+            Unmanaged.passUnretained(key).toOpaque(),
+            Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+        )
     }
 
     // MARK: layer plumbing (the renderer API moved in macOS 14)
 
-    private var layerFailed: Bool {
+    /// The layer no longer decodes, so it has little reason to fail; if it
+    /// does, or asks for a flush after a display reconfiguration, flush it.
+    private func serviceLayer() {
+        let failed: Bool
+        let wantsFlush: Bool
+        let error: Error?
         if #available(macOS 14.0, *) {
-            return layer.sampleBufferRenderer.status == .failed
+            let r = layer.sampleBufferRenderer
+            failed = r.status == .failed
+            wantsFlush = r.requiresFlushToResumeDecoding
+            error = r.error
         } else {
-            return layer.status == .failed
+            failed = layer.status == .failed
+            wantsFlush = layer.requiresFlushToResumeDecoding
+            error = layer.error
+        }
+        if failed, !layerWasFailed {
+            NSLog("VideoRenderer: display layer failed (%@)", error?.localizedDescription ?? "unknown")
+        }
+        layerWasFailed = failed
+        if failed || wantsFlush {
+            flush(removeImage: false)
         }
     }
 
@@ -231,8 +446,8 @@ final class VideoRenderer {
     }
 
     /// AVFoundation exposes actual-vs-requested presentation delay on current
-    /// macOS releases. Older systems keep streaming but cannot expose the
-    /// display layer's hidden decode/presentation latency.
+    /// macOS releases. Older systems keep streaming and report decode/enqueue
+    /// timing, but cannot expose the display layer's final presentation delay.
     func loadPerformanceSnapshot(_ completion: @escaping (VideoPerformanceSnapshot?) -> Void) {
         if #available(macOS 26.0, *) {
             layer.sampleBufferRenderer.loadVideoPerformanceMetrics { metrics in

@@ -17,7 +17,7 @@ small encrypted protocol between them.
  │ MTT VDD ────┐ virtual monitor│                        │ Bonjour: find host        │
  │             ▼                │  TCP 8468              │ TCP: hello, frames, input │
  │ DXGI Desktop Duplication     │ ───────────────────▶   │ VideoToolbox HEVC decode  │
- │ GPU HEVC enc (120 Mbps CBR)  │ ◀───────────────────   │ AVSampleBufferDisplayLayer│
+ │ GPU HEVC enc (120 Mbps CBR)  │ ◀───────────────────   │ VT decode → display layer │
  │ SendInput ◀─ mouse/keys      │  (mDNS over IPv6 LL)   │ trackpad + keys → host    │
  └──────────────────────────────┘                        └──────────────────────────┘
 ```
@@ -53,10 +53,12 @@ small encrypted protocol between them.
    recognise each other by key, every session gets fresh ChaCha20-Poly1305 keys
    from an ephemeral X25519 exchange, and strangers on the same network are
    refused before anything is streamed.
-5. **Client.** Native macOS app: full-screen `AVSampleBufferDisplayLayer` with
-   hardware HEVC decode and optional trackpad and keyboard forwarding. Windows'
-   cursor is part of the video, so a mouse attached directly to the PC and the
-   Mac trackpad control the same visible pointer.
+5. **Client.** Native macOS app: an explicit real-time `VTDecompressionSession`
+   hardware-decodes HEVC into IOSurface-backed pixel buffers, then submits them
+   for immediate display through `AVSampleBufferDisplayLayer`. Trackpad and
+   keyboard forwarding are optional. Windows' cursor is part of the video, so a
+   mouse attached directly to the PC and the Mac trackpad control the same
+   visible pointer.
 
 ## Status
 
