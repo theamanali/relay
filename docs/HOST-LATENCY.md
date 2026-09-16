@@ -156,3 +156,13 @@ counter on the Mac steady at 120; host log during continuous motion
 so the virtual display's vblank jitter is under a millisecond once locked.
 Encode at 6 MP is 4.3–5.9 ms, the ×1.6 pixel scaling of the 1440p number,
 and is now the only host stage of any size.
+
+## Colour signalling (item 5, done 2026-09-16)
+
+The in-process path now writes a VUI colour description: matrix SMPTE 170M
+(BT.601, which is what NVENC uses for its internal ARGB->YUV conversion),
+primaries and transfer BT.709 (sRGB's), limited range. Verified with
+`ffprobe` on probe dumps for both HEVC and H.264. The ffmpeg fallback already
+signalled a 601 matrix (`bt470bg`, same coefficients) from ddagrab's frame
+metadata, so it was left alone. The Mac's Metal shader takes the matrix from
+the pixel buffer, so no client change is needed.

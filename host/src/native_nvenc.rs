@@ -516,6 +516,7 @@ impl EncoderSession {
             match cfg.codec {
                 Codec::Hevc => {
                     let hevc = &mut config.encodeCodecConfig.hevcConfig;
+                    signal_colour(&mut hevc.hevcVUIParameters);
                     hevc.set_outputAUD(1);
                     hevc.set_repeatSPSPPS(1);
                     hevc.set_enableIntraRefresh(u32::from(cfg.intra_refresh));
@@ -526,6 +527,7 @@ impl EncoderSession {
                 }
                 Codec::H264 => {
                     let h264 = &mut config.encodeCodecConfig.h264Config;
+                    signal_colour(&mut h264.h264VUIParameters);
                     h264.set_outputAUD(1);
                     h264.set_repeatSPSPPS(1);
                     h264.set_enableIntraRefresh(u32::from(cfg.intra_refresh));
@@ -1290,4 +1292,21 @@ fn nv_check(api: &NvApi, encoder: *mut c_void, status: NVENCSTATUS, operation: &
     } else {
         bail!("{operation} failed with {status:?}: {detail}")
     }
+}
+
+/// Describe the pixels honestly in the VUI. The input is ARGB and NVENC does
+/// the RGB->YUV conversion itself with BT.601 (SMPTE 170M) limited-range
+/// coefficients; there is no option to use 709. Without this the stream
+/// carries no colour description and every decoder assumes 709, which shows
+/// as slightly off saturation. The primaries and transfer are sRGB's, which
+/// are BT.709's.
+fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
+    vui.videoSignalTypePresentFlag = 1;
+    vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT::NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+    vui.videoFullRangeFlag = 0;
+    vui.colourDescriptionPresentFlag = 1;
+    vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES::NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+    vui.transferCharacteristics =
+        NV_ENC_VUI_TRANSFER_CHARACTERISTIC::NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+    vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS::NV_ENC_VUI_MATRIX_COEFFS_SMPTE170M;
 }
