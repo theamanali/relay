@@ -9,6 +9,14 @@ Designed for a direct Ethernet cable, but safe on shared networks: every session
 is mutually authenticated and encrypted (see "Handshake and pairing"); there is
 no congestion control. All integers are **big-endian**.
 
+## Discovery
+
+The host advertises `_traveldisplay._tcp` over mDNS with a TXT record containing
+`v` (protocol version, decimal) and `pk` (the host's identity public key, 32
+bytes as 64 lowercase hex characters). Clients use `pk` to show whether a host
+is already paired before connecting; it is informational and never trusted in
+place of the handshake.
+
 ## Framing
 
 Every message is an 8-byte header followed by `length` bytes of payload. On the
