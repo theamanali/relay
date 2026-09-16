@@ -101,6 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         view.forwardInput = !options.noInput
         view.attach(videoLayer: renderer.layer)
         view.status = "Starting…"
+        // Decoded frames land on VideoToolbox threads; hop to main for the view.
+        renderer.firstFrameHandler = { [weak self] in
+            DispatchQueue.main.async { self?.view.status = "" }
+        }
+        renderer.frameSizeHandler = { [weak self] size in
+            DispatchQueue.main.async { self?.view.streamSize = size }
+        }
 
         window = StreamWindow(
             contentRect: screen.frame,
@@ -242,11 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool) {
-        let first = renderer.framesDisplayed == 0
         renderer.enqueue(frame: nalUnits, keyframe: keyframe)
-        if first, renderer.framesDisplayed > 0 {
-            DispatchQueue.main.async { self.view.status = "" }
-        }
     }
 
     func connectionDidEnd(_ c: HostConnection, reason: String) {
