@@ -39,10 +39,10 @@ small encrypted protocol between them.
    fallback (`--driver parsec`) with neither of those two properties.
 2. **Capture + encode.** The new monitor is captured with DXGI Desktop
    Duplication and encoded by the GPU's own encoder — NVENC, AMD AMF or Intel
-   Quick Sync, chosen from the adapter's vendor id — via an `ffmpeg` child
-   (`ddagrab` → the hardware encoder). An experimental in-process D3D11 → NVENC
-   path (`--native`) is lower latency but can hard-hang the GPU during a
-   fullscreen-exclusive game's mode switch, so it is off by default.
+   Quick Sync, chosen from the adapter's vendor id — without leaving the GPU.
+   NVIDIA uses an in-process D3D11 → NVENC path with a GPU-composited Windows
+   cursor and a fixed output cadence; `--no-native` falls back to the `ffmpeg`
+   child. AMD, Intel, software and cross-adapter configurations use `ffmpeg`.
 3. **Transport.** TCP with 8-byte framed messages, encrypted end to end — see
    [docs/PROTOCOL.md](docs/PROTOCOL.md). On a dedicated cable there is no loss
    and no contention, so WebRTC-style machinery would only add latency. Discovery
@@ -67,7 +67,7 @@ small encrypted protocol between them.
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
-| 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | implemented behind `--native`; sustains 3024×1964@120 on the desktop but hard-hangs the GPU during a fullscreen-exclusive game's mode switch, so it is **off by default** until fixed. The default ffmpeg path runs exclusive-fullscreen games without freezing |
+| 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
 
 ## Setup
 
@@ -122,8 +122,8 @@ Useful flags: `--gpu 4090` (substring of the adapter name; default is the
 adapter with the most dedicated VRAM, i.e. the discrete card on a PC that also
 has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (speed is the low-latency default),
 `--bitrate 200` (Mbps), `--codec h264`, `--fps 60`, `--intra-refresh` (NVIDIA),
-`--native` (opt into the experimental in-process NVENC path — lower latency but
-can hang the GPU in exclusive-fullscreen games), `--no-input`, `-v`. Add
+`--no-native` (fall back to the ffmpeg capture path instead of the in-process
+NVENC one), `--no-input`, `-v`. Add
 `-AutoStart` to the install script to launch the host at
 logon (needed for a headless PC). Ctrl-C restores your displays and removes the
 virtual monitor; if the host is killed, the helper task disables the virtual
@@ -155,12 +155,11 @@ ffplay -f hevc capture.hevc
 
 ## Known limitations
 
-- The in-process NVIDIA path (`--native`) sustains 3024×1964@120 on the desktop
-  but can hard-hang the whole GPU during a fullscreen-exclusive game's mode
-  switch (Valorant match load, FC 26 launch), forcing a reboot. It is off by
-  default; the ffmpeg path runs those games without freezing. Fixing the native
-  path's interaction with exclusive-fullscreen modesets is the open milestone-5
-  work.
+- The in-process NVIDIA path is the default and is verified stable at
+  3024×1964@120 in exclusive-fullscreen games (Valorant, FC 26). An earlier
+  build hard-hung the GPU during a game's mode switch because the shared
+  capture/encode D3D11 device lacked multithread protection; that is fixed.
+  `--no-native` falls back to the ffmpeg path if a future case misbehaves.
 - Fullscreen and display-mode transitions can invalidate Windows Desktop
   Duplication briefly. The host restarts capture for up to 15 seconds without
   disconnecting the Mac. Physical monitor devices remain disabled throughout

@@ -118,11 +118,11 @@ struct ServeArgs {
     #[arg(long)]
     no_vdd: bool,
 
-    /// NVIDIA only: use the in-process D3D11/NVENC capture path. Lower latency,
-    /// but it can hard-hang the GPU during a fullscreen-exclusive game's
-    /// modeset, so it is opt-in. Default: the ffmpeg child (stable).
+    /// NVIDIA only: skip the in-process D3D11/NVENC capture path and use the
+    /// ffmpeg child instead. The in-process path is the default (lower latency);
+    /// this is the fallback if it misbehaves.
     #[arg(long)]
-    native: bool,
+    no_native: bool,
 
     /// Don't disable the physical monitor device nodes during a session, only
     /// remove them from the desktop (diagnostic / workaround for GPU hangs)
@@ -314,7 +314,7 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
         loc.output_index,
         if loc.adapter_luid == gpu.luid { "rendered on the selected GPU" } else { "NOT on the selected GPU" }
     );
-    log::info!("encoder would be {} on {}", encoder::encoder_name(gpu.vendor, Codec::Hevc, true), gpu.name);
+    log::info!("encoder would be {} on {}", encoder::encoder_name(gpu.vendor, Codec::Hevc, false), gpu.name);
     log::info!("holding for {seconds}s (your other displays are off until then)");
     std::thread::sleep(Duration::from_secs(seconds));
     let ended = std::time::Instant::now();
@@ -369,7 +369,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         gop_seconds: args.gop,
         quality: args.quality,
         intra_refresh: args.intra_refresh,
-        prefer_ffmpeg: !args.native,
+        prefer_ffmpeg: args.no_native,
         lock_physical: !args.no_lock_physical,
         gpu,
         driver,
