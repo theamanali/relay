@@ -49,6 +49,9 @@ final class HostConnection {
     private var pairing = false
     private var ready = false
     private var nextFrameSequence: UInt64 = 0
+    private var reader = FrameReader(maxFrame: Int(Proto.maxPayload) + Proto.headerSize + 16)
+    /// Set while a receive is outstanding so drains never overlap.
+    private var receiving = false
 
     init(options: Options) throws {
         self.options = options
@@ -140,6 +143,8 @@ final class HostConnection {
         receive = nil
         pairing = false
         nextFrameSequence = 0
+        reader.reset()
+        receiving = false
         c.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -254,52 +259,64 @@ final class HostConnection {
 
     // MARK: receive loop
 
-    /// Read one length-prefixed frame body.
+    /// Deliver one frame body: from the buffer if it is already there,
+    /// otherwise after the next read. Used for the unencrypted handshake reply.
     private func readFrame(_ handler: @escaping (Data) -> Void) {
-        guard let c = connection else { return }
-        c.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, isComplete, error in
+        do {
+            if let body = try reader.next() {
+                handler(body)
+                return
+            }
+        } catch {
+            finish("protocol error: \(error)")
+            return
+        }
+        receiveMore { [weak self] in self?.readFrame(handler) }
+    }
+
+    /// One read sized to complete the current frame (header or body), so a
+    /// small message lands in a single callback and a large keyframe waits in
+    /// the framework instead of arriving as many small pieces.
+    private func receiveMore(_ then: @escaping () -> Void) {
+        guard let c = connection, !receiving else { return }
+        receiving = true
+        let needed = reader.needed
+        c.receive(minimumIncompleteLength: needed, maximumLength: max(needed, 256 * 1024)) { [weak self] data, _, isComplete, error in
             guard let self else { return }
+            self.receiving = false
             if let error {
                 self.finish("read error: \(error.localizedDescription)")
                 return
             }
-            guard let data, data.count == 4 else {
-                if isComplete { self.finish("host closed the connection") }
-                return
-            }
-            let len = Int(data.be32(at: 0))
-            guard len > 0, len <= Int(Proto.maxPayload) + Proto.headerSize + 16 else {
-                self.finish("protocol error: bad frame length \(len)")
-                return
-            }
-            c.receive(minimumIncompleteLength: len, maximumLength: len) { [weak self] body, _, isComplete, error in
-                guard let self else { return }
-                if let error {
-                    self.finish("read error: \(error.localizedDescription)")
-                    return
-                }
-                guard let body, body.count == len else {
-                    if isComplete { self.finish("host closed the connection") }
-                    return
-                }
-                handler(body)
+            if let data, !data.isEmpty {
+                self.reader.append(data)
+                then()
+            } else if isComplete {
+                self.finish("host closed the connection")
+            } else {
+                then()
             }
         }
     }
 
+    /// Handle every complete encrypted message already buffered, then read.
     private func readMessage() {
-        readFrame { [weak self] body in
-            guard let self, let receive = self.receive else { return }
+        while connection != nil {
+            guard let receive else { return }
             do {
+                guard let body = try reader.next() else { break }
                 let (header, payload) = try receive.open(body)
-                self.handle(type: header.type, flags: header.flags, payload: payload)
-                if self.connection != nil {
-                    self.readMessage()
-                }
+                handle(type: header.type, flags: header.flags, payload: payload)
+            } catch let failure as FrameReader.Failure {
+                finish("protocol error: \(failure)")
+                return
             } catch {
-                self.finish("secure channel error: \(error.localizedDescription)")
+                finish("secure channel error: \(error.localizedDescription)")
+                return
             }
         }
+        guard connection != nil else { return }
+        receiveMore { [weak self] in self?.readMessage() }
     }
 
     private func handle(type: UInt8, flags: UInt8, payload: Data) {

@@ -78,6 +78,12 @@ pass itself is now below a millisecond; the remaining client cost is that
 phase beat. Host work p50 was 6.0 ms in the same session, the largest
 measured stage, so the next work is on the host encoder path.
 
+The receive loop now does one socket read per message instead of a 4-byte
+length read followed by a body read (`FrameReader`): each read is sized to
+finish the current frame, and every complete message already buffered is
+handled before the next read is issued. Expected gain is a fraction of a
+millisecond per frame plus less jitter; not yet measured on a real stream.
+
 Compare the client timings under motion and after load spikes. Verify letterboxing,
 pointer alignment, capture restarts, reconnect and the quit shortcut. No specific
 millisecond improvement has been measured yet. The notes below record the original
