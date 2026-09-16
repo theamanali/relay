@@ -64,9 +64,19 @@ The overlay itself is a view on top of the Metal layer, which prevents
 direct-to-display presentation while visible and adds up to a frame to the
 numbers it shows. To read a clean value, hide it (⌃⌥⌘L), wait at least six
 seconds so the 600-frame window is entirely overlay-free, then show it and read
-the first snapshot. First measurement on a real stream (2026-09-16, overlay
-visible, Metal, VSync off): Rx→decode p50 2.97 ms, Rx→present mean 7.92 ms /
-p95 9.41 ms at 120 fps.
+the first snapshot. Measurements on a real stream (2026-09-16, Metal, VSync off, 120 fps):
+
+| condition | Rx→decode p50 | Rx→present mean | p95 |
+|---|---|---|---|
+| overlay visible, layer not opaque | 2.97 | 7.92 | 9.41 |
+| layer opaque, overlay hidden during sampling | 2.76 | 5.47 | 9.71 |
+
+The second row's mean/p95 spread (about half a frame / a full frame above
+decode) is the wait for the Mac's next refresh, since the host's capture clock
+and the Mac's refresh clock free-run against each other. The presentation
+pass itself is now below a millisecond; the remaining client cost is that
+phase beat. Host work p50 was 6.0 ms in the same session, the largest
+measured stage, so the next work is on the host encoder path.
 
 Compare the client timings under motion and after load spikes. Verify letterboxing,
 pointer alignment, capture restarts, reconnect and the quit shortcut. No specific
