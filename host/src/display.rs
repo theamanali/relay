@@ -10,10 +10,11 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, POINTL};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::Graphics::Gdi::{
-    ChangeDisplaySettingsExW, EnumDisplayDevicesW, EnumDisplaySettingsW, CDS_NORESET, CDS_SET_PRIMARY,
-    CDS_TYPE, CDS_UPDATEREGISTRY, DEVMODEW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP,
-    DISPLAY_DEVICE_PRIMARY_DEVICE, DISP_CHANGE_SUCCESSFUL, DM_DISPLAYFREQUENCY, DM_PELSHEIGHT,
-    DM_PELSWIDTH, DM_POSITION, ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE,
+    ChangeDisplaySettingsExW, EnumDisplayDevicesW, EnumDisplaySettingsW, CDS_NORESET,
+    CDS_SET_PRIMARY, CDS_TYPE, CDS_UPDATEREGISTRY, DEVMODEW, DISPLAY_DEVICEW,
+    DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DISP_CHANGE_SUCCESSFUL,
+    DM_DISPLAYFREQUENCY, DM_PELSHEIGHT, DM_PELSWIDTH, DM_POSITION, ENUM_CURRENT_SETTINGS,
+    ENUM_DISPLAY_SETTINGS_MODE,
 };
 
 use crate::gpu::Luid;
@@ -100,7 +101,8 @@ pub fn enumerate() -> Vec<Monitor> {
                     cb: size_of::<DISPLAY_DEVICEW>() as u32,
                     ..Default::default()
                 };
-                if !EnumDisplayDevicesW(PCWSTR::from_raw(name_w.as_ptr()), j, &mut md, 0).as_bool() {
+                if !EnumDisplayDevicesW(PCWSTR::from_raw(name_w.as_ptr()), j, &mut md, 0).as_bool()
+                {
                     break;
                 }
                 j += 1;
@@ -206,7 +208,15 @@ pub fn choose_mode(available: &[Mode], want: Mode) -> Option<Mode> {
     if available.is_empty() {
         return None;
     }
-    let hz_pref = |m: &Mode| if m.hz == want.hz { 0 } else if m.hz > want.hz { 1 } else { 2 };
+    let hz_pref = |m: &Mode| {
+        if m.hz == want.hz {
+            0
+        } else if m.hz > want.hz {
+            1
+        } else {
+            2
+        }
+    };
     if let Some(m) = available
         .iter()
         .filter(|m| m.width == want.width && m.height == want.height)
@@ -219,7 +229,11 @@ pub fn choose_mode(available: &[Mode], want: Mode) -> Option<Mode> {
         .iter()
         .filter(|m| m.width <= want.width && m.height <= want.height)
         .collect();
-    let candidates = if fits.is_empty() { available.iter().collect() } else { fits };
+    let candidates = if fits.is_empty() {
+        available.iter().collect()
+    } else {
+        fits
+    };
     candidates
         .into_iter()
         .min_by(|a, b| {
@@ -248,9 +262,19 @@ pub fn set_mode(device_name: &str, mode: Mode, persist: bool) -> Result<()> {
         dmFields: DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY,
         ..Default::default()
     };
-    let flags = if persist { CDS_UPDATEREGISTRY } else { CDS_TYPE(0) };
+    let flags = if persist {
+        CDS_UPDATEREGISTRY
+    } else {
+        CDS_TYPE(0)
+    };
     let r = unsafe {
-        ChangeDisplaySettingsExW(PCWSTR::from_raw(name_w.as_ptr()), Some(&dm), HWND::default(), flags, None)
+        ChangeDisplaySettingsExW(
+            PCWSTR::from_raw(name_w.as_ptr()),
+            Some(&dm),
+            HWND::default(),
+            flags,
+            None,
+        )
     };
     if r != DISP_CHANGE_SUCCESSFUL {
         bail!(
@@ -284,7 +308,13 @@ pub fn stage_attach(device_name: &str, mode: Mode, x: i32, y: i32, primary: bool
         flags |= CDS_SET_PRIMARY;
     }
     let r = unsafe {
-        ChangeDisplaySettingsExW(PCWSTR::from_raw(name_w.as_ptr()), Some(&dm), HWND::default(), flags, None)
+        ChangeDisplaySettingsExW(
+            PCWSTR::from_raw(name_w.as_ptr()),
+            Some(&dm),
+            HWND::default(),
+            flags,
+            None,
+        )
     };
     if r != DISP_CHANGE_SUCCESSFUL {
         bail!(
@@ -315,14 +345,19 @@ pub fn stage_detach(device_name: &str) -> Result<()> {
         )
     };
     if r != DISP_CHANGE_SUCCESSFUL {
-        bail!("ChangeDisplaySettingsExW(detach {device_name}) failed: DISP_CHANGE {}", r.0);
+        bail!(
+            "ChangeDisplaySettingsExW(detach {device_name}) failed: DISP_CHANGE {}",
+            r.0
+        );
     }
     Ok(())
 }
 
 /// Commit configuration changes staged with CDS_NORESET.
 pub fn apply_display_changes() -> Result<()> {
-    let r = unsafe { ChangeDisplaySettingsExW(PCWSTR::null(), None, HWND::default(), CDS_TYPE(0), None) };
+    let r = unsafe {
+        ChangeDisplaySettingsExW(PCWSTR::null(), None, HWND::default(), CDS_TYPE(0), None)
+    };
     if r != DISP_CHANGE_SUCCESSFUL {
         bail!("applying display configuration failed: DISP_CHANGE {}", r.0);
     }
@@ -427,8 +462,11 @@ pub fn describe_all() -> String {
             place
                 .map(|p| format!("{}x{}@{} at ({}, {})", p.width, p.height, p.hz, p.x, p.y))
                 .unwrap_or_else(|| "-".into()),
-            dxgi.map(|l| format!("adapter {} ({}), output {}", l.adapter_index, l.adapter_name, l.output_index))
-                .unwrap_or_else(|| "-".into()),
+            dxgi.map(|l| format!(
+                "adapter {} ({}), output {}",
+                l.adapter_index, l.adapter_name, l.output_index
+            ))
+            .unwrap_or_else(|| "-".into()),
         ));
     }
     s

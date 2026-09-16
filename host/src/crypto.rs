@@ -95,8 +95,13 @@ impl Identity {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(path, id.secret.to_bytes()).with_context(|| format!("writing {}", path.display()))?;
-        log::info!("created identity {} ({})", fingerprint(id.public.as_bytes()), path.display());
+        fs::write(path, id.secret.to_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        log::info!(
+            "created identity {} ({})",
+            fingerprint(id.public.as_bytes()),
+            path.display()
+        );
         Ok(id)
     }
 
@@ -127,7 +132,9 @@ impl PeerList {
         if let Ok(text) = fs::read_to_string(path) {
             for line in text.lines() {
                 let mut parts = line.splitn(2, ' ');
-                let (Some(hexkey), name) = (parts.next(), parts.next().unwrap_or("")) else { continue };
+                let (Some(hexkey), name) = (parts.next(), parts.next().unwrap_or("")) else {
+                    continue;
+                };
                 if let Ok(bytes) = hex::decode(hexkey) {
                     if let Ok(key) = <Key32>::try_from(bytes.as_slice()) {
                         peers.insert(key, name.to_string());
@@ -228,7 +235,8 @@ fn derive(transcript: &[u8], dh: [Key32; 3]) -> SessionKeys {
     }
     let hk = Hkdf::<Sha256>::new(Some(&th), &ikm);
     let mut okm = [0u8; 96];
-    hk.expand(HKDF_INFO, &mut okm).expect("96 bytes is a valid HKDF length");
+    hk.expand(HKDF_INFO, &mut okm)
+        .expect("96 bytes is a valid HKDF length");
     SessionKeys {
         c2h: okm[0..32].try_into().unwrap(),
         h2c: okm[32..64].try_into().unwrap(),
@@ -265,14 +273,21 @@ fn read_frame(r: &mut impl Read, max: usize) -> io::Result<Vec<u8>> {
     r.read_exact(&mut len)?;
     let len = u32::from_be_bytes(len) as usize;
     if len > max {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame of {len} bytes exceeds {max}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame of {len} bytes exceeds {max}"),
+        ));
     }
     let mut body = vec![0u8; len];
     r.read_exact(&mut body)?;
     Ok(body)
 }
 
-fn parse_hello(body: &[u8], expected_len: usize, what: &str) -> Result<(PublicKey, PublicKey, Option<bool>)> {
+fn parse_hello(
+    body: &[u8],
+    expected_len: usize,
+    what: &str,
+) -> Result<(PublicKey, PublicKey, Option<bool>)> {
     if body.len() != expected_len || &body[..4] != MAGIC {
         bail!("{what}: not a TravelDisplay v2 handshake");
     }
@@ -296,7 +311,11 @@ pub struct Handshake {
 }
 
 /// Host side: answer a client's msg1, derive keys.
-pub fn host_handshake(stream: &mut TcpStream, identity: &Identity, paired: &PeerList) -> Result<Handshake> {
+pub fn host_handshake(
+    stream: &mut TcpStream,
+    identity: &Identity,
+    paired: &PeerList,
+) -> Result<Handshake> {
     let msg1 = read_frame(stream, 70).context("reading client hello")?;
     let (client_static, client_eph, _) = parse_hello(&msg1, 70, "client hello")?;
     let is_paired = paired.contains(client_static.as_bytes());
@@ -321,7 +340,11 @@ pub fn host_handshake(stream: &mut TcpStream, identity: &Identity, paired: &Peer
 
 /// Client side: send msg1, read msg2, derive keys. If `expected_host` is given
 /// (a host paired with before) the host's identity must match it.
-pub fn client_handshake(stream: &mut TcpStream, identity: &Identity, expected_host: Option<&Key32>) -> Result<Handshake> {
+pub fn client_handshake(
+    stream: &mut TcpStream,
+    identity: &Identity,
+    expected_host: Option<&Key32>,
+) -> Result<Handshake> {
     let eph = Identity::generate();
     let msg1 = msg1_bytes(&identity.public, &eph.public);
     write_frame(stream, &msg1).context("sending client hello")?;
@@ -372,12 +395,15 @@ pub struct PairLimiter {
 
 impl PairLimiter {
     pub fn new() -> Self {
-        PairLimiter { failures: Vec::new() }
+        PairLimiter {
+            failures: Vec::new(),
+        }
     }
 
     pub fn allowed(&mut self) -> bool {
         let now = Instant::now();
-        self.failures.retain(|t| now.duration_since(*t) < PAIR_FAIL_WINDOW);
+        self.failures
+            .retain(|t| now.duration_since(*t) < PAIR_FAIL_WINDOW);
         self.failures.len() < PAIR_FAILS_ALLOWED
     }
 
@@ -477,14 +503,19 @@ impl SecureReader {
         let pt = self
             .cipher
             .decrypt(&nonce(self.counter), ct.as_slice())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "message failed authentication"))?;
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "message failed authentication")
+            })?;
         self.counter += 1;
         if pt.len() < 8 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "short message"));
         }
         let len = u32::from_be_bytes([pt[4], pt[5], pt[6], pt[7]]) as usize;
         if pt.len() != 8 + len {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "message length mismatch"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "message length mismatch",
+            ));
         }
         Ok((pt[0], pt[1], pt[8..].to_vec()))
     }
@@ -492,7 +523,12 @@ impl SecureReader {
 
 /// Client-side pairing exchange after the handshake: send the PIN proof and
 /// wait for the verdict.
-pub fn pair_as_client(writer: &mut SecureWriter, reader: &mut SecureReader, keys: &SessionKeys, pin: &str) -> Result<()> {
+pub fn pair_as_client(
+    writer: &mut SecureWriter,
+    reader: &mut SecureReader,
+    keys: &SessionKeys,
+    pin: &str,
+) -> Result<()> {
     writer.send(msg::PAIR, 0, &pin_proof(&keys.pair, pin))?;
     let (ty, _, payload) = reader.recv().context("waiting for the pairing result")?;
     if ty != msg::PAIR_RESULT {
@@ -536,8 +572,16 @@ mod tests {
         assert_eq!(client.peer, host_pub);
         assert_eq!(host.peer, client_pub);
         assert!(!host.paired && !client.paired);
-        assert!(verify_pin_proof(&host.keys.pair, "123456", &pin_proof(&client.keys.pair, "123456")));
-        assert!(!verify_pin_proof(&host.keys.pair, "123457", &pin_proof(&client.keys.pair, "123456")));
+        assert!(verify_pin_proof(
+            &host.keys.pair,
+            "123456",
+            &pin_proof(&client.keys.pair, "123456")
+        ));
+        assert!(!verify_pin_proof(
+            &host.keys.pair,
+            "123457",
+            &pin_proof(&client.keys.pair, "123456")
+        ));
     }
 
     #[test]
@@ -653,10 +697,22 @@ mod vectors {
         // Values documented in docs/PROTOCOL.md; a Swift implementation must reproduce them.
         assert_eq!(hex::encode(&msg1), "5444483200027b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f130faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20");
         assert_eq!(hex::encode(&msg2), "5444483200027b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b00");
-        assert_eq!(hex::encode(keys.c2h), "d8a97f4a0b7c64b0be967bbc40644991d83dc7e8660ee9c1afdfabe570be86a5");
-        assert_eq!(hex::encode(keys.h2c), "f62792bb52e27a09c5932048f06bf373e6a680cf3d7ea78693e394d426405c9b");
-        assert_eq!(hex::encode(keys.pair), "abcb29c363b089c882c6c4a4fe0d815fed0c48b0ab99fcf8a968b953e83f029f");
-        assert_eq!(hex::encode(pin_proof(&keys.pair, "123456")), "11ef35ab8b2347a264019c1995103913f92db8ef3080cea0407a04bd6adcc397");
+        assert_eq!(
+            hex::encode(keys.c2h),
+            "d8a97f4a0b7c64b0be967bbc40644991d83dc7e8660ee9c1afdfabe570be86a5"
+        );
+        assert_eq!(
+            hex::encode(keys.h2c),
+            "f62792bb52e27a09c5932048f06bf373e6a680cf3d7ea78693e394d426405c9b"
+        );
+        assert_eq!(
+            hex::encode(keys.pair),
+            "abcb29c363b089c882c6c4a4fe0d815fed0c48b0ab99fcf8a968b953e83f029f"
+        );
+        assert_eq!(
+            hex::encode(pin_proof(&keys.pair, "123456")),
+            "11ef35ab8b2347a264019c1995103913f92db8ef3080cea0407a04bd6adcc397"
+        );
         let cipher = ChaCha20Poly1305::new((&keys.c2h).into());
         let mut pt = Vec::new();
         protocol::push_header(&mut pt, msg::PAIR, 0, 32);

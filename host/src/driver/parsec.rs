@@ -203,7 +203,9 @@ impl Vdd {
             let _ = CloseHandle(overlapped.hEvent);
             waited.context(format!("VDD ioctl 0x{code:08x} did not complete"))?;
 
-            Ok(u32::from_le_bytes([outbuf[0], outbuf[1], outbuf[2], outbuf[3]]))
+            Ok(u32::from_le_bytes([
+                outbuf[0], outbuf[1], outbuf[2], outbuf[3],
+            ]))
         }
     }
 
@@ -330,7 +332,9 @@ impl VirtualDisplay for ParsecVdd {
         let index = self.vdd.add_display().context("parsec-vdd add display")?;
         log::info!(
             "parsec-vdd: added display #{index}, want {}x{}@{}",
-            mode.width, mode.height, mode.hz
+            mode.width,
+            mode.height,
+            mode.hz
         );
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         match display::wait_for_new_monitor(&before, &is_virtual, APPEAR_TIMEOUT) {

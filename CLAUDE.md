@@ -54,6 +54,10 @@ PC: `host\target\release\traveldisplay-host.exe` (prints the pairing PIN; `pin`,
   to the database. The snapshot for restore lives in `%LOCALAPPDATA%\TravelDisplay`.
 - DXGI lists the driver's proxy adapter with the **same name and VRAM as the real GPU**;
   D3DKMT's `IndirectDisplayDevice` flag tells them apart (`gpu.rs`).
+- **Never block inside `AcquireNextFrame`** on the native path. With `ID3D11Multithread`
+  protection on, the waiting thread holds the device lock and NVENC cannot finish the
+  previous picture until the wait returns (encode time becomes one frame interval).
+  The capture thread polls `AcquireNextFrame(0)` on a sub-ms timer instead.
 - When the PC's monitors are asleep, Desktop Duplication delivers zero frames: a capture
   test that suddenly produces nothing is that, not a bug. Send an input event first.
 - `attach-test`, `probe` sessions and anything that goes through `topology::exclusive`

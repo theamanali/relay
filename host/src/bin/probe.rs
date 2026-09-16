@@ -49,14 +49,17 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut stream = TcpStream::connect(&args.addr).with_context(|| format!("connecting to {}", args.addr))?;
+    let mut stream =
+        TcpStream::connect(&args.addr).with_context(|| format!("connecting to {}", args.addr))?;
     stream.set_nodelay(true)?;
 
     // Handshake + pairing.
     let identity = if args.fresh_identity {
         crypto::Identity::generate()
     } else {
-        let dir = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).context("LOCALAPPDATA")?;
+        let dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .context("LOCALAPPDATA")?;
         crypto::Identity::load_or_create(&dir.join("TravelDisplay").join("probe-identity.key"))?
     };
     let hs = crypto::client_handshake(&mut stream, &identity, None)?;
@@ -66,7 +69,11 @@ fn main() -> Result<()> {
         "handshake ok: host {} , probe {} , {}",
         crypto::fingerprint(&hs.peer),
         crypto::fingerprint(identity.public.as_bytes()),
-        if hs.paired { "already paired" } else { "not paired" }
+        if hs.paired {
+            "already paired"
+        } else {
+            "not paired"
+        }
     );
     // The host greets first; pairing (if needed) happens before our hello.
     let (ty, _, p) = rx.recv()?;
@@ -77,7 +84,10 @@ fn main() -> Result<()> {
     let name = String::from_utf8_lossy(&p[3..3 + p[2] as usize]).into_owned();
     println!("host '{name}' protocol v{version}");
     if !hs.paired || args.pin.is_some() {
-        let pin = args.pin.clone().context("not paired with this host: pass --pin <host PIN>")?;
+        let pin = args
+            .pin
+            .clone()
+            .context("not paired with this host: pass --pin <host PIN>")?;
         crypto::pair_as_client(&mut tx, &mut rx, &hs.keys, &pin)?;
         println!("paired");
     }
@@ -101,7 +111,12 @@ fn main() -> Result<()> {
         if let Some(w) = out {
             let mut i = 0;
             while i + 4 <= payload.len() {
-                let len = u32::from_be_bytes([payload[i], payload[i + 1], payload[i + 2], payload[i + 3]]) as usize;
+                let len = u32::from_be_bytes([
+                    payload[i],
+                    payload[i + 1],
+                    payload[i + 2],
+                    payload[i + 3],
+                ]) as usize;
                 i += 4;
                 w.write_all(&[0, 0, 0, 1])?;
                 w.write_all(&payload[i..i + len])?;
@@ -123,7 +138,10 @@ fn main() -> Result<()> {
     while Instant::now() < deadline {
         let (ty, flags, p) = match rx.recv() {
             Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::WouldBlock =>
+            {
                 println!("(no data for 3s)");
                 continue;
             }
@@ -149,7 +167,11 @@ fn main() -> Result<()> {
                 }
                 if first_frame_at.is_none() {
                     first_frame_at = Some(start.elapsed());
-                    println!("first frame after {:?} ({} bytes)", start.elapsed(), p.len());
+                    println!(
+                        "first frame after {:?} ({} bytes)",
+                        start.elapsed(),
+                        p.len()
+                    );
                 }
                 write_nals(&mut out, &p)?;
             }

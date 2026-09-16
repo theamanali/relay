@@ -149,7 +149,10 @@ impl Drop for DisplayLease {
         }
         if let Some((driver, attachment)) = self.driver.take() {
             if let Err(e) = driver.detach(attachment) {
-                log::warn!("failed to remove virtual display {}: {e:#}", self.monitor.device_name);
+                log::warn!(
+                    "failed to remove virtual display {}: {e:#}",
+                    self.monitor.device_name
+                );
             }
         }
         if self.snapshot.is_none() {
@@ -280,7 +283,11 @@ pub fn acquire_display(
         let location = display::dxgi_output_for(&monitor.device_name)?;
         log::info!(
             "dev mode: streaming primary display {} ({}x{}@{}) on {}",
-            monitor.device_name, placement.width, placement.height, placement.hz, location.adapter_name
+            monitor.device_name,
+            placement.width,
+            placement.height,
+            placement.hz,
+            location.adapter_name
         );
         return Ok(Source {
             lease: DisplayLease {
@@ -297,7 +304,10 @@ pub fn acquire_display(
     // is still on the desktop from an earlier session must not end up in it.
     let is_virtual = |m: &Monitor| driver.is_virtual(m);
     for m in display::attached_matching(&is_virtual) {
-        log::info!("removing leftover virtual display {} before snapshotting", m.device_name);
+        log::info!(
+            "removing leftover virtual display {} before snapshotting",
+            m.device_name
+        );
         display::detach_display(&m.device_name)?;
     }
     let snapshot = topology::Snapshot::take()?;
@@ -325,13 +335,25 @@ pub fn acquire_display(
         if driver.dynamic_modes() {
             log::warn!(
                 "asked {} for {}x{}@{} but got {}x{}@{} — check the driver's settings file",
-                driver.name(), want.width, want.height, want.hz, placement.width, placement.height, placement.hz
+                driver.name(),
+                want.width,
+                want.height,
+                want.hz,
+                placement.width,
+                placement.height,
+                placement.hz
             );
         } else {
             log::warn!(
                 "client asked for {}x{}@{}, closest registered mode is {}x{}@{} \
                  ({} cannot create modes on demand)",
-                want.width, want.height, want.hz, placement.width, placement.height, placement.hz, driver.name()
+                want.width,
+                want.height,
+                want.hz,
+                placement.width,
+                placement.height,
+                placement.hz,
+                driver.name()
             );
         }
     }
@@ -340,7 +362,9 @@ pub fn acquire_display(
         log::warn!(
             "virtual display {} is rendered by '{}' instead of the selected '{}'; \
              capture will be copied to the encoder through system memory",
-            name, location.adapter_name, gpu.name
+            name,
+            location.adapter_name,
+            gpu.name
         );
     }
     log::info!(
@@ -414,7 +438,13 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     let hello = ClientHello::parse(&payload).ok_or_else(|| anyhow!("malformed CLIENT_HELLO"))?;
     log::info!(
         "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz, codecs 0b{:03b}, input={}",
-        hello.name, hello.version, hello.width, hello.height, hello.refresh, hello.codecs, hello.wants_input
+        hello.name,
+        hello.version,
+        hello.width,
+        hello.height,
+        hello.refresh,
+        hello.codecs,
+        hello.wants_input
     );
     if hello.version != protocol::VERSION {
         tx.send(msg::STREAM_STOP, 0, &[stop_reason::BAD_VERSION])?;
@@ -431,14 +461,21 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     } else if hello.codecs & Codec::H264.bit() != 0 {
         Codec::H264
     } else {
-        bail!("client supports no codec we can produce (mask 0b{:03b})", hello.codecs)
+        bail!(
+            "client supports no codec we can produce (mask 0b{:03b})",
+            hello.codecs
+        )
     };
 
     let _awake = KeepAwake::new();
     let want = Mode {
         width: hello.width as u32,
         height: hello.height as u32,
-        hz: if hello.refresh == 0 { 60 } else { hello.refresh as u32 },
+        hz: if hello.refresh == 0 {
+            60
+        } else {
+            hello.refresh as u32
+        },
     };
     let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
     let placement = source.placement;
@@ -446,7 +483,11 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     log::info!(
         "capturing {} at {fps} fps, {} {} Mbps via {}",
         source.monitor().device_name,
-        if codec == Codec::Hevc { "HEVC" } else { "H.264" },
+        if codec == Codec::Hevc {
+            "HEVC"
+        } else {
+            "H.264"
+        },
         cfg.bitrate_mbps,
         crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg)
     );
@@ -454,7 +495,12 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     tx.send(
         msg::STREAM_START,
         0,
-        &protocol::stream_start(placement.width as u16, placement.height as u16, fps as u16, codec),
+        &protocol::stream_start(
+            placement.width as u16,
+            placement.height as u16,
+            fps as u16,
+            codec,
+        ),
     )?;
 
     let mut encoder_config = EncoderConfig {
@@ -634,7 +680,8 @@ fn pump(
                         continue;
                     }
                 }
-                recovery.encoder_config.capture_adapter_idx = recovery.source.location.adapter_index;
+                recovery.encoder_config.capture_adapter_idx =
+                    recovery.source.location.adapter_index;
                 recovery.encoder_config.output_idx = recovery.source.location.output_index;
                 thread::sleep(ENCODER_RESTART_DELAY);
                 if stop.load(Ordering::Relaxed) {
@@ -665,10 +712,11 @@ fn pump(
         tx.send_nals(msg::FRAME, flags, &au.nals)?;
         let frame_send = send_at.elapsed();
         if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
-            let (capture_us, encode_us) = au.timing.map_or(
-                (UNKNOWN_MICROS, UNKNOWN_MICROS),
-                |timing| (duration_us(timing.capture), duration_us(timing.encode)),
-            );
+            let (capture_us, encode_us) = au
+                .timing
+                .map_or((UNKNOWN_MICROS, UNKNOWN_MICROS), |timing| {
+                    (duration_us(timing.capture), duration_us(timing.encode))
+                });
             let timing = FrameTiming {
                 sequence: frame_sequence,
                 capture_us,
@@ -765,7 +813,10 @@ fn read_loop(
             }
             msg::MOUSE_MOVE if p.len() >= 4 => {
                 if let Some(inj) = &injector {
-                    inj.mouse_move(u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]));
+                    inj.mouse_move(
+                        u16::from_be_bytes([p[0], p[1]]),
+                        u16::from_be_bytes([p[2], p[3]]),
+                    );
                 }
             }
             msg::MOUSE_BUTTON if p.len() >= 2 => {
@@ -775,7 +826,10 @@ fn read_loop(
             }
             msg::MOUSE_WHEEL if p.len() >= 4 => {
                 if let Some(inj) = &injector {
-                    inj.mouse_wheel(i16::from_be_bytes([p[0], p[1]]), i16::from_be_bytes([p[2], p[3]]));
+                    inj.mouse_wheel(
+                        i16::from_be_bytes([p[0], p[1]]),
+                        i16::from_be_bytes([p[2], p[3]]),
+                    );
                 }
             }
             msg::KEY if p.len() >= 3 => {

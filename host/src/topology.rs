@@ -17,8 +17,8 @@ use windows::Win32::Devices::Display::{
     DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig, SetDisplayConfig,
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
     DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
-    QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE, QUERY_DISPLAY_CONFIG_FLAGS, SDC_ALLOW_CHANGES,
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    QDC_VIRTUAL_MODE_AWARE, QUERY_DISPLAY_CONFIG_FLAGS, SDC_ALLOW_CHANGES,
     SDC_ALLOW_PATH_ORDER_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_TOPOLOGY_EXTEND,
     SDC_USE_DATABASE_CURRENT, SDC_USE_SUPPLIED_DISPLAY_CONFIG, SDC_VIRTUAL_MODE_AWARE,
     SET_DISPLAY_CONFIG_FLAGS,
@@ -37,7 +37,9 @@ pub struct Snapshot {
     pub modes: Vec<DISPLAYCONFIG_MODE_INFO>,
 }
 
-fn query(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>)> {
+fn query(
+    flags: QUERY_DISPLAY_CONFIG_FLAGS,
+) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>)> {
     unsafe {
         loop {
             let (mut num_paths, mut num_modes) = (0u32, 0u32);
@@ -65,7 +67,11 @@ fn query(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Result<(Vec<DISPLAYCONFIG_PATH_IN
     }
 }
 
-fn set(paths: &[DISPLAYCONFIG_PATH_INFO], modes: &[DISPLAYCONFIG_MODE_INFO], flags: SET_DISPLAY_CONFIG_FLAGS) -> Result<()> {
+fn set(
+    paths: &[DISPLAYCONFIG_PATH_INFO],
+    modes: &[DISPLAYCONFIG_MODE_INFO],
+    flags: SET_DISPLAY_CONFIG_FLAGS,
+) -> Result<()> {
     let r = unsafe {
         SetDisplayConfig(
             if paths.is_empty() { None } else { Some(paths) },
@@ -74,7 +80,10 @@ fn set(paths: &[DISPLAYCONFIG_PATH_INFO], modes: &[DISPLAYCONFIG_MODE_INFO], fla
         )
     };
     if r != 0 {
-        bail!("SetDisplayConfig(flags 0x{:x}) failed with error {r}", flags.0);
+        bail!(
+            "SetDisplayConfig(flags 0x{:x}) failed with error {r}",
+            flags.0
+        );
     }
     Ok(())
 }
@@ -131,8 +140,10 @@ impl Snapshot {
         self.paths
             .iter()
             .map(|p| {
-                let src = source_gdi_name(p.sourceInfo.adapterId, p.sourceInfo.id).unwrap_or_default();
-                let tgt = target_device_path(p.targetInfo.adapterId, p.targetInfo.id).unwrap_or_default();
+                let src =
+                    source_gdi_name(p.sourceInfo.adapterId, p.sourceInfo.id).unwrap_or_default();
+                let tgt =
+                    target_device_path(p.targetInfo.adapterId, p.targetInfo.id).unwrap_or_default();
                 let pnp = tgt.split('#').nth(1).unwrap_or("?").to_string();
                 format!("{src} ({pnp})")
             })
@@ -147,10 +158,16 @@ impl Snapshot {
         out.extend_from_slice(&(self.modes.len() as u32).to_le_bytes());
         // Both structs are plain #[repr(C)] data; store them verbatim.
         out.extend_from_slice(unsafe {
-            std::slice::from_raw_parts(self.paths.as_ptr() as *const u8, self.paths.len() * size_of::<DISPLAYCONFIG_PATH_INFO>())
+            std::slice::from_raw_parts(
+                self.paths.as_ptr() as *const u8,
+                self.paths.len() * size_of::<DISPLAYCONFIG_PATH_INFO>(),
+            )
         });
         out.extend_from_slice(unsafe {
-            std::slice::from_raw_parts(self.modes.as_ptr() as *const u8, self.modes.len() * size_of::<DISPLAYCONFIG_MODE_INFO>())
+            std::slice::from_raw_parts(
+                self.modes.as_ptr() as *const u8,
+                self.modes.len() * size_of::<DISPLAYCONFIG_MODE_INFO>(),
+            )
         });
         out
     }
@@ -161,7 +178,10 @@ impl Snapshot {
         }
         let num_paths = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         let num_modes = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-        let (ps, ms) = (size_of::<DISPLAYCONFIG_PATH_INFO>(), size_of::<DISPLAYCONFIG_MODE_INFO>());
+        let (ps, ms) = (
+            size_of::<DISPLAYCONFIG_PATH_INFO>(),
+            size_of::<DISPLAYCONFIG_MODE_INFO>(),
+        );
         let expected = 16 + num_paths * ps + num_modes * ms;
         if bytes.len() != expected {
             bail!("snapshot is {} bytes, expected {expected}", bytes.len());
@@ -169,12 +189,16 @@ impl Snapshot {
         let mut offset = 16;
         let mut paths = Vec::with_capacity(num_paths);
         for _ in 0..num_paths {
-            paths.push(unsafe { std::ptr::read_unaligned(bytes[offset..].as_ptr() as *const DISPLAYCONFIG_PATH_INFO) });
+            paths.push(unsafe {
+                std::ptr::read_unaligned(bytes[offset..].as_ptr() as *const DISPLAYCONFIG_PATH_INFO)
+            });
             offset += ps;
         }
         let mut modes = Vec::with_capacity(num_modes);
         for _ in 0..num_modes {
-            modes.push(unsafe { std::ptr::read_unaligned(bytes[offset..].as_ptr() as *const DISPLAYCONFIG_MODE_INFO) });
+            modes.push(unsafe {
+                std::ptr::read_unaligned(bytes[offset..].as_ptr() as *const DISPLAYCONFIG_MODE_INFO)
+            });
             offset += ms;
         }
         Ok(Snapshot { paths, modes })
@@ -259,9 +283,16 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
         .ok_or_else(|| anyhow!("no {pnp_id} monitor is present"))?;
     if !monitor.attached {
         let (x, y) = display::next_free_position();
-        log::info!("adding {} to the desktop as {}x{}@{}", monitor.device_name, mode.width, mode.height, mode.hz);
+        log::info!(
+            "adding {} to the desktop as {}x{}@{}",
+            monitor.device_name,
+            mode.width,
+            mode.height,
+            mode.hz
+        );
         display::attach_display(&monitor.device_name, mode, x, y)?;
-        if !display::wait_for_attached_state(&is_virtual, true, std::time::Duration::from_secs(10)) {
+        if !display::wait_for_attached_state(&is_virtual, true, std::time::Duration::from_secs(10))
+        {
             bail!("{} did not join the desktop", monitor.device_name);
         }
     }
@@ -271,7 +302,12 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
             if m != mode {
                 log::warn!(
                     "virtual display cannot do {}x{}@{}; using {}x{}@{}",
-                    mode.width, mode.height, mode.hz, m.width, m.height, m.hz
+                    mode.width,
+                    mode.height,
+                    mode.hz,
+                    m.width,
+                    m.height,
+                    m.hz
                 );
             }
             display::set_mode(&monitor.device_name, m, true)?;
@@ -295,7 +331,9 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
             path.targetInfo.Anonymous.modeInfoIdx as usize,
         )
     };
-    let (Some(mut source_mode), Some(target_mode)) = (modes.get(src_idx).copied(), modes.get(tgt_idx).copied()) else {
+    let (Some(mut source_mode), Some(target_mode)) =
+        (modes.get(src_idx).copied(), modes.get(tgt_idx).copied())
+    else {
         bail!("active configuration has no modes for the virtual display");
     };
     source_mode.Anonymous.sourceMode.position = POINTL { x: 0, y: 0 };
@@ -332,7 +370,10 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
         bail!("other displays are still active: {others:?}");
     }
     if !monitor.primary {
-        log::warn!("{} is the only display but not marked primary", monitor.device_name);
+        log::warn!(
+            "{} is the only display but not marked primary",
+            monitor.device_name
+        );
     }
     Ok(monitor)
 }
@@ -348,7 +389,10 @@ fn exclusive_via_gdi(pnp_id: &str, mode: Mode) -> Result<()> {
         .map(|m| m.device_name.clone())
         .ok_or_else(|| anyhow!("no {pnp_id} monitor present"))?;
     display::stage_attach(&virtual_name, mode, 0, 0, true)?;
-    for m in monitors.iter().filter(|m| m.attached && m.device_name != virtual_name) {
+    for m in monitors
+        .iter()
+        .filter(|m| m.attached && m.device_name != virtual_name)
+    {
         if let Err(e) = display::stage_detach(&m.device_name) {
             log::warn!("{e:#}");
         }
@@ -387,7 +431,10 @@ mod tests {
         };
         path.sourceInfo.id = 3;
         path.targetInfo.id = 0x1234;
-        path.targetInfo.adapterId = LUID { LowPart: 0xabcd, HighPart: 1 };
+        path.targetInfo.adapterId = LUID {
+            LowPart: 0xabcd,
+            HighPart: 1,
+        };
         let mode = DISPLAYCONFIG_MODE_INFO {
             id: 7,
             ..Default::default()
@@ -408,8 +455,15 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(Snapshot::from_bytes(b"nope").is_err());
-        let mut bytes = Snapshot { paths: vec![], modes: vec![] }.to_bytes();
+        let mut bytes = Snapshot {
+            paths: vec![],
+            modes: vec![],
+        }
+        .to_bytes();
         bytes.push(0);
-        assert!(Snapshot::from_bytes(&bytes).is_err(), "trailing bytes must be rejected");
+        assert!(
+            Snapshot::from_bytes(&bytes).is_err(),
+            "trailing bytes must be rejected"
+        );
     }
 }

@@ -12,7 +12,9 @@ use windows::Wdk::Graphics::Direct3D::{
     KMTQAITYPE_ADAPTERTYPE,
 };
 use windows::Win32::Foundation::LUID;
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+};
 
 use crate::display::wide_to_string;
 
@@ -189,7 +191,10 @@ pub fn choose(gpus: &[GpuInfo], want: Option<&str>) -> Result<GpuInfo> {
             .with_context(|| {
                 format!(
                     "no GPU matches '{want}'; available: {}",
-                    gpus.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", ")
+                    gpus.iter()
+                        .map(|g| g.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             });
     }

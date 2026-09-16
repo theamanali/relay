@@ -133,8 +133,17 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
     }
 
     let mut cmd = Command::new(&cfg.ffmpeg);
-    cmd.args(["-hide_banner", "-loglevel", "warning", "-nostdin", "-nostats"])
-        .args(["-init_hw_device", &format!("d3d11va=hw:{}", cfg.capture_adapter_idx)]);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-nostdin",
+        "-nostats",
+    ])
+    .args([
+        "-init_hw_device",
+        &format!("d3d11va=hw:{}", cfg.capture_adapter_idx),
+    ]);
     if cfg.vendor == Vendor::Intel && !cross {
         cmd.args(["-init_hw_device", "qsv=qs@hw"]);
     }
@@ -143,7 +152,9 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
         .args(["-c:v", encoder]);
 
     // --- rate control shared by every encoder ------------------------------
-    cmd.args(["-b:v", &bitrate, "-maxrate", &bitrate, "-bufsize", &bufsize, "-g", &gop]);
+    cmd.args([
+        "-b:v", &bitrate, "-maxrate", &bitrate, "-bufsize", &bufsize, "-g", &gop,
+    ]);
 
     // --- vendor specifics ----------------------------------------------------
     match cfg.vendor {
@@ -153,9 +164,18 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
                 Quality::Balanced => "p4",
                 Quality::Quality => "p6",
             };
-            cmd.args(["-preset", preset, "-tune", "ull", "-zerolatency", "1", "-delay", "0"])
-                .args(["-bf", "0", "-rc", "cbr", "-forced-idr", "1", "-aud", "1"])
-                .args(["-profile:v", if hevc { "main" } else { "high" }]);
+            cmd.args([
+                "-preset",
+                preset,
+                "-tune",
+                "ull",
+                "-zerolatency",
+                "1",
+                "-delay",
+                "0",
+            ])
+            .args(["-bf", "0", "-rc", "cbr", "-forced-idr", "1", "-aud", "1"])
+            .args(["-profile:v", if hevc { "main" } else { "high" }]);
             if cfg.intra_refresh {
                 cmd.args(["-intra-refresh", "1"]);
             }
@@ -166,10 +186,26 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
                 Quality::Balanced => "balanced",
                 Quality::Quality => "quality",
             };
-            cmd.args(["-usage", "ultralowlatency", "-quality", quality, "-latency", "1"])
-                .args(["-async_depth", "1", "-rc", "cbr", "-forced_idr", "1", "-aud", "1"])
-                .args(["-preanalysis", "0"])
-                .args(["-profile:v", if hevc { "main" } else { "high" }]);
+            cmd.args([
+                "-usage",
+                "ultralowlatency",
+                "-quality",
+                quality,
+                "-latency",
+                "1",
+            ])
+            .args([
+                "-async_depth",
+                "1",
+                "-rc",
+                "cbr",
+                "-forced_idr",
+                "1",
+                "-aud",
+                "1",
+            ])
+            .args(["-preanalysis", "0"])
+            .args(["-profile:v", if hevc { "main" } else { "high" }]);
             if hevc {
                 cmd.args(["-header_insertion_mode", "idr"]);
             } else {
@@ -182,9 +218,25 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
                 Quality::Balanced => "medium",
                 Quality::Quality => "slower",
             };
-            cmd.args(["-preset", preset, "-async_depth", "1", "-low_delay_brc", "1"])
-                .args(["-scenario", "remotegaming", "-bf", "0", "-forced_idr", "1", "-aud", "1"])
-                .args(["-profile:v", if hevc { "main" } else { "high" }]);
+            cmd.args([
+                "-preset",
+                preset,
+                "-async_depth",
+                "1",
+                "-low_delay_brc",
+                "1",
+            ])
+            .args([
+                "-scenario",
+                "remotegaming",
+                "-bf",
+                "0",
+                "-forced_idr",
+                "1",
+                "-aud",
+                "1",
+            ])
+            .args(["-profile:v", if hevc { "main" } else { "high" }]);
             if !hevc {
                 cmd.args(["-look_ahead", "0", "-repeat_pps", "1"]);
             }
@@ -209,11 +261,18 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
 
     // ddagrab already paces frames. Do not duplicate them again at the output,
     // and deliver each encoded packet immediately, even on a static desktop.
-    cmd.args(["-fps_mode", "passthrough", "-enc_time_base", "1:1000000", "-flush_packets", "1"])
-        .args(["-f", if hevc { "hevc" } else { "h264" }, "pipe:1"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args([
+        "-fps_mode",
+        "passthrough",
+        "-enc_time_base",
+        "1:1000000",
+        "-flush_packets",
+        "1",
+    ])
+    .args(["-f", if hevc { "hevc" } else { "h264" }, "pipe:1"])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     cmd
 }
 
@@ -238,14 +297,15 @@ impl FfmpegEncoder {
             log::warn!(
                 "display is rendered on DXGI adapter {} but the encoder is on adapter {}: \
                  frames will be copied through system memory",
-                cfg.capture_adapter_idx, cfg.encode_adapter_idx
+                cfg.capture_adapter_idx,
+                cfg.encode_adapter_idx
             );
         }
         let mut cmd = build_command(cfg);
         log::info!("starting encoder: {:?}", cmd);
-        let mut child = cmd.spawn().with_context(|| {
-            format!("failed to start ffmpeg at {}", cfg.ffmpeg.display())
-        })?;
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("failed to start ffmpeg at {}", cfg.ffmpeg.display()))?;
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         thread::Builder::new()
@@ -273,7 +333,10 @@ impl FfmpegEncoder {
             if let Some(au) = self.ready.pop_front() {
                 return Ok(Some(au));
             }
-            let n = self.stdout.read(&mut self.read_buf).context("reading ffmpeg stdout")?;
+            let n = self
+                .stdout
+                .read(&mut self.read_buf)
+                .context("reading ffmpeg stdout")?;
             if n == 0 {
                 // Flush whatever the parser still holds (the final AU has no successor).
                 self.parser.finish(&mut self.ready);
@@ -619,7 +682,10 @@ mod tests {
         assert_eq!(out.len(), 3);
         let first = &out[0];
         assert!(first.keyframe);
-        assert_eq!(first.param_sets, vec![vps.to_vec(), sps.to_vec(), pps.to_vec()]);
+        assert_eq!(
+            first.param_sets,
+            vec![vps.to_vec(), sps.to_vec(), pps.to_vec()]
+        );
         assert_eq!(first.nals, vec![sei.to_vec(), idr.to_vec()]);
         assert!(!out[1].keyframe);
         assert_eq!(out[1].nals, vec![sei.to_vec(), p.to_vec()]);
@@ -660,7 +726,9 @@ mod tests {
     }
 
     fn argv(cmd: &Command) -> Vec<String> {
-        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
     }
 
     #[test]
@@ -669,15 +737,23 @@ mod tests {
         assert!(args.contains(&"hevc_nvenc".to_string()));
         assert!(args.contains(&"d3d11va=hw:0".to_string()));
         let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
-        assert!(!graph.contains("hwdownload"), "same adapter must stay on the GPU");
-        assert!(graph.contains("draw_mouse=1"), "Windows' cursor must be captured");
+        assert!(
+            !graph.contains("hwdownload"),
+            "same adapter must stay on the GPU"
+        );
+        assert!(
+            graph.contains("draw_mouse=1"),
+            "Windows' cursor must be captured"
+        );
         assert!(args.contains(&"p4".to_string()));
         for (option, value) in [
             ("-fps_mode", "passthrough"),
             ("-enc_time_base", "1:1000000"),
             ("-flush_packets", "1"),
         ] {
-            assert!(args.windows(2).any(|pair| pair[0] == option && pair[1] == value));
+            assert!(args
+                .windows(2)
+                .any(|pair| pair[0] == option && pair[1] == value));
         }
     }
 
@@ -687,7 +763,10 @@ mod tests {
         assert!(amd.contains(&"hevc_amf".to_string()));
         assert!(amd.contains(&"ultralowlatency".to_string()));
         assert!(amd.contains(&"-header_insertion_mode".to_string()));
-        assert!(!amd.contains(&"-bf".to_string()), "hevc_amf has no B-frame option");
+        assert!(
+            !amd.contains(&"-bf".to_string()),
+            "hevc_amf has no B-frame option"
+        );
 
         let intel = argv(&build_command(&cfg(Vendor::Intel, Codec::H264, 0, 0)));
         assert!(intel.contains(&"h264_qsv".to_string()));
@@ -702,7 +781,10 @@ mod tests {
         let args = argv(&build_command(&cfg(Vendor::Nvidia, Codec::Hevc, 1, 0)));
         let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
         assert!(graph.ends_with("hwdownload,format=bgra"));
-        assert!(args.contains(&"d3d11va=hw:1".to_string()), "capture device is the display's adapter");
+        assert!(
+            args.contains(&"d3d11va=hw:1".to_string()),
+            "capture device is the display's adapter"
+        );
     }
 
     #[test]

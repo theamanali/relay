@@ -115,3 +115,30 @@ same nominal rate, drifting ~0.5 ms per 5 s. So each session draws a random
 to the Mac's numbers, and is the largest single host-side stage in a bad
 session — bigger than encode. Event-driven capture (block in
 `AcquireNextFrame`) removes it; that is the next change.
+
+## Event-driven capture (done, 2026-09-16)
+
+The native path now captures on its own thread and submits to NVENC the
+moment Desktop Duplication has a new frame; the 120 Hz tick survives only as
+a fallback that re-encodes the last frame when the desktop is static (or
+holds a frame back when the captured display refreshes faster than the
+requested rate). Same probe loop, three consecutive sessions:
+
+| | frame age at submit (avg) | encode |
+|---|---|---|
+| before (pacer) | 0.7 / 7.4 / 5.5 / 2.6 ms, per session | 3.3–3.8 ms |
+| after | **0.53 / 0.55 / 0.55 ms** | 3.3–3.7 ms |
+
+So the per-session lottery is gone; every session now sits ~0.5 ms behind
+DWM, and the Mac's RTT/2 estimate should stop swinging between runs.
+
+One trap on the way: blocking inside `AcquireNextFrame(timeout)` made encode
+take exactly one frame interval (8.1 ms). With `ID3D11Multithread`
+protection on, the waiting thread holds the device lock and NVENC's DirectX
+input pass cannot finish the previous picture until the wait returns. The
+capture thread therefore polls `AcquireNextFrame(0)` every 200 µs on a
+high-resolution waitable timer instead, and `timeBeginPeriod(1)` is set for
+the session. Cost: the whole host process is ~12% of one core at 120 fps.
+
+Item 3 (thread hops) is moot: encrypt+send is 0.07 ms and the output worker →
+server hop is the only one left. Items 4 and 5 remain.

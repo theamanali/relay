@@ -7,7 +7,9 @@ use std::collections::VecDeque;
 use std::ffi::{c_void, CStr};
 use std::mem::{size_of, zeroed, MaybeUninit};
 use std::ptr;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -24,9 +26,10 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
-    IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
+    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
 };
+use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod, TIMERR_NOERROR};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{
     CreateEventW, CreateWaitableTimerExW, SetWaitableTimerEx, WaitForSingleObject,
@@ -37,27 +40,18 @@ use crate::cursor_overlay::CursorOverlay;
 use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality};
 use crate::protocol::Codec;
 
+/// Handle held by the server thread. Capture runs on its own thread so it can
+/// block in `AcquireNextFrame` and submit the instant DWM presents a frame; a
+/// second thread waits for NVENC output. Finished pictures arrive here through
+/// a channel, so `next_access_unit` is a plain receive.
 pub struct NativeNvenc {
     api: NvApi,
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
-    duplication: IDXGIOutputDuplication,
-    composition_texture: ID3D11Texture2D,
-    cursor: CursorOverlay,
-    width: u32,
-    height: u32,
-    fps: u32,
-    codec: Codec,
     encoder: *mut c_void,
-    slots: Vec<EncodeSlot>,
-    worker_tx: Option<Sender<(PendingOutput, Duration)>>,
-    worker_rx: Option<Receiver<CompletedOutput>>,
+    events_rx: Option<Receiver<OutputEvent>>,
+    capture: Option<JoinHandle<CaptureLoop>>,
     worker: Option<JoinHandle<()>>,
-    frame_idx: u32,
-    have_frame: bool,
-    frame_interval: Duration,
-    next_frame_at: Instant,
-    pacer: FramePacer,
+    stop: Arc<AtomicBool>,
+    timer_period_raised: bool,
     // Rolling per-stage latency instrumentation, logged every `STAT_INTERVAL`
     // frames. `capture` is the on-GPU work of turning an acquired frame into a
     // submitted encode (copy + cursor + slot copy + the encode call); `encode`
@@ -65,15 +59,14 @@ pub struct NativeNvenc {
     stat_frames: u32,
     stat_capture: Duration,
     stat_encode: Duration,
-    // How long a freshly acquired desktop frame had been sitting in DWM's
-    // output before we grabbed it (QPC now - LastPresentTime). This is the
-    // wait the pacer never sees; `stat_reused` counts ticks where the desktop
-    // had nothing new and the previous frame was re-encoded.
+    // How long the desktop frame had been sitting in DWM's output when we
+    // submitted it (QPC now - LastPresentTime). `stat_reused` counts fallback
+    // ticks where the desktop had nothing new and the previous frame was
+    // re-encoded so the client keeps receiving pictures.
     stat_age: Duration,
     stat_age_max: Duration,
     stat_fresh: u32,
     stat_reused: u32,
-    qpc_frequency: i64,
 }
 
 /// How many frames between native per-stage latency log lines (~5 s at 120 fps).
@@ -81,6 +74,18 @@ const STAT_INTERVAL: u32 = 600;
 
 const PIPELINE_DEPTH: usize = 2;
 const ENCODE_WAIT_MS: u32 = 2_000;
+/// How long the server thread waits for a picture before giving up. The
+/// capture thread re-encodes the last frame every tick when the desktop is
+/// static, so nothing arriving for this long means capture is dead (or the
+/// captured display is asleep and Desktop Duplication delivers nothing).
+const PICTURE_WAIT: Duration = Duration::from_secs(5);
+/// Longest the capture thread waits for the output worker to free a slot.
+const SLOT_WAIT: Duration = Duration::from_secs(2);
+/// Gap between `AcquireNextFrame` polls while waiting for the next desktop
+/// frame; the average latency it adds is half of this.
+const ACQUIRE_POLL: Duration = Duration::from_micros(200);
+/// Poll gap while no desktop frame has arrived yet.
+const FIRST_FRAME_POLL: Duration = Duration::from_millis(20);
 
 struct EncodeSlot {
     texture: ID3D11Texture2D,
@@ -103,12 +108,30 @@ struct PendingOutput {
 // second thread. These handles remain valid until that thread is joined.
 unsafe impl Send for PendingOutput {}
 
+/// Per-picture facts the capture thread knows and the stats need.
+#[derive(Clone, Copy)]
+struct CaptureInfo {
+    /// GPU-side work (desktop copy + cursor + slot copy + encode call).
+    work: Duration,
+    /// Age of the desktop content at submit, when DWM reported a present time.
+    age: Option<Duration>,
+    /// The desktop had nothing new; the previous frame was re-encoded.
+    reused: bool,
+}
+
 struct CompletedOutput {
     slot_index: usize,
     result: Result<AccessUnit>,
-    capture_latency: Duration,
+    capture: CaptureInfo,
     /// submit -> NVENC output ready, for latency instrumentation.
     encode_latency: Duration,
+}
+
+enum OutputEvent {
+    Completed(CompletedOutput),
+    /// Desktop Duplication lost access (mode change); the server recreates capture.
+    CaptureLost,
+    CaptureFailed(anyhow::Error),
 }
 
 struct OutputWorkerContext {
@@ -119,11 +142,51 @@ struct OutputWorkerContext {
 
 unsafe impl Send for OutputWorkerContext {}
 
-struct FramePacer {
+/// Everything the capture thread owns. Returned from the thread on exit so
+/// `Drop` can release the slots after both threads are gone.
+struct CaptureLoop {
+    functions: NV_ENCODE_API_FUNCTION_LIST,
+    encoder: *mut c_void,
+    _device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    duplication: IDXGIOutputDuplication,
+    composition_texture: ID3D11Texture2D,
+    cursor: CursorOverlay,
+    width: u32,
+    height: u32,
+    frame_interval: Duration,
+    frame_idx: u32,
+    slots: Vec<EncodeSlot>,
+    /// The composition texture holds a desktop frame.
+    have_frame: bool,
+    /// The composition texture changed since the last submit.
+    dirty: bool,
+    /// DWM's QPC present time for the content in the composition texture (0 if
+    /// the last acquire was cursor-only).
+    present_qpc: i64,
+    /// GPU work done for the pending content since the last submit.
+    pending_work: Duration,
+    last_submit_at: Option<Instant>,
+    qpc_frequency: i64,
+    sleeper: HighResSleeper,
+    worker_tx: Option<Sender<(PendingOutput, CaptureInfo)>>,
+    free_rx: Receiver<usize>,
+    events_tx: Sender<OutputEvent>,
+    stop: Arc<AtomicBool>,
+}
+
+// The D3D11 device has multithread protection on and NVENC's asynchronous API
+// is designed for submit/collect on different threads; the raw pointers are
+// only used from this thread until it exits and hands them back for cleanup.
+unsafe impl Send for CaptureLoop {}
+
+/// Sub-millisecond sleeps via a high-resolution waitable timer, with
+/// `thread::sleep` as the fallback on systems that lack it.
+struct HighResSleeper {
     timer: Option<HANDLE>,
 }
 
-impl FramePacer {
+impl HighResSleeper {
     fn new() -> Self {
         let timer = unsafe {
             CreateWaitableTimerExW(
@@ -134,42 +197,36 @@ impl FramePacer {
             )
         };
         match timer {
-            Ok(timer) => {
-                log::info!("120 Hz pacer using a high-resolution Windows timer");
-                Self { timer: Some(timer) }
-            }
+            Ok(timer) => Self { timer: Some(timer) },
             Err(error) => {
-                log::warn!("high-resolution frame timer unavailable ({error}); using thread sleep");
+                log::warn!(
+                    "high-resolution timer unavailable ({error}); capture polls with thread sleep"
+                );
                 Self { timer: None }
             }
         }
     }
 
-    fn sleep_until(&self, deadline: Instant) {
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return;
-            }
-            let Some(timer) = self.timer else {
-                std::thread::sleep(remaining);
-                return;
-            };
-            // Negative 100 ns units request a relative due time. Round up so
-            // the wait never intentionally fires before the frame deadline.
-            let ticks = remaining.as_nanos().div_ceil(100).min(i64::MAX as u128) as i64;
-            let due_time = -ticks.max(1);
-            if unsafe { SetWaitableTimerEx(timer, &due_time, 0, None, None, None, 0) }.is_err()
-                || unsafe { WaitForSingleObject(timer, 1_000) } != WAIT_OBJECT_0
-            {
-                std::thread::sleep(remaining);
-                return;
-            }
+    fn sleep(&self, duration: Duration) {
+        if duration.is_zero() {
+            return;
+        }
+        let Some(timer) = self.timer else {
+            thread::sleep(duration);
+            return;
+        };
+        // Negative 100 ns units request a relative due time.
+        let ticks = duration.as_nanos().div_ceil(100).min(i64::MAX as u128) as i64;
+        let due_time = -ticks.max(1);
+        if unsafe { SetWaitableTimerEx(timer, &due_time, 0, None, None, None, 0) }.is_err()
+            || unsafe { WaitForSingleObject(timer, 1_000) } != WAIT_OBJECT_0
+        {
+            thread::sleep(duration);
         }
     }
 }
 
-impl Drop for FramePacer {
+impl Drop for HighResSleeper {
     fn drop(&mut self) {
         if let Some(timer) = self.timer.take() {
             unsafe {
@@ -177,6 +234,18 @@ impl Drop for FramePacer {
             }
         }
     }
+}
+
+/// Owns the NVENC session while it is being configured; becomes part of the
+/// capture loop once the threads start.
+struct EncoderSession {
+    api: NvApi,
+    device: ID3D11Device,
+    encoder: *mut c_void,
+    width: u32,
+    height: u32,
+    fps: u32,
+    slots: Vec<EncodeSlot>,
 }
 
 impl NativeNvenc {
@@ -191,27 +260,81 @@ impl NativeNvenc {
         let composition_texture = create_texture(&device, width, height)?;
         let cursor = CursorOverlay::new(&device, &composition_texture, width, height)?;
 
-        let mut native = NativeNvenc {
+        let mut session = EncoderSession {
             api,
             device,
+            encoder: ptr::null_mut(),
+            width,
+            height,
+            fps: cfg.fps.max(1),
+            slots: Vec::with_capacity(PIPELINE_DEPTH),
+        };
+        if let Err(error) = session.initialize_encoder(cfg) {
+            session.destroy();
+            return Err(error);
+        }
+
+        // Event waits and channel timeouts on this path otherwise quantise to
+        // the default ~15.6 ms scheduler tick.
+        let timer_period_raised = unsafe { timeBeginPeriod(1) } == TIMERR_NOERROR;
+        if !timer_period_raised {
+            log::warn!("could not raise the system timer resolution to 1 ms");
+        }
+
+        let (pending_tx, pending_rx) = mpsc::channel();
+        let (free_tx, free_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let worker_context = OutputWorkerContext {
+            functions: session.api.functions,
+            encoder: session.encoder,
+            codec: cfg.codec,
+        };
+        let worker_events = events_tx.clone();
+        let worker = thread::Builder::new()
+            .name("nvenc-output".into())
+            .spawn(move || output_worker(worker_context, pending_rx, worker_events, free_tx))
+            .context("starting NVENC output worker")?;
+
+        let capture_loop = CaptureLoop {
+            functions: session.api.functions,
+            encoder: session.encoder,
+            _device: session.device.clone(),
             context,
             duplication,
             composition_texture,
             cursor,
             width,
             height,
-            fps: cfg.fps.max(1),
-            codec: cfg.codec,
-            encoder: ptr::null_mut(),
-            slots: Vec::with_capacity(PIPELINE_DEPTH),
-            worker_tx: None,
-            worker_rx: None,
-            worker: None,
+            frame_interval: Duration::from_secs_f64(1.0 / f64::from(session.fps)),
             frame_idx: 0,
+            slots: std::mem::take(&mut session.slots),
             have_frame: false,
-            frame_interval: Duration::from_secs_f64(1.0 / f64::from(cfg.fps.max(1))),
-            next_frame_at: Instant::now(),
-            pacer: FramePacer::new(),
+            dirty: false,
+            present_qpc: 0,
+            pending_work: Duration::ZERO,
+            last_submit_at: None,
+            qpc_frequency: qpc_frequency(),
+            sleeper: HighResSleeper::new(),
+            worker_tx: Some(pending_tx),
+            free_rx,
+            events_tx,
+            stop: Arc::clone(&stop),
+        };
+        let capture = thread::Builder::new()
+            .name("nvenc-capture".into())
+            .spawn(move || capture_loop.run())
+            .context("starting native capture thread")?;
+
+        Ok(NativeNvenc {
+            api: session.api,
+            encoder: session.encoder,
+            events_rx: Some(events_rx),
+            capture: Some(capture),
+            worker: Some(worker),
+            stop,
+            timer_period_raised,
             stat_frames: 0,
             stat_capture: Duration::ZERO,
             stat_encode: Duration::ZERO,
@@ -219,11 +342,86 @@ impl NativeNvenc {
             stat_age_max: Duration::ZERO,
             stat_fresh: 0,
             stat_reused: 0,
-            qpc_frequency: qpc_frequency(),
-        };
-        native.initialize_encoder(cfg)?;
-        native.start_output_worker()?;
-        Ok(native)
+        })
+    }
+
+    /// Wait for the next finished picture. `None` asks the server to recreate
+    /// capture after a fullscreen/mode change.
+    pub fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
+        let events = self
+            .events_rx
+            .as_ref()
+            .ok_or_else(|| anyhow!("native capture is not running"))?;
+        match events.recv_timeout(PICTURE_WAIT) {
+            Ok(OutputEvent::Completed(completed)) => self.record_and_return(completed),
+            Ok(OutputEvent::CaptureLost) => Ok(None),
+            Ok(OutputEvent::CaptureFailed(error)) => Err(error),
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "no picture from native capture for {} s (is the captured display asleep?)",
+                PICTURE_WAIT.as_secs()
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("native capture stopped"),
+        }
+    }
+
+    /// Fold a finished picture's timings into the rolling stats (logging a line
+    /// every `STAT_INTERVAL` frames) and hand its access unit to the caller.
+    fn record_and_return(&mut self, mut completed: CompletedOutput) -> Result<Option<AccessUnit>> {
+        self.stat_capture += completed.capture.work;
+        self.stat_encode += completed.encode_latency;
+        self.stat_frames += 1;
+        if completed.capture.reused {
+            self.stat_reused += 1;
+        } else {
+            self.stat_fresh += 1;
+        }
+        if let Some(age) = completed.capture.age {
+            self.stat_age += age;
+            self.stat_age_max = self.stat_age_max.max(age);
+        }
+        if self.stat_frames >= STAT_INTERVAL {
+            let n = f64::from(self.stat_frames.max(1));
+            let fresh = f64::from(self.stat_fresh.max(1));
+            log::info!(
+                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms; desktop frame age at submit avg {:.2} ms, max {:.2} ms ({} fresh, {} reused)",
+                self.stat_frames,
+                self.stat_capture.as_secs_f64() * 1000.0 / n,
+                self.stat_encode.as_secs_f64() * 1000.0 / n,
+                self.stat_age.as_secs_f64() * 1000.0 / fresh,
+                self.stat_age_max.as_secs_f64() * 1000.0,
+                self.stat_fresh,
+                self.stat_reused,
+            );
+            self.stat_frames = 0;
+            self.stat_capture = Duration::ZERO;
+            self.stat_encode = Duration::ZERO;
+            self.stat_age = Duration::ZERO;
+            self.stat_age_max = Duration::ZERO;
+            self.stat_fresh = 0;
+            self.stat_reused = 0;
+        }
+        if let Ok(access_unit) = &mut completed.result {
+            access_unit.timing = Some(EncoderTiming {
+                capture: completed.capture.work,
+                encode: completed.encode_latency,
+            });
+        }
+        completed.result.map(Some)
+    }
+}
+
+impl EncoderSession {
+    /// Release the NVENC session when configuration fails before the threads
+    /// exist (the running case is handled by `NativeNvenc::drop`).
+    fn destroy(mut self) {
+        release_slots(&self.api, self.encoder, &mut self.slots);
+        if !self.encoder.is_null() {
+            if let Some(destroy) = self.api.functions.nvEncDestroyEncoder {
+                unsafe {
+                    let _ = destroy(self.encoder);
+                }
+            }
+        }
     }
 
     fn initialize_encoder(&mut self, cfg: &EncoderConfig) -> Result<()> {
@@ -462,233 +660,173 @@ impl NativeNvenc {
             mapped: ptr::null_mut(),
         })
     }
+}
 
-    fn start_output_worker(&mut self) -> Result<()> {
-        let (pending_tx, pending_rx) = mpsc::channel();
-        let (completed_tx, completed_rx) = mpsc::channel();
-        let context = OutputWorkerContext {
-            functions: self.api.functions,
-            encoder: self.encoder,
-            codec: self.codec,
-        };
-        let worker = thread::Builder::new()
-            .name("nvenc-output".into())
-            .spawn(move || output_worker(context, pending_rx, completed_tx))
-            .context("starting NVENC output worker")?;
-        self.worker_tx = Some(pending_tx);
-        self.worker_rx = Some(completed_rx);
-        self.worker = Some(worker);
-        Ok(())
-    }
-
-    /// Submit on the display cadence while a second thread waits for NVENC.
-    /// Completed pictures are returned immediately; a second picture is queued
-    /// only when the previous encode genuinely takes longer than one tick.
-    /// `None` asks the server to recreate capture after a fullscreen/mode change.
-    pub fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
-        loop {
-            if let Some(completed) = self.try_completed()? {
-                return self.record_and_return(completed);
-            }
-
-            let now = Instant::now();
-            let free_slot = self.slots.iter().position(|slot| slot.mapped.is_null());
-            if let Some(slot_index) = free_slot {
-                if !self.have_frame || now >= self.next_frame_at {
-                    if !self.capture_and_submit(slot_index)? {
-                        return Ok(None);
-                    }
-                    continue;
+impl CaptureLoop {
+    /// Thread body. Runs until stopped, until Desktop Duplication loses access
+    /// (reported as `CaptureLost`) or until something fails (`CaptureFailed`).
+    fn run(mut self) -> Self {
+        while !self.stop.load(Ordering::Relaxed) {
+            match self.step() {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!("Desktop Duplication access lost; recreating native capture");
+                    let _ = self.events_tx.send(OutputEvent::CaptureLost);
+                    break;
+                }
+                Err(error) => {
+                    let _ = self.events_tx.send(OutputEvent::CaptureFailed(error));
+                    break;
                 }
             }
-
-            if self.slots.iter().all(|slot| slot.mapped.is_null()) {
-                self.pacer.sleep_until(self.next_frame_at);
-                continue;
-            }
-
-            let pipeline_full = free_slot.is_none();
-            let timeout = if !pipeline_full {
-                self.next_frame_at.saturating_duration_since(now)
-            } else {
-                Duration::from_secs(2)
-            };
-            if let Some(completed) = self.wait_completed(timeout)? {
-                return self.record_and_return(completed);
-            }
-            if pipeline_full {
-                bail!("timed out waiting for the NVENC output worker");
-            }
-            // The next capture deadline won the race; loop and submit it.
         }
+        // Closing the pending channel lets the output worker finish and exit.
+        self.worker_tx.take();
+        self
     }
 
-    /// Fold a finished picture's timings into the rolling stats (logging a line
-    /// every `STAT_INTERVAL` frames) and hand its access unit to the caller.
-    fn record_and_return(&mut self, mut completed: CompletedOutput) -> Result<Option<AccessUnit>> {
-        self.stat_capture += completed.capture_latency;
-        self.stat_encode += completed.encode_latency;
-        self.stat_frames += 1;
-        if self.stat_frames >= STAT_INTERVAL {
-            let n = self.stat_frames.max(1) as f64;
-            let fresh = f64::from(self.stat_fresh.max(1));
-            log::info!(
-                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms; desktop frame age at acquire avg {:.2} ms, max {:.2} ms ({} fresh, {} reused)",
-                self.stat_frames,
-                self.stat_capture.as_secs_f64() * 1000.0 / n,
-                self.stat_encode.as_secs_f64() * 1000.0 / n,
-                self.stat_age.as_secs_f64() * 1000.0 / fresh,
-                self.stat_age_max.as_secs_f64() * 1000.0,
-                self.stat_fresh,
-                self.stat_reused,
-            );
-            self.stat_frames = 0;
-            self.stat_capture = Duration::ZERO;
-            self.stat_encode = Duration::ZERO;
-            self.stat_age = Duration::ZERO;
-            self.stat_age_max = Duration::ZERO;
-            self.stat_fresh = 0;
-            self.stat_reused = 0;
-        }
-        if let Ok(access_unit) = &mut completed.result {
-            access_unit.timing = Some(EncoderTiming {
-                capture: completed.capture_latency,
-                encode: completed.encode_latency,
-            });
-        }
-        completed.result.map(Some)
-    }
+    /// One acquire-and-maybe-submit round. Polls `AcquireNextFrame` until DWM
+    /// presents a new desktop frame or the fallback tick is due, so a fresh
+    /// frame is encoded the moment it exists rather than when a host-side timer
+    /// happens to fire. `Ok(false)` means access was lost.
+    ///
+    /// The poll never blocks inside DXGI: with multithread protection on, a
+    /// thread waiting in `AcquireNextFrame` holds the D3D11 device lock, and
+    /// NVENC's DirectX input pass then cannot finish the previous picture until
+    /// the wait returns (measured: encode time became one frame interval).
+    fn step(&mut self) -> Result<bool> {
+        let slot_index = self.wait_for_free_slot()?;
 
-    fn try_completed(&mut self) -> Result<Option<CompletedOutput>> {
-        let result = self
-            .worker_rx
-            .as_ref()
-            .ok_or_else(|| anyhow!("NVENC output worker is not running"))?
-            .try_recv();
-        match result {
-            Ok(completed) => {
-                self.slots[completed.slot_index].mapped = ptr::null_mut();
-                Ok(Some(completed))
+        // Fallback tick: one frame interval after the previous submit the
+        // previous content is re-encoded if the desktop is static (the client
+        // expects a steady stream), or the pending content is submitted if a
+        // frame arrived too soon after the last one to keep the target rate.
+        let deadline = self.last_submit_at.map(|t| t + self.frame_interval);
+        let fresh = loop {
+            if self.stop.load(Ordering::Relaxed) {
+                return Ok(true);
             }
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => bail!("NVENC output worker stopped"),
-        }
-    }
-
-    fn wait_completed(&mut self, timeout: Duration) -> Result<Option<CompletedOutput>> {
-        if timeout.is_zero() {
-            return Ok(None);
-        }
-        let result = self
-            .worker_rx
-            .as_ref()
-            .ok_or_else(|| anyhow!("NVENC output worker is not running"))?
-            .recv_timeout(timeout);
-        match result {
-            Ok(completed) => {
-                self.slots[completed.slot_index].mapped = ptr::null_mut();
-                Ok(Some(completed))
-            }
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => bail!("NVENC output worker stopped"),
-        }
-    }
-
-    fn capture_and_submit(&mut self, slot_index: usize) -> Result<bool> {
-        let timeout_ms = if self.have_frame { 0 } else { 100 };
-        let captured = loop {
             let mut info: DXGI_OUTDUPL_FRAME_INFO = unsafe { zeroed() };
             let mut resource: Option<IDXGIResource> = None;
             match unsafe {
                 self.duplication
-                    .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
+                    .AcquireNextFrame(0, &mut info, &mut resource)
             } {
-                Ok(()) => break Some((resource, info)),
-                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                    if self.have_frame {
-                        break None;
-                    }
+                Ok(()) => {
+                    self.composite(resource, &info)?;
+                    break true;
                 }
-                Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
-                    log::warn!("Desktop Duplication access lost; recreating native capture");
-                    return Ok(false);
-                }
+                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {}
+                Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => return Ok(false),
                 Err(e) => return Err(e).context("IDXGIOutputDuplication::AcquireNextFrame"),
             }
+            let now = Instant::now();
+            let wait = match deadline {
+                Some(deadline) if now >= deadline => break false,
+                Some(deadline) => ACQUIRE_POLL.min(deadline - now),
+                None => FIRST_FRAME_POLL,
+            };
+            self.sleeper.sleep(wait);
         };
-
-        // Time the on-GPU work (copy + cursor + slot copy + encode call), not
-        // the idle wait for a frame above.
-        let work_start = Instant::now();
-        match &captured {
-            // LastPresentTime is 0 when only the cursor changed.
-            Some((_, info)) if info.LastPresentTime != 0 => {
-                let age = self.qpc_age(info.LastPresentTime);
-                self.stat_age += age;
-                self.stat_age_max = self.stat_age_max.max(age);
-                self.stat_fresh += 1;
-            }
-            Some(_) => self.stat_fresh += 1,
-            None => self.stat_reused += 1,
+        if !self.have_frame {
+            return Ok(true);
         }
-        if let Some((resource, frame_info)) = captured {
-            let copied = (|| -> Result<()> {
-                let resource =
-                    resource.ok_or_else(|| anyhow!("Desktop Duplication returned no resource"))?;
-                let desktop: ID3D11Texture2D = resource
-                    .cast()
-                    .context("desktop frame is not a D3D11 texture")?;
-                unsafe {
-                    self.context
-                        .CopyResource(&self.composition_texture, &desktop);
-                }
-                self.cursor.update(&self.duplication, &frame_info)?;
-                Ok(())
-            })();
-
-            let release = unsafe { self.duplication.ReleaseFrame() };
-            if let Err(e) = release {
-                log::warn!("Desktop Duplication ReleaseFrame failed: {e}");
-            }
-            copied?;
-
-            self.cursor.draw(&self.context);
-            self.have_frame = true;
-        }
-
-        unsafe {
-            self.context
-                .CopyResource(&self.slots[slot_index].texture, &self.composition_texture);
-        }
-        let first = self.frame_idx == 0;
-        self.submit(slot_index, work_start)?;
 
         let now = Instant::now();
-        if first {
-            self.next_frame_at = now + self.frame_interval;
-        } else {
-            self.next_frame_at += self.frame_interval;
-            if self.next_frame_at <= now {
-                self.next_frame_at = now;
+        let submit_now = match self.last_submit_at {
+            None => true,
+            Some(last) => {
+                // A fresh frame goes out immediately unless the captured display
+                // refreshes faster than the requested rate; then it waits for
+                // the tick. Three quarters of an interval tolerates DWM jitter.
+                let soon_enough = now >= last + self.frame_interval * 3 / 4;
+                (fresh && soon_enough) || deadline.is_some_and(|deadline| now >= deadline)
             }
+        };
+        if submit_now {
+            self.submit(slot_index)?;
         }
         Ok(true)
     }
 
-    fn submit(&mut self, slot_index: usize, capture_started: Instant) -> Result<()> {
+    /// Block until the output worker has returned a slot. Slots come back
+    /// well within a frame interval (encode is a few ms), so this normally
+    /// returns at once.
+    fn wait_for_free_slot(&mut self) -> Result<usize> {
+        loop {
+            while let Ok(index) = self.free_rx.try_recv() {
+                self.slots[index].mapped = ptr::null_mut();
+            }
+            if let Some(index) = self.slots.iter().position(|slot| slot.mapped.is_null()) {
+                return Ok(index);
+            }
+            match self.free_rx.recv_timeout(SLOT_WAIT) {
+                Ok(index) => self.slots[index].mapped = ptr::null_mut(),
+                Err(RecvTimeoutError::Timeout) => {
+                    bail!("timed out waiting for the NVENC output worker")
+                }
+                Err(RecvTimeoutError::Disconnected) => bail!("NVENC output worker stopped"),
+            }
+        }
+    }
+
+    /// Copy an acquired desktop frame into the composition texture and refresh
+    /// the cursor overlay, then release the frame back to DWM.
+    fn composite(
+        &mut self,
+        resource: Option<IDXGIResource>,
+        info: &DXGI_OUTDUPL_FRAME_INFO,
+    ) -> Result<()> {
+        let work_start = Instant::now();
+        let copied = (|| -> Result<()> {
+            let resource =
+                resource.ok_or_else(|| anyhow!("Desktop Duplication returned no resource"))?;
+            let desktop: ID3D11Texture2D = resource
+                .cast()
+                .context("desktop frame is not a D3D11 texture")?;
+            unsafe {
+                self.context
+                    .CopyResource(&self.composition_texture, &desktop);
+            }
+            self.cursor.update(&self.duplication, info)?;
+            Ok(())
+        })();
+        if let Err(e) = unsafe { self.duplication.ReleaseFrame() } {
+            log::warn!("Desktop Duplication ReleaseFrame failed: {e}");
+        }
+        copied?;
+        self.cursor.draw(&self.context);
+
+        // LastPresentTime is 0 when only the cursor changed; keep the previous
+        // desktop present time in that case.
+        if info.LastPresentTime != 0 {
+            self.present_qpc = info.LastPresentTime;
+        }
+        self.have_frame = true;
+        self.dirty = true;
+        self.pending_work += work_start.elapsed();
+        Ok(())
+    }
+
+    /// Copy the composition texture into a slot and hand it to NVENC.
+    fn submit(&mut self, slot_index: usize) -> Result<()> {
+        let work_start = Instant::now();
+        unsafe {
+            self.context
+                .CopyResource(&self.slots[slot_index].texture, &self.composition_texture);
+        }
+
         let registered = self.slots[slot_index].registered;
         let bitstream = self.slots[slot_index].bitstream;
         let completion_event = self.slots[slot_index].event.0;
         let mut map: NV_ENC_MAP_INPUT_RESOURCE = unsafe { zeroed() };
         map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
         map.registeredResource = registered;
-        let map_input = self.api.required(
-            self.api.functions.nvEncMapInputResource,
-            "NvEncMapInputResource",
-        )?;
-        nv_check(
-            &self.api,
-            self.encoder,
+        let map_input = self
+            .functions
+            .nvEncMapInputResource
+            .ok_or_else(|| anyhow!("NVIDIA driver does not provide NvEncMapInputResource"))?;
+        self.nv_check(
             unsafe { map_input(self.encoder, &mut map) },
             "NvEncMapInputResource",
         )?;
@@ -724,15 +862,16 @@ impl NativeNvenc {
                 }
             }
             let encode_picture = self
-                .api
-                .required(self.api.functions.nvEncEncodePicture, "NvEncEncodePicture")?;
+                .functions
+                .nvEncEncodePicture
+                .ok_or_else(|| anyhow!("NVIDIA driver does not provide NvEncEncodePicture"))?;
             let status = unsafe { encode_picture(self.encoder, pic.as_mut_ptr()) };
             if status == NVENCSTATUS::NV_ENC_SUCCESS
                 || status == NVENCSTATUS::NV_ENC_ERR_NEED_MORE_INPUT
             {
                 Ok(())
             } else {
-                nv_check(&self.api, self.encoder, status, "NvEncEncodePicture")
+                self.nv_check(status, "NvEncEncodePicture")
             }
         })();
 
@@ -741,19 +880,24 @@ impl NativeNvenc {
             return Err(error);
         }
         self.slots[slot_index].mapped = map.mappedResource;
+        let submitted_at = Instant::now();
         let pending = PendingOutput {
             slot_index,
             mapped: map.mappedResource,
             bitstream,
             event: self.slots[slot_index].event,
-            submitted_at: Instant::now(),
+            submitted_at,
         };
-        let capture_latency = capture_started.elapsed();
+        let info = CaptureInfo {
+            work: self.pending_work + work_start.elapsed(),
+            age: (self.present_qpc != 0).then(|| self.qpc_age(self.present_qpc)),
+            reused: !self.dirty,
+        };
         if self
             .worker_tx
             .as_ref()
             .ok_or_else(|| anyhow!("NVENC output worker is not running"))?
-            .send((pending, capture_latency))
+            .send((pending, info))
             .is_err()
         {
             self.unmap(map.mappedResource)?;
@@ -761,6 +905,9 @@ impl NativeNvenc {
             bail!("NVENC output worker stopped");
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
+        self.last_submit_at = Some(submitted_at);
+        self.dirty = false;
+        self.pending_work = Duration::ZERO;
         Ok(())
     }
 
@@ -775,16 +922,18 @@ impl NativeNvenc {
     }
 
     fn unmap(&self, mapped: NV_ENC_INPUT_PTR) -> Result<()> {
-        let unmap_input = self.api.required(
-            self.api.functions.nvEncUnmapInputResource,
-            "NvEncUnmapInputResource",
-        )?;
-        nv_check(
-            &self.api,
-            self.encoder,
+        let unmap_input = self
+            .functions
+            .nvEncUnmapInputResource
+            .ok_or_else(|| anyhow!("NVIDIA driver does not provide NvEncUnmapInputResource"))?;
+        self.nv_check(
             unsafe { unmap_input(self.encoder, mapped) },
             "NvEncUnmapInputResource",
         )
+    }
+
+    fn nv_check(&self, status: NVENCSTATUS, operation: &str) -> Result<()> {
+        nv_check_raw(&self.functions, self.encoder, status, operation)
     }
 }
 
@@ -796,25 +945,107 @@ fn qpc_frequency() -> i64 {
     frequency.max(1)
 }
 
+/// Waits for each submitted picture, reads its bitstream, returns the slot to
+/// the capture thread and the access unit to the server thread.
 fn output_worker(
     context: OutputWorkerContext,
-    pending_rx: Receiver<(PendingOutput, Duration)>,
-    completed_tx: Sender<CompletedOutput>,
+    pending_rx: Receiver<(PendingOutput, CaptureInfo)>,
+    events_tx: Sender<OutputEvent>,
+    free_tx: Sender<usize>,
 ) {
-    while let Ok((pending, capture_latency)) = pending_rx.recv() {
+    while let Ok((pending, capture)) = pending_rx.recv() {
         let slot_index = pending.slot_index;
         let submitted_at = pending.submitted_at;
         let result = read_worker_output(&context, pending);
-        if completed_tx
-            .send(CompletedOutput {
+        let encode_latency = submitted_at.elapsed();
+        // Free the slot first so the next capture never waits on the server.
+        let _ = free_tx.send(slot_index);
+        if events_tx
+            .send(OutputEvent::Completed(CompletedOutput {
                 slot_index,
                 result,
-                capture_latency,
-                encode_latency: submitted_at.elapsed(),
-            })
+                capture,
+                encode_latency,
+            }))
             .is_err()
         {
             break;
+        }
+    }
+}
+
+impl Drop for NativeNvenc {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let capture_loop = self.capture.take().and_then(|capture| capture.join().ok());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+
+        if let Some(mut capture_loop) = capture_loop {
+            // Both threads are gone; anything the worker finished is unmapped
+            // already, so only pictures it never reached remain mapped.
+            while let Ok(index) = capture_loop.free_rx.try_recv() {
+                capture_loop.slots[index].mapped = ptr::null_mut();
+            }
+            if let Some(events) = self.events_rx.take() {
+                while let Ok(event) = events.try_recv() {
+                    if let OutputEvent::Completed(output) = event {
+                        capture_loop.slots[output.slot_index].mapped = ptr::null_mut();
+                    }
+                }
+            }
+            release_slots(&self.api, self.encoder, &mut capture_loop.slots);
+        }
+
+        if !self.encoder.is_null() {
+            if let Some(f) = self.api.functions.nvEncDestroyEncoder {
+                unsafe {
+                    let _ = f(self.encoder);
+                }
+            }
+        }
+        if self.timer_period_raised {
+            unsafe {
+                let _ = timeEndPeriod(1);
+            }
+        }
+    }
+}
+
+/// Unmap, unregister and free every slot. Pictures still mapped are waited
+/// for first so NVENC is not torn down under an in-flight encode.
+fn release_slots(api: &NvApi, encoder: *mut c_void, slots: &mut [EncodeSlot]) {
+    unsafe {
+        for slot in slots {
+            if !slot.mapped.is_null() {
+                let _ = WaitForSingleObject(slot.event, ENCODE_WAIT_MS);
+                if let Some(unmap) = api.functions.nvEncUnmapInputResource {
+                    let _ = unmap(encoder, slot.mapped);
+                }
+                slot.mapped = ptr::null_mut();
+            }
+            if !slot.event.is_invalid() {
+                let mut event_params: NV_ENC_EVENT_PARAMS = zeroed();
+                event_params.version = NV_ENC_EVENT_PARAMS_VER;
+                event_params.completionEvent = slot.event.0;
+                if let Some(unregister) = api.functions.nvEncUnregisterAsyncEvent {
+                    let _ = unregister(encoder, &mut event_params);
+                }
+            }
+            if !slot.bitstream.is_null() {
+                if let Some(destroy) = api.functions.nvEncDestroyBitstreamBuffer {
+                    let _ = destroy(encoder, slot.bitstream);
+                }
+            }
+            if !slot.registered.is_null() {
+                if let Some(unregister) = api.functions.nvEncUnregisterResource {
+                    let _ = unregister(encoder, slot.registered);
+                }
+            }
+            if !slot.event.is_invalid() {
+                let _ = CloseHandle(slot.event);
+            }
         }
     }
 }
@@ -895,14 +1126,22 @@ fn worker_nv_check(
     status: NVENCSTATUS,
     operation: &str,
 ) -> Result<()> {
+    nv_check_raw(&context.functions, context.encoder, status, operation)
+}
+
+fn nv_check_raw(
+    functions: &NV_ENCODE_API_FUNCTION_LIST,
+    encoder: *mut c_void,
+    status: NVENCSTATUS,
+    operation: &str,
+) -> Result<()> {
     if status == NVENCSTATUS::NV_ENC_SUCCESS {
         return Ok(());
     }
-    let detail = context
-        .functions
+    let detail = functions
         .nvEncGetLastErrorString
         .and_then(|get_error| {
-            let pointer = unsafe { get_error(context.encoder) };
+            let pointer = unsafe { get_error(encoder) };
             (!pointer.is_null()).then(|| unsafe { CStr::from_ptr(pointer) }.to_string_lossy())
         })
         .unwrap_or_default();
@@ -910,58 +1149,6 @@ fn worker_nv_check(
         bail!("{operation} failed with {status:?}")
     } else {
         bail!("{operation} failed with {status:?}: {detail}")
-    }
-}
-
-impl Drop for NativeNvenc {
-    fn drop(&mut self) {
-        self.worker_tx.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-        if let Some(completed) = self.worker_rx.take() {
-            while let Ok(output) = completed.try_recv() {
-                self.slots[output.slot_index].mapped = ptr::null_mut();
-            }
-        }
-
-        unsafe {
-            for slot in &mut self.slots {
-                if !slot.mapped.is_null() {
-                    let _ = WaitForSingleObject(slot.event, ENCODE_WAIT_MS);
-                    if let Some(unmap) = self.api.functions.nvEncUnmapInputResource {
-                        let _ = unmap(self.encoder, slot.mapped);
-                    }
-                    slot.mapped = ptr::null_mut();
-                }
-                if !slot.event.is_invalid() {
-                    let mut event_params: NV_ENC_EVENT_PARAMS = zeroed();
-                    event_params.version = NV_ENC_EVENT_PARAMS_VER;
-                    event_params.completionEvent = slot.event.0;
-                    if let Some(unregister) = self.api.functions.nvEncUnregisterAsyncEvent {
-                        let _ = unregister(self.encoder, &mut event_params);
-                    }
-                }
-                if !slot.bitstream.is_null() {
-                    if let Some(destroy) = self.api.functions.nvEncDestroyBitstreamBuffer {
-                        let _ = destroy(self.encoder, slot.bitstream);
-                    }
-                }
-                if !slot.registered.is_null() {
-                    if let Some(unregister) = self.api.functions.nvEncUnregisterResource {
-                        let _ = unregister(self.encoder, slot.registered);
-                    }
-                }
-                if !slot.event.is_invalid() {
-                    let _ = CloseHandle(slot.event);
-                }
-            }
-            if !self.encoder.is_null() {
-                if let Some(f) = self.api.functions.nvEncDestroyEncoder {
-                    let _ = f(self.encoder);
-                }
-            }
-        }
     }
 }
 

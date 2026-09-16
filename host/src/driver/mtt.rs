@@ -73,9 +73,15 @@ impl MttVdd {
             .context("VDDPATH missing under the MTT VDD registry key")?;
         let settings = Path::new(&dir).join(SETTINGS_FILE);
         if !settings.exists() {
-            bail!("{} does not exist (tools/install-host.ps1 creates it)", settings.display());
+            bail!(
+                "{} does not exist (tools/install-host.ps1 creates it)",
+                settings.display()
+            );
         }
-        log::info!("MTT Virtual Display Driver installed ({})", settings.display());
+        log::info!(
+            "MTT Virtual Display Driver installed ({})",
+            settings.display()
+        );
         Ok(MttVdd {
             settings,
             enabled_by_us: Cell::new(false),
@@ -88,7 +94,9 @@ impl MttVdd {
     }
 
     fn dir(&self) -> &Path {
-        self.settings.parent().expect("settings file has a parent directory")
+        self.settings
+            .parent()
+            .expect("settings file has a parent directory")
     }
 
     /// Merge `mode` (and the render GPU) into vdd_settings.xml. Returns true if
@@ -134,11 +142,13 @@ impl MttVdd {
     }
 
     fn physical_state_file(&self) -> PathBuf {
-        self.dir().join(format!("physical-{}.txt", std::process::id()))
+        self.dir()
+            .join(format!("physical-{}.txt", std::process::id()))
     }
 
     fn physical_ready_file(&self) -> PathBuf {
-        self.dir().join(format!("physical-{}.ready", std::process::id()))
+        self.dir()
+            .join(format!("physical-{}.ready", std::process::id()))
     }
 
     fn physical_heartbeat_file(&self) -> PathBuf {
@@ -199,12 +209,17 @@ impl MttVdd {
         let deadline = started + GONE_TIMEOUT;
         while !display::present_matching(&is_virtual).is_empty() {
             if Instant::now() >= deadline {
-                log::warn!("MTT VDD monitor still present {GONE_TIMEOUT:?} after disabling the device");
+                log::warn!(
+                    "MTT VDD monitor still present {GONE_TIMEOUT:?} after disabling the device"
+                );
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(100));
         }
-        log::info!("MTT VDD: device disabled after {:.1}s", started.elapsed().as_secs_f64());
+        log::info!(
+            "MTT VDD: device disabled after {:.1}s",
+            started.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 }
@@ -255,7 +270,10 @@ impl VirtualDisplay for MttVdd {
         if display::present_matching(&is_virtual).is_empty() {
             log::info!(
                 "MTT VDD: enabling the device for {}x{}@{} on {}",
-                mode.width, mode.height, mode.hz, gpu.name
+                mode.width,
+                mode.height,
+                mode.hz,
+                gpu.name
             );
             self.enable()?;
         }
@@ -351,11 +369,15 @@ impl VirtualDisplay for MttVdd {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn xml_unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Everything the driver derives its target modes from.
@@ -383,11 +405,22 @@ fn parse_settings(xml: &str) -> Settings {
         .unwrap_or_default();
     let resolutions = res_re
         .captures_iter(xml)
-        .map(|c| (c[1].parse().unwrap(), c[2].parse().unwrap(), c[3].parse().unwrap()))
+        .map(|c| {
+            (
+                c[1].parse().unwrap(),
+                c[2].parse().unwrap(),
+                c[3].parse().unwrap(),
+            )
+        })
         .collect();
     let global_rates = global_re
         .captures(xml)
-        .map(|c| rate_re.captures_iter(&c[1]).map(|r| r[1].parse().unwrap()).collect())
+        .map(|c| {
+            rate_re
+                .captures_iter(&c[1])
+                .map(|r| r[1].parse().unwrap())
+                .collect()
+        })
         .unwrap_or_default();
     Settings {
         gpu,
@@ -400,7 +433,9 @@ fn parse_settings(xml: &str) -> Settings {
 #[cfg(test)]
 fn offers(settings: &Settings, mode: Mode) -> bool {
     settings.resolutions.iter().any(|&(w, h, hz)| {
-        w == mode.width && h == mode.height && (hz == mode.hz || settings.global_rates.contains(&mode.hz))
+        w == mode.width
+            && h == mode.height
+            && (hz == mode.hz || settings.global_rates.contains(&mode.hz))
     })
 }
 
@@ -421,9 +456,11 @@ fn render_settings(original: &str, mode: Mode, gpu_name: &str) -> Result<String>
 
     // gpu
     if !current.gpu.eq_ignore_ascii_case(gpu_name) {
-        let gpu_re = Regex::new(r"(?m)(^[ \t]*<gpu>\s*<friendlyname>)[^<]*(</friendlyname>)").unwrap();
+        let gpu_re =
+            Regex::new(r"(?m)(^[ \t]*<gpu>\s*<friendlyname>)[^<]*(</friendlyname>)").unwrap();
         let escaped = xml_escape(gpu_name);
-        let gpu_block = format!("<gpu>\n        <friendlyname>{escaped}</friendlyname>\n    </gpu>");
+        let gpu_block =
+            format!("<gpu>\n        <friendlyname>{escaped}</friendlyname>\n    </gpu>");
         xml = replace_or_insert(
             &xml,
             &gpu_re,
@@ -448,19 +485,30 @@ fn render_settings(original: &str, mode: Mode, gpu_name: &str) -> Result<String>
             xml = close_re.replacen(&xml, 1, entry.as_str()).into_owned();
         } else {
             let block = format!("<resolutions>\n{entry}");
-            xml = xml.replacen("</vdd_settings>", &format!("    {block}\n</vdd_settings>"), 1);
+            xml = xml.replacen(
+                "</vdd_settings>",
+                &format!("    {block}\n</vdd_settings>"),
+                1,
+            );
         }
     }
 
     // global refresh rates: make sure the wanted one is there
     if !current.global_rates.contains(&mode.hz) {
         let close_re = Regex::new(r"(?m)^[ \t]*</global>").unwrap();
-        let rate = format!("        <g_refresh_rate>{}</g_refresh_rate>\n    </global>", mode.hz);
+        let rate = format!(
+            "        <g_refresh_rate>{}</g_refresh_rate>\n    </global>",
+            mode.hz
+        );
         if close_re.is_match(&xml) {
             xml = close_re.replacen(&xml, 1, rate.as_str()).into_owned();
         } else {
             let block = format!("<global>\n{rate}");
-            xml = xml.replacen("</vdd_settings>", &format!("    {block}\n</vdd_settings>"), 1);
+            xml = xml.replacen(
+                "</vdd_settings>",
+                &format!("    {block}\n</vdd_settings>"),
+                1,
+            );
         }
     }
     Ok(xml)
@@ -470,7 +518,11 @@ fn replace_or_insert(xml: &str, re: &Regex, replacement: &str, block_if_missing:
     if re.is_match(xml) {
         re.replace(xml, replacement).into_owned()
     } else {
-        xml.replacen("</vdd_settings>", &format!("    {block_if_missing}\n</vdd_settings>"), 1)
+        xml.replacen(
+            "</vdd_settings>",
+            &format!("    {block_if_missing}\n</vdd_settings>"),
+            1,
+        )
     }
 }
 
@@ -505,7 +557,11 @@ mod tests {
 "#;
 
     fn mode() -> Mode {
-        Mode { width: 3024, height: 1964, hz: 120 }
+        Mode {
+            width: 3024,
+            height: 1964,
+            hz: 120,
+        }
     }
 
     #[test]
@@ -513,28 +569,66 @@ mod tests {
         let out = render_settings(SAMPLE, mode(), "NVIDIA GeForce RTX 3080 Ti").unwrap();
         let parsed = parse_settings(&out);
         assert_eq!(parsed.gpu, "NVIDIA GeForce RTX 3080 Ti");
-        assert_eq!(parsed.resolutions, vec![(1920, 1080, 60), (3024, 1964, 120)]);
+        assert_eq!(
+            parsed.resolutions,
+            vec![(1920, 1080, 60), (3024, 1964, 120)]
+        );
         assert_eq!(parsed.global_rates, [60, 120].into_iter().collect());
         assert!(out.contains("<count>1</count>"));
-        assert!(out.contains("<logging>false</logging>"), "unrelated settings survive");
+        assert!(
+            out.contains("<logging>false</logging>"),
+            "unrelated settings survive"
+        );
         assert!(out.starts_with("<?xml version='1.0' encoding='utf-8'?>\n<!-- host rewrites"));
         assert!(offers(&parsed, mode()));
-        assert!(offers(&parsed, Mode { width: 1920, height: 1080, hz: 120 }), "global rate applies");
-        assert!(!offers(&parsed, Mode { width: 2560, height: 1440, hz: 60 }));
+        assert!(
+            offers(
+                &parsed,
+                Mode {
+                    width: 1920,
+                    height: 1080,
+                    hz: 120
+                }
+            ),
+            "global rate applies"
+        );
+        assert!(!offers(
+            &parsed,
+            Mode {
+                width: 2560,
+                height: 1440,
+                hz: 60
+            }
+        ));
     }
 
     #[test]
     fn rewriting_is_idempotent() {
         let once = render_settings(SAMPLE, mode(), "NVIDIA GeForce RTX 3080 Ti").unwrap();
         let twice = render_settings(&once, mode(), "NVIDIA GeForce RTX 3080 Ti").unwrap();
-        assert_eq!(once, twice, "a second write with the same request must be a no-op");
+        assert_eq!(
+            once, twice,
+            "a second write with the same request must be a no-op"
+        );
         let case = render_settings(&once, mode(), "nvidia geforce rtx 3080 ti").unwrap();
-        assert_eq!(once, case, "GPU name comparison is case-insensitive like the driver's");
+        assert_eq!(
+            once, case,
+            "GPU name comparison is case-insensitive like the driver's"
+        );
     }
 
     #[test]
     fn adds_a_missing_refresh_rate() {
-        let out = render_settings(SAMPLE, Mode { width: 3024, height: 1964, hz: 90 }, "x").unwrap();
+        let out = render_settings(
+            SAMPLE,
+            Mode {
+                width: 3024,
+                height: 1964,
+                hz: 90,
+            },
+            "x",
+        )
+        .unwrap();
         let parsed = parse_settings(&out);
         assert_eq!(parsed.global_rates, [60, 90, 120].into_iter().collect());
         assert_eq!(parsed.resolutions.last(), Some(&(3024, 1964, 90)));
@@ -569,9 +663,15 @@ mod helper_tests {
         let dir = std::env::temp_dir().join(format!("td-action-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         write_action(&dir, "enable 4242").unwrap();
-        assert_eq!(fs::read_to_string(dir.join(ACTION_FILE)).unwrap(), "enable 4242");
+        assert_eq!(
+            fs::read_to_string(dir.join(ACTION_FILE)).unwrap(),
+            "enable 4242"
+        );
         write_action(&dir, "disable").unwrap();
-        assert_eq!(fs::read_to_string(dir.join(ACTION_FILE)).unwrap(), "disable");
+        assert_eq!(
+            fs::read_to_string(dir.join(ACTION_FILE)).unwrap(),
+            "disable"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }

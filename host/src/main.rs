@@ -214,10 +214,19 @@ fn select_gpu(want: Option<&str>) -> Result<GpuInfo> {
         chosen.name,
         chosen.vendor.label(),
         chosen.vram_gb(),
-        if want.is_some() { "requested with --gpu" } else { "most dedicated VRAM" }
+        if want.is_some() {
+            "requested with --gpu"
+        } else {
+            "most dedicated VRAM"
+        }
     );
     for g in gpus.iter().filter(|g| g.luid != chosen.luid) {
-        log::debug!("not using {} ({}, {:.1} GB)", g.name, g.vendor.label(), g.vram_gb());
+        log::debug!(
+            "not using {} ({}, {:.1} GB)",
+            g.name,
+            g.vendor.label(),
+            g.vram_gb()
+        );
     }
     Ok(chosen)
 }
@@ -264,12 +273,19 @@ fn restore_displays(kind: DriverKind) -> Result<()> {
         log::info!("no saved layout from a session; asking Windows for its own");
         topology::restore_from_database()?;
     }
-    log::info!("displays: {}", display::enumerate()
-        .iter()
-        .filter(|m| m.attached)
-        .map(|m| format!("{}{}", m.device_name, if m.primary { " (primary)" } else { "" }))
-        .collect::<Vec<_>>()
-        .join(", "));
+    log::info!(
+        "displays: {}",
+        display::enumerate()
+            .iter()
+            .filter(|m| m.attached)
+            .map(|m| format!(
+                "{}{}",
+                m.device_name,
+                if m.primary { " (primary)" } else { "" }
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     Ok(())
 }
 
@@ -287,7 +303,11 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
         started.elapsed().as_secs_f64(),
         monitor.device_name,
         monitor.monitor_id,
-        if monitor.primary { "primary" } else { "NOT primary" }
+        if monitor.primary {
+            "primary"
+        } else {
+            "NOT primary"
+        }
     );
     let others: Vec<String> = display::enumerate()
         .into_iter()
@@ -302,19 +322,38 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     let modes = display::list_modes(&monitor.device_name);
     log::info!(
         "{} modes offered; exact {}x{}@{} present: {}",
-        modes.len(), want.width, want.height, want.hz, modes.contains(&want)
+        modes.len(),
+        want.width,
+        want.height,
+        want.hz,
+        modes.contains(&want)
     );
     let p = source.placement;
-    log::info!("Windows runs it at {}x{}@{} at ({}, {})", p.width, p.height, p.hz, p.x, p.y);
+    log::info!(
+        "Windows runs it at {}x{}@{} at ({}, {})",
+        p.width,
+        p.height,
+        p.hz,
+        p.x,
+        p.y
+    );
     let loc = &source.location;
     log::info!(
         "DXGI adapter {} ({}), output {} — {}",
         loc.adapter_index,
         loc.adapter_name,
         loc.output_index,
-        if loc.adapter_luid == gpu.luid { "rendered on the selected GPU" } else { "NOT on the selected GPU" }
+        if loc.adapter_luid == gpu.luid {
+            "rendered on the selected GPU"
+        } else {
+            "NOT on the selected GPU"
+        }
     );
-    log::info!("encoder would be {} on {}", encoder::encoder_name(gpu.vendor, Codec::Hevc, false), gpu.name);
+    log::info!(
+        "encoder would be {} on {}",
+        encoder::encoder_name(gpu.vendor, Codec::Hevc, false),
+        gpu.name
+    );
     log::info!("holding for {seconds}s (your other displays are off until then)");
     std::thread::sleep(Duration::from_secs(seconds));
     let ended = std::time::Instant::now();
@@ -346,7 +385,9 @@ fn serve(args: ServeArgs) -> Result<()> {
         Some(open_driver(args.driver)?)
     };
 
-    let identity = Arc::new(crypto::Identity::load_or_create(&state_dir()?.join("identity.key"))?);
+    let identity = Arc::new(crypto::Identity::load_or_create(
+        &state_dir()?.join("identity.key"),
+    )?);
     let paired = crypto::PeerList::load(&state_dir()?.join("paired-clients.txt"))?;
     let pin = match args.pin {
         Some(p) if crypto::is_valid_pin(&p) => p,
@@ -398,7 +439,10 @@ fn show_pin(new: bool) -> Result<()> {
     let pin = crypto::load_or_create_pin(&path)?;
     let identity = crypto::Identity::load_or_create(&state_dir()?.join("identity.key"))?;
     println!("pairing PIN: {pin}");
-    println!("host fingerprint: {}", crypto::fingerprint(identity.public.as_bytes()));
+    println!(
+        "host fingerprint: {}",
+        crypto::fingerprint(identity.public.as_bytes())
+    );
     Ok(())
 }
 
