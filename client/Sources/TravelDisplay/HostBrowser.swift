@@ -16,7 +16,7 @@ struct DiscoveredHost {
     /// Wired interface to pin the connection to, when the host was seen on one.
     var wiredInterface: NWInterface? { interfaces.first { $0.type == .wiredEthernet } }
 
-    /// Short description of how the host is reachable.
+    /// This Mac's interfaces the announcement arrived on (not the PC's NICs).
     var linkDescription: String {
         let kinds = interfaces.map { i -> String in
             switch i.type {
@@ -28,7 +28,7 @@ struct DiscoveredHost {
             }
         }
         let unique = Array(NSOrderedSet(array: kinds)) as? [String] ?? kinds
-        return unique.joined(separator: ", ")
+        return "via " + unique.joined(separator: ", ")
     }
 }
 
@@ -67,7 +67,8 @@ final class HostBrowser {
     func start() {
         let params = NWParameters()
         params.includePeerToPeer = true
-        let browser = NWBrowser(for: .bonjour(type: Proto.serviceType, domain: nil), using: params)
+        // Plain .bonjour never fetches TXT; the host's identity key lives there.
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Proto.serviceType, domain: nil), using: params)
         browser.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             if case .failed(let err) = state {
