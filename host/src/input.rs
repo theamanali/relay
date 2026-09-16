@@ -13,6 +13,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
     MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
+use windows::Win32::UI::HiDpi::{
+    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN,
@@ -23,16 +26,53 @@ use crate::display::Placement;
 const XBUTTON1: i32 = 0x0001;
 const XBUTTON2: i32 = 0x0002;
 
+#[derive(Debug, Clone, Copy)]
+struct DesktopBounds {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
 pub struct Injector {
     target: Placement,
+    desktop: DesktopBounds,
     /// Keys currently held, so we can release them if the client vanishes.
     held: Vec<u16>,
 }
 
+/// Keep display placement, virtual-desktop metrics and SendInput in physical
+/// pixels. Without this, Windows can DPI-virtualise GetSystemMetrics while GDI
+/// still reports the virtual monitor's native pixel dimensions.
+pub fn enable_physical_pixel_coordinates() -> windows::core::Result<()> {
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+}
+
 impl Injector {
-    pub fn new(target: Placement) -> Self {
+    pub fn new(target: Placement, exclusive: bool) -> Self {
+        // A normal TravelDisplay session has already made the target the only
+        // display at (0, 0), so its normalized input coordinates are also the
+        // normalized virtual-desktop coordinates. This remains exact even if
+        // a Windows API unexpectedly reports DPI-virtualised metrics.
+        let desktop = if exclusive {
+            DesktopBounds::from_target(target)
+        } else {
+            DesktopBounds::current()
+        };
+        log::info!(
+            "input mapping: target {}x{} at ({}, {}), virtual desktop {}x{} at ({}, {})",
+            target.width,
+            target.height,
+            target.x,
+            target.y,
+            desktop.width,
+            desktop.height,
+            desktop.x,
+            desktop.y
+        );
         Injector {
             target,
+            desktop,
             held: Vec::new(),
         }
     }
@@ -61,24 +101,9 @@ impl Injector {
 
     /// `nx`/`ny` are 0..65535 across the streamed display.
     pub fn mouse_move(&self, nx: u16, ny: u16) {
-        let t = &self.target;
-        // Pixel on the target monitor.
-        let px = t.x as i64 + (nx as i64 * t.width as i64) / 65536;
-        let py = t.y as i64 + (ny as i64 * t.height as i64) / 65536;
-        // Normalise to the virtual desktop for MOUSEEVENTF_VIRTUALDESK.
-        let (vx, vy, vw, vh) = unsafe {
-            (
-                GetSystemMetrics(SM_XVIRTUALSCREEN) as i64,
-                GetSystemMetrics(SM_YVIRTUALSCREEN) as i64,
-                GetSystemMetrics(SM_CXVIRTUALSCREEN) as i64,
-                GetSystemMetrics(SM_CYVIRTUALSCREEN) as i64,
-            )
-        };
-        if vw <= 1 || vh <= 1 {
+        let Some((ax, ay)) = absolute_position(nx, ny, self.target, self.desktop) else {
             return;
-        }
-        let ax = ((px - vx) * 65535 / (vw - 1)).clamp(0, 65535) as i32;
-        let ay = ((py - vy) * 65535 / (vh - 1)).clamp(0, 65535) as i32;
+        };
         Self::mouse(
             ax,
             ay,
@@ -155,6 +180,59 @@ impl Injector {
             self.key(k, false);
         }
     }
+}
+
+impl DesktopBounds {
+    fn from_target(target: Placement) -> Self {
+        Self {
+            x: target.x,
+            y: target.y,
+            width: target.width as i32,
+            height: target.height as i32,
+        }
+    }
+
+    fn current() -> Self {
+        unsafe {
+            Self {
+                x: GetSystemMetrics(SM_XVIRTUALSCREEN),
+                y: GetSystemMetrics(SM_YVIRTUALSCREEN),
+                width: GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                height: GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            }
+        }
+    }
+}
+
+fn absolute_position(
+    nx: u16,
+    ny: u16,
+    target: Placement,
+    desktop: DesktopBounds,
+) -> Option<(i32, i32)> {
+    if target.width <= 1 || target.height <= 1 || desktop.width <= 1 || desktop.height <= 1 {
+        return None;
+    }
+    Some((
+        absolute_axis(nx, target.x, target.width, desktop.x, desktop.width),
+        absolute_axis(ny, target.y, target.height, desktop.y, desktop.height),
+    ))
+}
+
+fn absolute_axis(
+    normalized: u16,
+    target_origin: i32,
+    target_length: u32,
+    desktop_origin: i32,
+    desktop_length: i32,
+) -> i32 {
+    // Map the two inclusive endpoint ranges directly. Combining the ratios
+    // avoids the rounding drift caused by first choosing a target pixel and
+    // then normalising that pixel to the virtual desktop.
+    let denominator = i64::from(desktop_length - 1);
+    let numerator = i64::from(target_origin - desktop_origin) * 65535
+        + i64::from(normalized) * i64::from(target_length - 1);
+    ((numerator + denominator / 2) / denominator).clamp(0, 65535) as i32
 }
 
 impl Drop for Injector {
@@ -287,4 +365,52 @@ pub fn hid_to_scancode(usage: u16) -> Option<u16> {
         0xE7 => 0xE05C, // Right GUI
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod coordinate_tests {
+    use super::*;
+
+    fn placement(x: i32, y: i32, width: u32, height: u32) -> Placement {
+        Placement {
+            x,
+            y,
+            width,
+            height,
+            hz: 120,
+        }
+    }
+
+    #[test]
+    fn single_display_preserves_normalized_coordinates() {
+        let target = placement(0, 0, 3024, 1964);
+        let desktop = DesktopBounds {
+            x: 0,
+            y: 0,
+            width: 3024,
+            height: 1964,
+        };
+        for point in [(0, 0), (32768, 32768), (65535, 65535)] {
+            assert_eq!(
+                absolute_position(point.0, point.1, target, desktop),
+                Some((i32::from(point.0), i32::from(point.1)))
+            );
+        }
+    }
+
+    #[test]
+    fn offset_display_maps_into_the_full_desktop() {
+        let target = placement(0, 0, 3024, 1964);
+        let desktop = DesktopBounds {
+            x: -1920,
+            y: 0,
+            width: 4944,
+            height: 1964,
+        };
+        let left = absolute_position(0, 0, target, desktop).unwrap();
+        let right = absolute_position(65535, 65535, target, desktop).unwrap();
+        assert_eq!(left.0, 25456);
+        assert_eq!(left.1, 0);
+        assert_eq!(right, (65535, 65535));
+    }
 }

@@ -350,7 +350,8 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     let reader = {
         let stop = Arc::clone(&stop);
         let last_pong = Arc::clone(&last_pong);
-        let injector = (cfg.allow_input && hello.wants_input).then(|| Injector::new(placement));
+        let injector = (cfg.allow_input && hello.wants_input)
+            .then(|| Injector::new(placement, cfg.driver.is_some()));
         thread::Builder::new()
             .name(format!("client-rx-{peer}"))
             .spawn(move || {

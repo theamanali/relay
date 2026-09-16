@@ -152,6 +152,9 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level))
         .format_timestamp_millis()
         .init();
+    if let Err(error) = traveldisplay_host::input::enable_physical_pixel_coordinates() {
+        log::warn!("could not enable physical-pixel input coordinates: {error}");
+    }
 
     match cli.command {
         None => serve(cli.serve),
