@@ -54,6 +54,7 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Performance",
     "Win32_System_Power",
     "Wdk_Graphics_Direct3D",
     "Win32_Devices_Display",

@@ -78,3 +78,40 @@ Once capture is event-driven on the host, the remaining beat is the Mac's
 refresh. Phase-locking the two clocks would need the client to report its
 vblank phase and the host to align capture to it — a protocol change, so
 host-first per the usual rule. Only worth it after items 1–3.
+
+## Measurements from the PC session (2026-09-16)
+
+`traveldisplay-host --no-vdd` + `probe --hz 120 --wiggle`, so the capture
+source is the PC's 2560x1440@120 primary rather than the 6 MP virtual
+display; encode scales with pixels (×1.6 for the Mac mode), the rest does not.
+
+**Item 1 — the split.** Per frame, averaged over 600-frame windows:
+
+| stage | ms |
+|---|---|
+| capture (desktop copy + cursor + slot copy + submit) | 0.19–0.27 |
+| encode (submit → NVENC output ready) | 3.2–3.8 |
+| encrypt + `write` | **0.06–0.07**, max 0.28 |
+
+`send_us` is not the missing 2.5 ms; nothing on the output path is. The
+6.0 ms host figure on the Mac is NVENC at 3024×1964 (≈ 3.5 × 1.6) plus the
+small fixed parts. The old "encode ≈ 3.3 ms" was a 1440p number.
+
+**Item 2 — frame age at acquire.** The native path now logs
+`desktop frame age at acquire` (QPC now − `DXGI_OUTDUPL_FRAME_INFO.LastPresentTime`)
+alongside capture/encode. Four consecutive sessions, identical settings:
+
+| session | avg age | max |
+|---|---|---|
+| 1 | 0.7–1.3 ms | 8.5 |
+| 2 | 7.4 ms | 8.4 |
+| 3 | 5.3–5.8 ms | 6.4 |
+| 4 | 2.4–2.9 ms | 3.4 |
+
+The age is **not** uniform per frame: the pacer's phase is fixed by whenever
+the first frame arrived and then free-runs against the display's vblank at the
+same nominal rate, drifting ~0.5 ms per 5 s. So each session draws a random
+0–8 ms of hidden latency and keeps it. This is invisible to FRAME_TIMING and
+to the Mac's numbers, and is the largest single host-side stage in a bad
+session — bigger than encode. Event-driven capture (block in
+`AcquireNextFrame`) removes it; that is the next change.

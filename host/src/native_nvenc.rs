@@ -27,6 +27,7 @@ use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
     IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
 };
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{
     CreateEventW, CreateWaitableTimerExW, SetWaitableTimerEx, WaitForSingleObject,
     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS,
@@ -64,6 +65,15 @@ pub struct NativeNvenc {
     stat_frames: u32,
     stat_capture: Duration,
     stat_encode: Duration,
+    // How long a freshly acquired desktop frame had been sitting in DWM's
+    // output before we grabbed it (QPC now - LastPresentTime). This is the
+    // wait the pacer never sees; `stat_reused` counts ticks where the desktop
+    // had nothing new and the previous frame was re-encoded.
+    stat_age: Duration,
+    stat_age_max: Duration,
+    stat_fresh: u32,
+    stat_reused: u32,
+    qpc_frequency: i64,
 }
 
 /// How many frames between native per-stage latency log lines (~5 s at 120 fps).
@@ -205,6 +215,11 @@ impl NativeNvenc {
             stat_frames: 0,
             stat_capture: Duration::ZERO,
             stat_encode: Duration::ZERO,
+            stat_age: Duration::ZERO,
+            stat_age_max: Duration::ZERO,
+            stat_fresh: 0,
+            stat_reused: 0,
+            qpc_frequency: qpc_frequency(),
         };
         native.initialize_encoder(cfg)?;
         native.start_output_worker()?;
@@ -516,15 +531,24 @@ impl NativeNvenc {
         self.stat_frames += 1;
         if self.stat_frames >= STAT_INTERVAL {
             let n = self.stat_frames.max(1) as f64;
+            let fresh = f64::from(self.stat_fresh.max(1));
             log::info!(
-                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms",
+                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms; desktop frame age at acquire avg {:.2} ms, max {:.2} ms ({} fresh, {} reused)",
                 self.stat_frames,
                 self.stat_capture.as_secs_f64() * 1000.0 / n,
                 self.stat_encode.as_secs_f64() * 1000.0 / n,
+                self.stat_age.as_secs_f64() * 1000.0 / fresh,
+                self.stat_age_max.as_secs_f64() * 1000.0,
+                self.stat_fresh,
+                self.stat_reused,
             );
             self.stat_frames = 0;
             self.stat_capture = Duration::ZERO;
             self.stat_encode = Duration::ZERO;
+            self.stat_age = Duration::ZERO;
+            self.stat_age_max = Duration::ZERO;
+            self.stat_fresh = 0;
+            self.stat_reused = 0;
         }
         if let Ok(access_unit) = &mut completed.result {
             access_unit.timing = Some(EncoderTiming {
@@ -596,6 +620,17 @@ impl NativeNvenc {
         // Time the on-GPU work (copy + cursor + slot copy + encode call), not
         // the idle wait for a frame above.
         let work_start = Instant::now();
+        match &captured {
+            // LastPresentTime is 0 when only the cursor changed.
+            Some((_, info)) if info.LastPresentTime != 0 => {
+                let age = self.qpc_age(info.LastPresentTime);
+                self.stat_age += age;
+                self.stat_age_max = self.stat_age_max.max(age);
+                self.stat_fresh += 1;
+            }
+            Some(_) => self.stat_fresh += 1,
+            None => self.stat_reused += 1,
+        }
         if let Some((resource, frame_info)) = captured {
             let copied = (|| -> Result<()> {
                 let resource =
@@ -729,6 +764,16 @@ impl NativeNvenc {
         Ok(())
     }
 
+    /// Elapsed time since a QPC timestamp (DXGI's `LastPresentTime`).
+    fn qpc_age(&self, present_time: i64) -> Duration {
+        let mut now = 0i64;
+        unsafe {
+            let _ = QueryPerformanceCounter(&mut now);
+        }
+        let ticks = now.saturating_sub(present_time).max(0) as u128;
+        Duration::from_nanos((ticks * 1_000_000_000 / self.qpc_frequency as u128) as u64)
+    }
+
     fn unmap(&self, mapped: NV_ENC_INPUT_PTR) -> Result<()> {
         let unmap_input = self.api.required(
             self.api.functions.nvEncUnmapInputResource,
@@ -741,6 +786,14 @@ impl NativeNvenc {
             "NvEncUnmapInputResource",
         )
     }
+}
+
+fn qpc_frequency() -> i64 {
+    let mut frequency = 0i64;
+    unsafe {
+        let _ = QueryPerformanceFrequency(&mut frequency);
+    }
+    frequency.max(1)
 }
 
 fn output_worker(
