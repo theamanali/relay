@@ -6,6 +6,11 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+struct VideoPerformanceSnapshot {
+    let clientMilliseconds: Double
+    let droppedFrames: Int
+}
+
 final class VideoRenderer {
     let layer = AVSampleBufferDisplayLayer()
 
@@ -102,7 +107,7 @@ final class VideoRenderer {
     // MARK: frames
 
     /// `nalUnits` is the raw FRAME payload: 4-byte length-prefixed NAL units.
-    func enqueue(frame nalUnits: Data, keyframe: Bool) {
+    func enqueue(frame nalUnits: Data, keyframe: Bool, receivedAt: CMTime) {
         guard let formatDescription, !nalUnits.isEmpty else { return }
 
         if layerFailed {
@@ -145,7 +150,10 @@ final class VideoRenderer {
 
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            // AVFoundation's presentation metrics compare this requested time
+            // with the actual display time. Starting at network receipt makes
+            // the reported delay the client portion of the pipeline.
+            presentationTimeStamp: receivedAt,
             decodeTimeStamp: .invalid
         )
         var sampleSize = length
@@ -219,6 +227,27 @@ final class VideoRenderer {
             } else {
                 layer.flush()
             }
+        }
+    }
+
+    /// AVFoundation exposes actual-vs-requested presentation delay on current
+    /// macOS releases. Older systems keep streaming but cannot expose the
+    /// display layer's hidden decode/presentation latency.
+    func loadPerformanceSnapshot(_ completion: @escaping (VideoPerformanceSnapshot?) -> Void) {
+        if #available(macOS 26.0, *) {
+            layer.sampleBufferRenderer.loadVideoPerformanceMetrics { metrics in
+                guard let metrics, metrics.totalNumberOfFrames > 0 else {
+                    completion(nil)
+                    return
+                }
+                completion(VideoPerformanceSnapshot(
+                    clientMilliseconds: metrics.totalAccumulatedFrameDelay * 1_000
+                        / Double(metrics.totalNumberOfFrames),
+                    droppedFrames: metrics.numberOfDroppedFrames
+                ))
+            }
+        } else {
+            completion(nil)
         }
     }
 }

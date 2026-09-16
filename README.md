@@ -141,7 +141,9 @@ swift run TravelDisplay            # dev
 Flags: `--host 169.254.x.y` (skip Bonjour), `--pin 123456` (otherwise a dialog
 asks the first time), `--max-fps 60` (default 120),
 `--scale 0.75` or `0.5` (request ¾ or ½ the pixels: softer on the panel but
-much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`. **Exit with ⌃⌥⌘Q.** By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
+much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
+and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
+**Exit with ⌃⌥⌘Q.** By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
 Win so ⌘C/⌘V behave like Mac shortcuts.
 
 ## Testing without a Mac

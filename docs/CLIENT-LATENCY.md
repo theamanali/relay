@@ -85,10 +85,14 @@ Replace the `AVSampleBufferDisplayLayer` renderer with an explicit
 
 ## How to measure the win
 
-Add a lightweight client-side timestamp: when a `FRAME` is received vs. when its
-image is presented (CADisplayLink/`CAMetalLayer` present time), log a rolling
-average. Compare AVSBDL vs. the VideoToolbox path on the same session. Also do the
-subjective mouse-feel test in Valorant/FC 26 (host on defaults, native path).
+The optional `FRAME_TIMING` telemetry and `--latency-stats` client overlay provide
+host capture/encode/send time, estimated one-way network time, receive-to-present
+client time where AVFoundation exposes it, rolling FPS and dropped frames. Preserve
+those measurements in the Metal renderer and replace the AVFoundation presentation
+metric with `MTLDrawable.addPresentedHandler`, which reports the exact drawable
+presentation time. Compare AVSBDL vs. the VideoToolbox path on the same session.
+Also do the subjective mouse-feel test in Valorant/FC 26 (host on defaults, native
+path).
 
 ## Fallback
 

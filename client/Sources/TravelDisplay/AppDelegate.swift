@@ -1,6 +1,7 @@
 // Wires discovery, connection, decoding and input into one full-screen window.
 
 import AppKit
+import CoreMedia
 import Network
 
 /// Borderless windows must opt in to keyboard focus; ordering one in front
@@ -17,6 +18,7 @@ struct LaunchOptions {
     var modifiers: ModifierMapping = .mac
     var noInput = false
     var pin: String? = nil
+    var showLatency = false
 
     static func parse(_ args: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -39,6 +41,8 @@ struct LaunchOptions {
                 o.noInput = true
             case "--pin":
                 if let v = it.next() { o.pin = v }
+            case "--latency-stats":
+                o.showLatency = true
             case "--help", "-h":
                 print("""
                 TravelDisplay client
@@ -48,6 +52,7 @@ struct LaunchOptions {
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
+                  --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
                 Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)
@@ -81,6 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var connection: HostConnection?
     private var cursorHidden = false
     private var exitMonitor: Any?
+    private let latencyStats = LatencyStats()
+    private var latencyTimer: Timer?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -101,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         view.forwardInput = !options.noInput
         view.attach(videoLayer: renderer.layer)
         view.status = "Starting…"
+        view.latencyVisible = options.showLatency
 
         window = StreamWindow(
             contentRect: screen.frame,
@@ -119,7 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         // Keep the escape hatch independent of which view (or PIN field) has
         // focus. All other key events follow AppKit's normal responder chain.
         exitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, StreamView.isExitHotkey(event) else { return event }
+            guard let self else { return event }
+            if StreamView.isLatencyHotkey(event) {
+                self.view.latencyVisible.toggle()
+                self.refreshLatencyOverlay()
+                return nil
+            }
+            guard StreamView.isExitHotkey(event) else { return event }
             self.view.releaseAllKeys()
             if NSApp.modalWindow != nil {
                 // The pairing callback treats this as Cancel and terminates
@@ -155,6 +169,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         c.delegate = self
         connection = c
         c.start()
+        latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshLatencyOverlay()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -162,6 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSEvent.removeMonitor(exitMonitor)
             self.exitMonitor = nil
         }
+        latencyTimer?.invalidate()
+        latencyTimer = nil
         view.releaseAllKeys()
         connection?.stop()
         setCursorHidden(false)
@@ -230,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
+        latencyStats.reset()
         renderer.streamDidStart(stream)
         DispatchQueue.main.async {
             self.view.streamSize = self.renderer.streamSize
@@ -241,12 +261,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         renderer.setParameterSets(parameterSets)
     }
 
-    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool) {
+    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {
         let first = renderer.framesDisplayed == 0
-        renderer.enqueue(frame: nalUnits, keyframe: keyframe)
+        let before = renderer.framesDisplayed
+        renderer.enqueue(frame: nalUnits, keyframe: keyframe, receivedAt: receivedAt)
+        if renderer.framesDisplayed > before {
+            let enqueuedAt = CMClockGetTime(CMClockGetHostTimeClock())
+            latencyStats.recordFrame(
+                sequence: sequence,
+                enqueueMilliseconds: max(
+                    0,
+                    CMTimeGetSeconds(CMTimeSubtract(enqueuedAt, receivedAt)) * 1_000
+                )
+            )
+        }
         if first, renderer.framesDisplayed > 0 {
             DispatchQueue.main.async { self.view.status = "" }
         }
+    }
+
+    func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {
+        latencyStats.record(timing)
     }
 
     func connectionDidEnd(_ c: HostConnection, reason: String) {
@@ -265,5 +300,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func streamViewRequestedExit(_ v: StreamView) {
         NSApp.terminate(nil)
+    }
+
+    private func refreshLatencyOverlay() {
+        guard view.latencyVisible else { return }
+        renderer.loadPerformanceSnapshot { [weak self] performance in
+            guard let self else { return }
+            if let performance {
+                self.latencyStats.recordVideoPerformance(performance)
+            }
+            let text = self.latencyStats.snapshot().overlayText
+            DispatchQueue.main.async {
+                if self.view.latencyVisible {
+                    self.view.latencyText = text
+                }
+            }
+        }
     }
 }

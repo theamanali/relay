@@ -18,6 +18,7 @@ enum Proto {
         case cursor = 0x05
         case streamStop = 0x06
         case ping = 0x07
+        case frameTiming = 0x08
         case pairResult = 0xA1
         // client -> host
         case clientHello = 0x81
@@ -71,6 +72,25 @@ enum Proto {
             height = Int(p.be16(at: 2))
             fps = Int(p.be16(at: 4))
             self.codec = codec
+        }
+    }
+
+    struct FrameTiming {
+        static let unknownMicros = UInt32.max
+
+        let sequence: UInt64
+        let captureMicros: UInt32
+        let encodeMicros: UInt32
+        let sendMicros: UInt32
+        let networkRTTMicros: UInt32
+
+        init?(_ p: Data) {
+            guard p.count == 24 else { return nil }
+            sequence = p.be64(at: 0)
+            captureMicros = p.be32(at: 8)
+            encodeMicros = p.be32(at: 12)
+            sendMicros = p.be32(at: 16)
+            networkRTTMicros = p.be32(at: 20)
         }
     }
 
@@ -154,6 +174,10 @@ extension Data {
     func be32(at offset: Int) -> UInt32 {
         let i = startIndex + offset
         return UInt32(self[i]) << 24 | UInt32(self[i + 1]) << 16 | UInt32(self[i + 2]) << 8 | UInt32(self[i + 3])
+    }
+
+    func be64(at offset: Int) -> UInt64 {
+        UInt64(be32(at: offset)) << 32 | UInt64(be32(at: offset + 4))
     }
 
     mutating func appendBE16(_ v: UInt16) {

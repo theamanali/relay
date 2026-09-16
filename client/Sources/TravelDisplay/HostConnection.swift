@@ -4,6 +4,7 @@
 // the main thread where it needs to.
 
 import CryptoKit
+import CoreMedia
 import Foundation
 import Network
 
@@ -14,7 +15,8 @@ protocol HostConnectionDelegate: AnyObject {
     func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void)
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart)
     func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data])
-    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool)
+    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime)
+    func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming)
     func connectionDidEnd(_ c: HostConnection, reason: String)
 }
 
@@ -46,6 +48,7 @@ final class HostConnection {
     private var hostKey = Data()
     private var pairing = false
     private var ready = false
+    private var nextFrameSequence: UInt64 = 0
 
     init(options: Options) throws {
         self.options = options
@@ -136,6 +139,7 @@ final class HostConnection {
         send = nil
         receive = nil
         pairing = false
+        nextFrameSequence = 0
         c.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -337,7 +341,21 @@ final class HostConnection {
             delegate?.connection(self, didReceiveCodecConfig: Proto.nalUnits(in: payload))
 
         case .frame:
-            delegate?.connection(self, didReceiveFrame: payload, keyframe: flags & Proto.flagKeyframe != 0)
+            let sequence = nextFrameSequence
+            nextFrameSequence &+= 1
+            delegate?.connection(
+                self,
+                didReceiveFrame: payload,
+                keyframe: flags & Proto.flagKeyframe != 0,
+                sequence: sequence,
+                receivedAt: CMClockGetTime(CMClockGetHostTimeClock())
+            )
+
+        case .frameTiming:
+            guard let timing = Proto.FrameTiming(payload) else {
+                return finish("malformed FRAME_TIMING")
+            }
+            delegate?.connection(self, didReceiveFrameTiming: timing)
 
         case .ping:
             sendRaw(Proto.pong(payload))

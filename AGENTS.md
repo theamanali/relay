@@ -26,17 +26,19 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 - Host: complete and verified on the real hardware — virtual display becomes the only
   display at the Mac's exact mode, layout restored on disconnect/Ctrl-C/hard kill,
   3024x1964@120 HEVC stream to `probe`, PIN pairing + encryption.
-- Client: written blind (never compiled). First job on the Mac: `cd client && swift build`,
-  fix compile errors **without changing the wire format**, then the first real session.
-- After that: tray icon, installers, and milestone 5 (in-process DXGI → NVENC instead of
-  the ffmpeg child, which removes one frame of latency).
+- Client: compiled and verified on the real Mac — pairing, native decode, keyboard,
+  pointer input, kiosk behavior and the quit shortcut work. Current work is measuring
+  and reducing decode/presentation latency.
+- Host milestone 5 (in-process DXGI → NVENC) is complete and is the default on NVIDIA.
+  Remaining work includes the Mac latency path, tray icon and installers.
 
 ## Running it
 
 PC: `host\target\release\traveldisplay-host.exe` (prints the pairing PIN; `pin`, `paired`,
 `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run TravelDisplay` (flags: `--host`, `--pin`,
-`--max-fps`, `--scale`, `--modifiers`, `--no-input`; exit with ⌃⌥⌘Q).
+`--max-fps`, `--scale`, `--modifiers`, `--no-input`, `--latency-stats`; toggle latency
+with ⌃⌥⌘L and exit with ⌃⌥⌘Q).
 
 ## Hard-won facts — do not relearn these
 
