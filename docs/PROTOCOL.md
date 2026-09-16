@@ -137,7 +137,7 @@ If the client stops answering PINGs for 5 s the host closes the connection.
 | 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u8 codec`, `u8 reserved` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
-| 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the cursor is composited into the video. |
+| 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for future Windows cursor-shape syncing; currently macOS renders a native arrow locally and the Windows cursor is excluded from capture. |
 | 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired) |
 | 0x07 | PING           | `u64 host_time_us` |
 

@@ -80,6 +80,12 @@ final class StreamView: NSView {
         trackingArea = ta
     }
 
+    override func resetCursorRects() {
+        // This is the cursor the user sees. Windows' cursor is excluded from
+        // capture, while every movement is still forwarded to Windows.
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
     /// Release every key we told the host is down (connection dropped, app
     /// resigned, etc.) so nothing stays stuck on the Windows side.
     func releaseAllKeys() {

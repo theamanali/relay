@@ -52,7 +52,8 @@ small encrypted protocol between them.
    from an ephemeral X25519 exchange, and strangers on the same network are
    refused before anything is streamed.
 5. **Client.** Native macOS app: full-screen `AVSampleBufferDisplayLayer` with
-   hardware HEVC decode, trackpad and keyboard forwarded as HID usages.
+   hardware HEVC decode, a locally rendered cursor for immediate pointer motion,
+   and trackpad and keyboard forwarded as HID usages.
 
 ## Status
 
@@ -60,8 +61,8 @@ small encrypted protocol between them.
 |-----------|-------|
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
-| 2. Mac client: Bonjour, pairing, decode, fullscreen, input | compiles clean on the Mac; handshake verified byte-for-byte against the protocol test vector. Not yet run against the host |
-| 3. First real session over the cable | pending |
+| 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
+| 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and one frame of latency) | pending |
 

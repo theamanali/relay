@@ -79,7 +79,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var view: StreamView!
     private let renderer = VideoRenderer()
     private var connection: HostConnection?
-    private var cursorHidden = false
     private var exitMonitor: Any?
 
     init(options: LaunchOptions) {
@@ -134,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         NSApp.activate(ignoringOtherApps: true)
-        setCursorHidden(true)
+        NSCursor.arrow.set()
 
         let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         let c: HostConnection
@@ -164,7 +163,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
         view.releaseAllKeys()
         connection?.stop()
-        setCursorHidden(false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -173,18 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
         window.makeFirstResponder(view)
-        setCursorHidden(true)
+        NSCursor.arrow.set()
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        setCursorHidden(false)
         view.releaseAllKeys()
-    }
-
-    private func setCursorHidden(_ hidden: Bool) {
-        guard hidden != cursorHidden else { return }
-        cursorHidden = hidden
-        if hidden { NSCursor.hide() } else { NSCursor.unhide() }
     }
 
     // MARK: HostConnectionDelegate (called on the connection queue)
@@ -200,7 +191,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             let kioskLevel = self.window.level
             self.window.level = .normal
             NSApp.presentationOptions = []
-            self.setCursorHidden(false)
 
             let alert = NSAlert()
             alert.messageText = "Pair with \(host)"
@@ -218,7 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSApp.presentationOptions = [.hideDock, .hideMenuBar]
             self.window.makeKeyAndOrderFront(nil)
             self.window.makeFirstResponder(self.view)
-            self.setCursorHidden(true)
+            NSCursor.arrow.set()
             guard response == .alertFirstButtonReturn else {
                 // Cancel means "let me out", not "ask again in a second".
                 completion(nil)
