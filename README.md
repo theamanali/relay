@@ -52,8 +52,9 @@ small encrypted protocol between them.
    from an ephemeral X25519 exchange, and strangers on the same network are
    refused before anything is streamed.
 5. **Client.** Native macOS app: full-screen `AVSampleBufferDisplayLayer` with
-   hardware HEVC decode, a locally rendered cursor for immediate pointer motion,
-   and trackpad and keyboard forwarded as HID usages.
+   hardware HEVC decode, the current Windows cursor shape rendered locally for
+   immediate motion, and trackpad/keyboard forwarding with automatic relative
+   mouse mode when a game hides the pointer.
 
 ## Status
 
@@ -133,8 +134,11 @@ swift run TravelDisplay            # dev
 Flags: `--host 169.254.x.y` (skip Bonjour), `--pin 123456` (otherwise a dialog
 asks the first time), `--max-fps 60` (default 120),
 `--scale 0.75` or `0.5` (request ¾ or ½ the pixels: softer on the panel but
-much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`. **Exit with ⌃⌥⌘Q.** By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
-Win so ⌘C/⌘V behave like Mac shortcuts.
+much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`.
+**Exit with ⌃⌥⌘Q.** TravelDisplay automatically switches to relative mouse input
+when Windows hides its cursor; **⌃⌥⌘M** manually toggles that mode for a game
+that does not. By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as Win so ⌘C/⌘V behave
+like Mac shortcuts.
 
 ## Testing without a Mac
 
@@ -166,6 +170,10 @@ ffplay -f hevc capture.hevc
   display's 120: that is ddagrab's frame-duplication timer, not dropped frames.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys for itself; everything else is
   forwarded.
+- Relative game input currently uses Windows `SendInput`. A game or anti-cheat
+  that accepts input only from a physical or signed virtual HID mouse may still
+  reject the Mac trackpad; supporting that case requires a separate signed
+  virtual-mouse driver. Animated Windows cursors currently use their first frame.
 - Windows DPI scaling for the virtual monitor is a per-monitor setting Windows
   remembers; set it once in Settings → Display (200% for a Retina-native mode).
 - Headless boot works once the host runs at logon; the BIOS and the login screen

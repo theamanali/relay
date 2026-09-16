@@ -112,6 +112,12 @@ impl Injector {
         );
     }
 
+    /// Relative movement for games that hide/confine the pointer and consume
+    /// mouse deltas instead of desktop coordinates.
+    pub fn mouse_move_relative(&self, dx: i16, dy: i16) {
+        Self::mouse(dx as i32, dy as i32, 0, MOUSEEVENTF_MOVE);
+    }
+
     pub fn mouse_button(&self, button: u8, down: bool) {
         let (flags, data) = match (button, down) {
             (0, true) => (MOUSEEVENTF_LEFTDOWN, 0),

@@ -48,7 +48,7 @@ struct LaunchOptions {
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
-                Exit with ⌃⌥⌘Q.
+                Exit with ⌃⌥⌘Q. Toggle relative game-mouse mode with ⌃⌥⌘M.
                 """)
                 exit(0)
             default:
@@ -161,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSEvent.removeMonitor(exitMonitor)
             self.exitMonitor = nil
         }
+        view.prepareForExit()
         view.releaseAllKeys()
         connection?.stop()
     }
@@ -171,10 +172,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
         window.makeFirstResponder(view)
-        NSCursor.arrow.set()
+        view.setWindowActive(true)
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        view.setWindowActive(false)
         view.releaseAllKeys()
     }
 
@@ -222,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
         renderer.streamDidStart(stream)
         DispatchQueue.main.async {
+            self.view.resetRemoteCursor()
             self.view.streamSize = self.renderer.streamSize
             self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
@@ -239,9 +242,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
     }
 
+    func connection(_ c: HostConnection, didUpdateCursor cursor: Proto.CursorUpdate) {
+        DispatchQueue.main.async { self.view.applyCursor(cursor) }
+    }
+
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         renderer.reset()
         DispatchQueue.main.async {
+            self.view.resetRemoteCursor()
             self.view.releaseAllKeys()
             self.view.status = "Disconnected: \(reason)"
         }

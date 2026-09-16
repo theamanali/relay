@@ -8,5 +8,6 @@ pub mod gpu;
 pub mod input;
 pub mod protocol;
 pub mod crypto;
+pub mod cursor;
 pub mod server;
 pub mod topology;

@@ -15,6 +15,7 @@ protocol HostConnectionDelegate: AnyObject {
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart)
     func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data])
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool)
+    func connection(_ c: HostConnection, didUpdateCursor cursor: Proto.CursorUpdate)
     func connectionDidEnd(_ c: HostConnection, reason: String)
 }
 
@@ -347,7 +348,8 @@ final class HostConnection {
             finish(reason == 4 ? "the host does not know this Mac (pair with its PIN)" : "host stopped the stream (reason \(reason))")
 
         case .cursor:
-            break // cursor is composited into the video for now
+            guard let cursor = Proto.CursorUpdate(payload) else { return }
+            delegate?.connection(self, didUpdateCursor: cursor)
 
         default:
             break
