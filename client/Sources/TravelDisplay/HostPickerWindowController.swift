@@ -104,13 +104,27 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     // MARK: input from the app
 
-    var status: String = "Looking for hosts…" {
-        didSet { statusLabel.stringValue = status }
+    /// A message that outranks the host count (a disconnect reason, a
+    /// browse error) until the list next changes.
+    var status: String = "" {
+        didSet { refreshStatus() }
     }
 
     func update(hosts: [DiscoveredHost]) {
+        if hosts.map(\.name) != self.hosts.map(\.name) { status = "" }
         self.hosts = hosts
         reload()
+        refreshStatus()
+    }
+
+    private func refreshStatus() {
+        if !status.isEmpty {
+            statusLabel.stringValue = status
+        } else if hosts.isEmpty {
+            statusLabel.stringValue = "Looking for hosts…"
+        } else {
+            statusLabel.stringValue = hosts.count == 1 ? "1 host found" : "\(hosts.count) hosts found"
+        }
     }
 
     /// Select this host when it (re)appears; used after a session ends.
