@@ -187,7 +187,10 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
         }
     }
 
-    cmd.args(["-f", if hevc { "hevc" } else { "h264" }, "pipe:1"])
+    // ddagrab already paces frames. Do not duplicate them again at the output,
+    // and deliver each encoded packet immediately, even on a static desktop.
+    cmd.args(["-fps_mode", "passthrough", "-enc_time_base", "1:1000000", "-flush_packets", "1"])
+        .args(["-f", if hevc { "hevc" } else { "h264" }, "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -528,6 +531,13 @@ mod tests {
         let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
         assert!(!graph.contains("hwdownload"), "same adapter must stay on the GPU");
         assert!(args.contains(&"p4".to_string()));
+        for (option, value) in [
+            ("-fps_mode", "passthrough"),
+            ("-enc_time_base", "1:1000000"),
+            ("-flush_packets", "1"),
+        ] {
+            assert!(args.windows(2).any(|pair| pair[0] == option && pair[1] == value));
+        }
     }
 
     #[test]

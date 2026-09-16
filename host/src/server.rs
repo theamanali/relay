@@ -384,22 +384,31 @@ fn pump(
     let mut frames: u64 = 0;
     let mut bytes: u64 = 0;
     let mut stats_at = Instant::now();
+    let mut encoder_wait = Duration::ZERO;
+    let mut send_time = Duration::ZERO;
+    let mut max_send = Duration::ZERO;
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
+        let read_at = Instant::now();
         let Some(au) = encoder.next_access_unit()? else {
             let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
             bail!("encoder exited");
         };
 
+        encoder_wait += read_at.elapsed();
+        let send_at = Instant::now();
         if !au.param_sets.is_empty() && au.param_sets != last_config {
             tx.send_nals(msg::CODEC_CONFIG, 0, &au.param_sets)?;
             last_config = au.param_sets.clone();
         }
         let flags = if au.keyframe { FLAG_KEYFRAME } else { 0 };
         tx.send_nals(msg::FRAME, flags, &au.nals)?;
+        let elapsed = send_at.elapsed();
+        send_time += elapsed;
+        max_send = max_send.max(elapsed);
         frames += 1;
         bytes += au.nals.iter().map(|n| n.len() as u64).sum::<u64>();
 
@@ -418,13 +427,19 @@ fn pump(
         if now.duration_since(stats_at) >= Duration::from_secs(5) {
             let secs = now.duration_since(stats_at).as_secs_f64();
             log::info!(
-                "{:.1} fps, {:.1} Mbps",
+                "{:.1} fps, {:.1} Mbps; encoder wait avg {:.2} ms, encrypt/send avg {:.2} ms, max {:.2} ms",
                 frames as f64 / secs,
-                bytes as f64 * 8.0 / secs / 1e6
+                bytes as f64 * 8.0 / secs / 1e6,
+                encoder_wait.as_secs_f64() * 1000.0 / frames.max(1) as f64,
+                send_time.as_secs_f64() * 1000.0 / frames.max(1) as f64,
+                max_send.as_secs_f64() * 1000.0
             );
             frames = 0;
             bytes = 0;
             stats_at = now;
+            encoder_wait = Duration::ZERO;
+            send_time = Duration::ZERO;
+            max_send = Duration::ZERO;
         }
     }
 }
