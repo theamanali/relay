@@ -86,6 +86,13 @@ const SLOT_WAIT: Duration = Duration::from_secs(2);
 const ACQUIRE_POLL: Duration = Duration::from_micros(200);
 /// Poll gap while no desktop frame has arrived yet.
 const FIRST_FRAME_POLL: Duration = Duration::from_millis(20);
+/// How long after DWM's present the tick should land. Margin against the
+/// virtual display's vblank jitter; the content is about this old at submit.
+const TARGET_LEAD: Duration = Duration::from_micros(1_200);
+/// Phase servo: correct this fraction of the lead error per tick ...
+const SERVO_DIVISOR: u32 = 4;
+/// ... but never move a tick by more than this, so the cadence stays even.
+const SERVO_MAX_STEP: Duration = Duration::from_micros(400);
 
 struct EncodeSlot {
     texture: ID3D11Texture2D,
@@ -161,12 +168,18 @@ struct CaptureLoop {
     have_frame: bool,
     /// The composition texture changed since the last submit.
     dirty: bool,
-    /// DWM's QPC present time for the content in the composition texture (0 if
-    /// the last acquire was cursor-only).
-    present_qpc: i64,
+    /// DWM's QPC present time for content acquired since the last submit, when
+    /// DWM reported one (cursor-only updates do not carry a present time).
+    pending_present_qpc: Option<i64>,
     /// GPU work done for the pending content since the last submit.
     pending_work: Duration,
-    last_submit_at: Option<Instant>,
+    /// When the next picture goes to NVENC. Steady at `frame_interval`, with
+    /// its phase nudged towards `TARGET_LEAD` after DWM's presents.
+    next_tick: Option<Instant>,
+    /// The previous tick submitted fresh content with a present time, so the
+    /// desktop is updating at least as fast as the ticks and its lead is a
+    /// meaningful phase error.
+    last_tick_fresh: bool,
     qpc_frequency: i64,
     sleeper: HighResSleeper,
     worker_tx: Option<Sender<(PendingOutput, CaptureInfo)>>,
@@ -312,9 +325,10 @@ impl NativeNvenc {
             slots: std::mem::take(&mut session.slots),
             have_frame: false,
             dirty: false,
-            present_qpc: 0,
+            pending_present_qpc: None,
             pending_work: Duration::ZERO,
-            last_submit_at: None,
+            next_tick: None,
+            last_tick_fresh: false,
             qpc_frequency: qpc_frequency(),
             sleeper: HighResSleeper::new(),
             worker_tx: Some(pending_tx),
@@ -685,10 +699,14 @@ impl CaptureLoop {
         self
     }
 
-    /// One acquire-and-maybe-submit round. Polls `AcquireNextFrame` until DWM
-    /// presents a new desktop frame or the fallback tick is due, so a fresh
-    /// frame is encoded the moment it exists rather than when a host-side timer
-    /// happens to fire. `Ok(false)` means access was lost.
+    /// One tick: poll `AcquireNextFrame` and fold every new desktop frame into
+    /// the composition texture until the tick is due, then submit whatever is
+    /// newest. Ticks are steady at the frame interval so the client sees an
+    /// even cadence whatever DWM does (the virtual display's vblank is a
+    /// software timer and jitters by milliseconds); their phase is servoed so a
+    /// tick lands `TARGET_LEAD` after DWM's present, which keeps the content
+    /// about that fresh instead of the random 0-8 ms a free-running tick gets.
+    /// `Ok(false)` means access was lost.
     ///
     /// The poll never blocks inside DXGI: with multithread protection on, a
     /// thread waiting in `AcquireNextFrame` holds the D3D11 device lock, and
@@ -697,12 +715,7 @@ impl CaptureLoop {
     fn step(&mut self) -> Result<bool> {
         let slot_index = self.wait_for_free_slot()?;
 
-        // Fallback tick: one frame interval after the previous submit the
-        // previous content is re-encoded if the desktop is static (the client
-        // expects a steady stream), or the pending content is submitted if a
-        // frame arrived too soon after the last one to keep the target rate.
-        let deadline = self.last_submit_at.map(|t| t + self.frame_interval);
-        let fresh = loop {
+        let tick = loop {
             if self.stop.load(Ordering::Relaxed) {
                 return Ok(true);
             }
@@ -712,40 +725,39 @@ impl CaptureLoop {
                 self.duplication
                     .AcquireNextFrame(0, &mut info, &mut resource)
             } {
-                Ok(()) => {
-                    self.composite(resource, &info)?;
-                    break true;
-                }
+                Ok(()) => self.composite(resource, &info)?,
                 Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {}
                 Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => return Ok(false),
                 Err(e) => return Err(e).context("IDXGIOutputDuplication::AcquireNextFrame"),
             }
             let now = Instant::now();
-            let wait = match deadline {
-                Some(deadline) if now >= deadline => break false,
-                Some(deadline) => ACQUIRE_POLL.min(deadline - now),
-                None => FIRST_FRAME_POLL,
-            };
-            self.sleeper.sleep(wait);
-        };
-        if !self.have_frame {
-            return Ok(true);
-        }
-
-        let now = Instant::now();
-        let submit_now = match self.last_submit_at {
-            None => true,
-            Some(last) => {
-                // A fresh frame goes out immediately unless the captured display
-                // refreshes faster than the requested rate; then it waits for
-                // the tick. Three quarters of an interval tolerates DWM jitter.
-                let soon_enough = now >= last + self.frame_interval * 3 / 4;
-                (fresh && soon_enough) || deadline.is_some_and(|deadline| now >= deadline)
+            match self.next_tick {
+                // The first desktop frame sets the initial phase.
+                None if self.have_frame => break now,
+                None => self.sleeper.sleep(FIRST_FRAME_POLL),
+                Some(tick) if now >= tick => break tick,
+                Some(tick) => self.sleeper.sleep(ACQUIRE_POLL.min(tick - now)),
             }
         };
-        if submit_now {
-            self.submit(slot_index)?;
+
+        let fresh = self.dirty;
+        let lead = self.submit(slot_index)?;
+
+        // Phase servo. Only a fresh frame with a present time measures the
+        // lead, and only when the previous tick had one too: at lower desktop
+        // rates (video) the lead is just where the tick fell in the content's
+        // cycle, not a phase error.
+        let mut next = tick + self.frame_interval;
+        if let (true, Some(lead)) = (self.last_tick_fresh, lead) {
+            if lead > TARGET_LEAD {
+                next -= ((lead - TARGET_LEAD) / SERVO_DIVISOR).min(SERVO_MAX_STEP);
+            } else {
+                next += ((TARGET_LEAD - lead) / SERVO_DIVISOR).min(SERVO_MAX_STEP);
+            }
         }
+        self.last_tick_fresh = fresh && lead.is_some();
+        // Fell behind (slot wait, GPU stall): resume from now, never burst.
+        self.next_tick = Some(next.max(Instant::now()));
         Ok(true)
     }
 
@@ -797,10 +809,9 @@ impl CaptureLoop {
         copied?;
         self.cursor.draw(&self.context);
 
-        // LastPresentTime is 0 when only the cursor changed; keep the previous
-        // desktop present time in that case.
+        // LastPresentTime is 0 when only the cursor changed.
         if info.LastPresentTime != 0 {
-            self.present_qpc = info.LastPresentTime;
+            self.pending_present_qpc = Some(info.LastPresentTime);
         }
         self.have_frame = true;
         self.dirty = true;
@@ -808,8 +819,9 @@ impl CaptureLoop {
         Ok(())
     }
 
-    /// Copy the composition texture into a slot and hand it to NVENC.
-    fn submit(&mut self, slot_index: usize) -> Result<()> {
+    /// Copy the composition texture into a slot and hand it to NVENC. Returns
+    /// how long the desktop content waited since DWM presented it, when known.
+    fn submit(&mut self, slot_index: usize) -> Result<Option<Duration>> {
         let work_start = Instant::now();
         unsafe {
             self.context
@@ -888,9 +900,10 @@ impl CaptureLoop {
             event: self.slots[slot_index].event,
             submitted_at,
         };
+        let age = self.pending_present_qpc.map(|qpc| self.qpc_age(qpc));
         let info = CaptureInfo {
             work: self.pending_work + work_start.elapsed(),
-            age: (self.present_qpc != 0).then(|| self.qpc_age(self.present_qpc)),
+            age,
             reused: !self.dirty,
         };
         if self
@@ -905,10 +918,10 @@ impl CaptureLoop {
             bail!("NVENC output worker stopped");
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
-        self.last_submit_at = Some(submitted_at);
         self.dirty = false;
+        self.pending_present_qpc = None;
         self.pending_work = Duration::ZERO;
-        Ok(())
+        Ok(age)
     }
 
     /// Elapsed time since a QPC timestamp (DXGI's `LastPresentTime`).

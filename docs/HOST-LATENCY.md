@@ -116,29 +116,36 @@ to the Mac's numbers, and is the largest single host-side stage in a bad
 session — bigger than encode. Event-driven capture (block in
 `AcquireNextFrame`) removes it; that is the next change.
 
-## Event-driven capture (done, 2026-09-16)
+## Phase-locked capture (done, 2026-09-16)
 
-The native path now captures on its own thread and submits to NVENC the
-moment Desktop Duplication has a new frame; the 120 Hz tick survives only as
-a fallback that re-encodes the last frame when the desktop is static (or
-holds a frame back when the captured display refreshes faster than the
-requested rate). Same probe loop, three consecutive sessions:
+The native path captures on its own thread now. It polls `AcquireNextFrame(0)`
+every 200 µs on a high-resolution timer and folds every new desktop frame
+into the composition texture; pictures go to NVENC on a **steady** 1/fps
+tick whose **phase is servoed** to land `TARGET_LEAD` (1.2 ms) after DWM's
+present, using `LastPresentTime`. Each tick moves by at most 0.4 ms, and only
+when two consecutive ticks had fresh content (so 30/60 fps video does not
+steer it). `timeBeginPeriod(1)` is set for the session.
 
-| | frame age at submit (avg) | encode |
+Same probe loop, three consecutive sessions:
+
+| | frame age at submit (avg / max, settled) | encode |
 |---|---|---|
-| before (pacer) | 0.7 / 7.4 / 5.5 / 2.6 ms, per session | 3.3–3.8 ms |
-| after | **0.53 / 0.55 / 0.55 ms** | 3.3–3.7 ms |
+| before (free-running tick) | 0.7 / 7.4 / 5.5 / 2.6 ms per session, max 8.5 | 3.3–3.8 ms |
+| after | **1.20 / 1.20 / 1.20 ms**, max 1.6 | 3.1–3.5 ms |
 
-So the per-session lottery is gone; every session now sits ~0.5 ms behind
-DWM, and the Mac's RTT/2 estimate should stop swinging between runs.
+Two things tried on the way, both measured on the real cable with the Mac:
 
-One trap on the way: blocking inside `AcquireNextFrame(timeout)` made encode
-take exactly one frame interval (8.1 ms). With `ID3D11Multithread`
-protection on, the waiting thread holds the device lock and NVENC's DirectX
-input pass cannot finish the previous picture until the wait returns. The
-capture thread therefore polls `AcquireNextFrame(0)` every 200 µs on a
-high-resolution waitable timer instead, and `timeBeginPeriod(1)` is set for
-the session. Cost: the whole host process is ~12% of one core at 120 fps.
+- **Blocking in `AcquireNextFrame(timeout)`** made encode take exactly one
+  frame interval (8.1 ms). With `ID3D11Multithread` protection on, the
+  waiting thread holds the device lock and NVENC's DirectX input pass cannot
+  finish the previous picture until the wait returns. Hence the 200 µs poll.
+- **Submitting the instant a frame arrives** (no tick) gave 0.55 ms age on a
+  hardware monitor but bunched sends on the virtual display: the MTT
+  driver's vblank is a software timer that jitters by milliseconds, and the
+  Mac's decode counter swung 110–130 with visible judder against its own
+  fixed refresh. The steady servoed tick keeps the even cadence and costs
+  ~0.7 ms over the pure event-driven number.
 
-Item 3 (thread hops) is moot: encrypt+send is 0.07 ms and the output worker →
-server hop is the only one left. Items 4 and 5 remain.
+Cost: the whole host process is ~12% of one core at 120 fps. Item 3 (thread
+hops) is moot: encrypt+send is 0.07 ms and the output worker → server hop is
+the only one left. Items 4 and 5 remain.
