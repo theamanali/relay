@@ -149,3 +149,10 @@ Two things tried on the way, both measured on the real cable with the Mac:
 Cost: the whole host process is ~12% of one core at 120 fps. Item 3 (thread
 hops) is moot: encrypt+send is 0.07 ms and the output worker → server hop is
 the only one left. Items 4 and 5 remain.
+
+**Verified on the real cable (2026-09-16, Mac at 3024×1964@120):** decode
+counter on the Mac steady at 120; host log during continuous motion
+`desktop frame age at submit avg 1.13–1.19 ms, max 1.9–2.0 ms (595–599 fresh)`,
+so the virtual display's vblank jitter is under a millisecond once locked.
+Encode at 6 MP is 4.3–5.9 ms, the ×1.6 pixel scaling of the 1440p number,
+and is now the only host stage of any size.
