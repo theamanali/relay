@@ -12,6 +12,14 @@
 #                  file first, which ends the watch without touching the device.
 #   disable        disable the device node (the monitor disappears completely).
 #   restart        disable, then enable (also clears a Code 43).
+#   lock-physical <pid>
+#                  remember and disable every currently enabled physical monitor
+#                  device so a fullscreen game cannot reactivate its display path.
+#                  The enable watcher restores them if the host heartbeat is
+#                  stale for 10 seconds, including when the host is still alive.
+#   unlock-physical <pid>
+#                  re-enable exactly the devices recorded for that session.
+#   unlock-stale   restore devices recorded by any abandoned session.
 #
 # Everything is logged to vdd-device.log in the same folder.
 
@@ -44,6 +52,56 @@ function Disable-Vdd($device) {
     }
 }
 
+function Physical-StateFile($hostPid) {
+    Join-Path $dir "physical-$hostPid.txt"
+}
+
+function Physical-ReadyFile($hostPid) {
+    Join-Path $dir "physical-$hostPid.ready"
+}
+
+function Physical-HeartbeatFile($hostPid) {
+    Join-Path $dir "physical-$hostPid.heartbeat"
+}
+
+function Restore-Physical($hostPid) {
+    $state = Physical-StateFile $hostPid
+    $ready = Physical-ReadyFile $hostPid
+    $heartbeat = Physical-HeartbeatFile $hostPid
+    if (Test-Path $state) {
+        foreach ($instanceId in (Get-Content -LiteralPath $state -ErrorAction SilentlyContinue)) {
+            if ($instanceId) {
+                Enable-PnpDevice -InstanceId $instanceId -Confirm:$false -ErrorAction Continue
+            }
+        }
+    }
+    Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ready -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $heartbeat -Force -ErrorAction SilentlyContinue
+    Log "physical monitor devices restored for host $hostPid"
+}
+
+function Lock-Physical($hostPid) {
+    $state = Physical-StateFile $hostPid
+    $ready = Physical-ReadyFile $hostPid
+    $heartbeat = Physical-HeartbeatFile $hostPid
+    Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ready -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $heartbeat -Force -ErrorAction SilentlyContinue
+    $physical = Get-PnpDevice -Class Monitor -PresentOnly -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Status -eq 'OK' -and
+            -not ($_.HardwareID -contains 'MONITOR\MTT1337')
+        }
+    @($physical | ForEach-Object { $_.InstanceId }) | Set-Content -LiteralPath $state
+    foreach ($monitor in $physical) {
+        $monitor | Disable-PnpDevice -Confirm:$false -ErrorAction Stop
+    }
+    New-Item -ItemType File -Path $heartbeat -Force | Out-Null
+    New-Item -ItemType File -Path $ready -Force | Out-Null
+    Log "locked $(@($physical).Count) physical monitor device(s) for host $hostPid"
+}
+
 if (-not (Test-Path $actionFile)) { Log "no action file"; exit 1 }
 $parts = ((Get-Content $actionFile -Raw).Trim() -split '\s+')
 $action = $parts[0]
@@ -59,11 +117,29 @@ switch ($action) {
             $guard = Join-Path $dir "guard-$hostPid.txt"
             Log "watching host pid $hostPid"
             while ((Get-Process -Id $hostPid -ErrorAction SilentlyContinue) -and (Test-Path $guard)) {
+                $physicalReady = Physical-ReadyFile $hostPid
+                if (Test-Path $physicalReady) {
+                    $heartbeat = Physical-HeartbeatFile $hostPid
+                    $heartbeatAge = if (Test-Path $heartbeat) {
+                        ((Get-Date) - (Get-Item -LiteralPath $heartbeat).LastWriteTime).TotalSeconds
+                    } else {
+                        [double]::PositiveInfinity
+                    }
+                    if ($heartbeatAge -gt 10) {
+                        Log "host $hostPid display heartbeat stale ($([math]::Round($heartbeatAge, 1))s): restoring physical monitors and disabling device"
+                        Remove-Item $guard -Force -ErrorAction SilentlyContinue
+                        Restore-Physical $hostPid
+                        $device = Get-VddDevice
+                        if ($device) { Disable-Vdd $device }
+                        exit 0
+                    }
+                }
                 Start-Sleep -Seconds 1
             }
             if (Test-Path $guard) {
-                Log "host $hostPid died: disabling device"
+                Log "host $hostPid died: restoring physical monitors and disabling device"
                 Remove-Item $guard -Force -ErrorAction SilentlyContinue
+                Restore-Physical $hostPid
                 $device = Get-VddDevice
                 if ($device) { Disable-Vdd $device }
             } else {
@@ -80,6 +156,22 @@ switch ($action) {
         $device | Disable-PnpDevice -Confirm:$false
         Start-Sleep -Seconds 1
         $device | Enable-PnpDevice -Confirm:$false
+    }
+    "lock-physical" {
+        if ($parts.Count -lt 2) { Log "lock-physical missing pid"; exit 4 }
+        Lock-Physical ([int]$parts[1])
+    }
+    "unlock-physical" {
+        if ($parts.Count -lt 2) { Log "unlock-physical missing pid"; exit 4 }
+        Restore-Physical ([int]$parts[1])
+    }
+    "unlock-stale" {
+        Get-ChildItem -LiteralPath $dir -Filter 'physical-*.txt' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                if ($_.BaseName -match '^physical-(\d+)$') {
+                    Restore-Physical ([int]$Matches[1])
+                }
+            }
     }
     default {
         Log "unknown action '$action'"

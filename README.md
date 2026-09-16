@@ -29,18 +29,20 @@ small encrypted protocol between them.
    When a Mac connects the host saves your display layout, enables the device
    (its settings file already lists every Apple laptop panel size at native, ¾
    and ½, rendered on the GPU you chose) and makes the virtual monitor the
-   **only** active display at the Mac's exact pixel size — your physical
-   monitors go dark. On disconnect the saved layout comes back exactly and the
-   device is disabled again. The host never needs elevation: enabling and
-   disabling go through a scheduled task the installer registers, and that task
-   keeps watching the host so a crash also ends with the monitors restored.
+   **only** active display at the Mac's exact pixel size. It also temporarily
+   disables the physical monitor device nodes, preventing fullscreen games from
+   reactivating them. On disconnect those exact devices are re-enabled, the saved
+   layout comes back, and the virtual device is disabled again. The host never
+   needs elevation: device changes go through a scheduled task the installer
+   registers, and that task watches the host so a crash also restores the monitors.
    [parsec-vdd](https://github.com/nomi-san/parsec-vdd) remains available as a
    fallback (`--driver parsec`) with neither of those two properties.
 2. **Capture + encode.** The new monitor is captured with DXGI Desktop
    Duplication and encoded by the GPU's own encoder — NVENC, AMD AMF or Intel
-   Quick Sync, chosen from the adapter's vendor id — without leaving the GPU.
-   Milestone 1 does this through an `ffmpeg` child process (`ddagrab` → e.g.
-   `hevc_nvenc`); the plan is to move it in-process.
+   Quick Sync, chosen from the adapter's vendor id — via an `ffmpeg` child
+   (`ddagrab` → the hardware encoder). An experimental in-process D3D11 → NVENC
+   path (`--native`) is lower latency but can hard-hang the GPU during a
+   fullscreen-exclusive game's mode switch, so it is off by default.
 3. **Transport.** TCP with 8-byte framed messages, encrypted end to end — see
    [docs/PROTOCOL.md](docs/PROTOCOL.md). On a dedicated cable there is no loss
    and no contention, so WebRTC-style machinery would only add latency. Discovery
@@ -65,7 +67,7 @@ small encrypted protocol between them.
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
-| 5. In-process DXGI → NVENC (drops ffmpeg and one frame of latency) | pending |
+| 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | implemented behind `--native`; sustains 3024×1964@120 on the desktop but hard-hangs the GPU during a fullscreen-exclusive game's mode switch, so it is **off by default** until fixed. The default ffmpeg path runs exclusive-fullscreen games without freezing |
 
 ## Setup
 
@@ -81,7 +83,7 @@ small encrypted protocol between them.
 ### Windows host (once)
 
 ```powershell
-# toolchain: Rust (MSVC) and ffmpeg with NVENC
+# toolchain: Rust (MSVC); ffmpeg remains the AMD/Intel/software fallback
 winget install Rustlang.Rustup Gyan.FFmpeg
 winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621"
 
@@ -118,9 +120,11 @@ host\target\release\traveldisplay-host.exe --no-vdd   # dev: stream the primary 
 
 Useful flags: `--gpu 4090` (substring of the adapter name; default is the
 adapter with the most dedicated VRAM, i.e. the discrete card on a PC that also
-has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality`,
+has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (speed is the low-latency default),
 `--bitrate 200` (Mbps), `--codec h264`, `--fps 60`, `--intra-refresh` (NVIDIA),
-`--no-input`, `-v`. Add `-AutoStart` to the install script to launch the host at
+`--native` (opt into the experimental in-process NVENC path — lower latency but
+can hang the GPU in exclusive-fullscreen games), `--no-input`, `-v`. Add
+`-AutoStart` to the install script to launch the host at
 logon (needed for a headless PC). Ctrl-C restores your displays and removes the
 virtual monitor; if the host is killed, the helper task disables the virtual
 monitor and Windows brings the physical ones back, and the next host start (or
@@ -151,16 +155,19 @@ ffplay -f hevc capture.hevc
 
 ## Known limitations
 
-- The ffmpeg-based encoder learns a frame is complete only when the next one
-  starts, which adds one frame interval (~8 ms at 120 fps) of latency. Fixed by
-  milestone 5.
+- The in-process NVIDIA path (`--native`) sustains 3024×1964@120 on the desktop
+  but can hard-hang the whole GPU during a fullscreen-exclusive game's mode
+  switch (Valorant match load, FC 26 launch), forcing a reboot. It is off by
+  default; the ffmpeg path runs those games without freezing. Fixing the native
+  path's interaction with exclusive-fullscreen modesets is the open milestone-5
+  work.
 - Fullscreen and display-mode transitions can invalidate Windows Desktop
   Duplication briefly. The host restarts capture for up to 15 seconds without
-  disconnecting the Mac or restoring the PC's physical monitors.
-- Only the NVIDIA path has been run. AMD (AMF) uses the same zero-copy D3D11
-  route and is expected to work; Intel (Quick Sync) is best-effort until tested.
-  A GPU with no hardware encoder falls back to software x264/x265 and will not
-  keep up at large sizes.
+  disconnecting the Mac. Physical monitor devices remain disabled throughout
+  the session, so games cannot restore their old multi-monitor topology.
+- AMD and Intel still use ffmpeg with their hardware encoders and remain
+  untested. A GPU with no hardware encoder falls back to software x264/x265 and
+  will not keep up at large sizes.
 - Pinning the render GPU needs IddCx 1.10 (Windows 11 22H2+). On older Windows
   the driver picks; the host notices and copies frames to the encoder instead.
 - The MTT driver's own reload command (`SETDISPLAYCOUNT`/`RELOAD_DRIVER` on its
@@ -169,8 +176,9 @@ ffplay -f hevc capture.hevc
   the pipe; a mode-list change is applied by restarting the device through the
   installer's scheduled task, which also recovers a Code 43. Re-running
   `toolsinstall-host.ps1` fixes a driver that is stuck.
-- With ffmpeg, a completely static screen streams at ~100 fps instead of the
-  display's 120: that is ddagrab's frame-duplication timer, not dropped frames.
+- On fallback paths, a completely static screen can stream at ~100 fps instead
+  of the display's 120 because of ffmpeg's ddagrab pacing; moving games are the
+  useful frame-rate test.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys for itself; everything else is
   forwarded.
 - Windows DPI scaling for the virtual monitor is a per-monitor setting Windows

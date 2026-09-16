@@ -54,6 +54,25 @@ pub trait VirtualDisplay: Send + Sync {
     /// through `topology::exclusive`.
     fn attach(&self, mode: Mode, gpu: &GpuInfo) -> Result<(Attachment, Monitor)>;
 
+    /// Prevent applications from reactivating physical monitor paths while a
+    /// virtual-only session is running. Backends without an elevated device
+    /// helper retain the topology-only behavior.
+    fn lock_physical_outputs(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Tell the elevated fail-safe that the display session is still making
+    /// progress. The MTT helper restores the physical monitors when this
+    /// heartbeat stops, even if a wedged host process is still alive.
+    fn heartbeat_physical_outputs(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Re-enable the physical monitor devices before restoring their layout.
+    fn unlock_physical_outputs(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn detach(&self, attachment: Attachment) -> Result<()>;
 
     /// Remove any monitor a previous (crashed) host left behind.

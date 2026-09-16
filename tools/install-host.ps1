@@ -103,7 +103,7 @@ if ($Driver -eq "mtt") {
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $helperTask -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
     Unregister-ScheduledTask -TaskName "TravelDisplay display driver restart" -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "Scheduled task '$helperTask' registered (enables/disables the driver device for the host)."
+    Write-Host "Scheduled task '$helperTask' registered (guards the virtual and physical monitor devices for the host)."
 
     # --- 3. driver ------------------------------------------------------------
     $device = Get-DeviceByHardwareId "Root\MttVDD"

@@ -49,11 +49,13 @@ pub const HELPER_TASK: &str = "TravelDisplay display driver";
 
 const APPEAR_TIMEOUT: Duration = Duration::from_secs(30);
 const GONE_TIMEOUT: Duration = Duration::from_secs(15);
+const PHYSICAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct MttVdd {
     settings: PathBuf,
     /// True once this process enabled the device (and so has a watcher on it).
     enabled_by_us: Cell<bool>,
+    physical_locked_by_us: Cell<bool>,
 }
 
 // `Cell` is fine: the host drives the driver from one thread at a time.
@@ -77,6 +79,7 @@ impl MttVdd {
         Ok(MttVdd {
             settings,
             enabled_by_us: Cell::new(false),
+            physical_locked_by_us: Cell::new(false),
         })
     }
 
@@ -128,6 +131,37 @@ impl MttVdd {
 
     fn guard_file(&self) -> PathBuf {
         self.dir().join(format!("guard-{}.txt", std::process::id()))
+    }
+
+    fn physical_state_file(&self) -> PathBuf {
+        self.dir().join(format!("physical-{}.txt", std::process::id()))
+    }
+
+    fn physical_ready_file(&self) -> PathBuf {
+        self.dir().join(format!("physical-{}.ready", std::process::id()))
+    }
+
+    fn physical_heartbeat_file(&self) -> PathBuf {
+        self.dir()
+            .join(format!("physical-{}.heartbeat", std::process::id()))
+    }
+
+    fn wait_for_physical_helper(&self, locked: bool) -> Result<()> {
+        let deadline = Instant::now() + PHYSICAL_TIMEOUT;
+        loop {
+            let ready = self.physical_ready_file().exists();
+            let state = self.physical_state_file().exists();
+            if (locked && ready) || (!locked && !ready && !state) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "elevated helper did not {} physical monitors within {PHYSICAL_TIMEOUT:?}",
+                    if locked { "lock" } else { "restore" }
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Enable the device (the monitor appears) and leave the helper watching
@@ -237,7 +271,45 @@ impl VirtualDisplay for MttVdd {
         ))
     }
 
+    fn lock_physical_outputs(&self) -> Result<()> {
+        if self.physical_locked_by_us.get() {
+            return Ok(());
+        }
+        self.run_helper(&format!("lock-physical {}", std::process::id()))?;
+        self.wait_for_physical_helper(true)?;
+        self.physical_locked_by_us.set(true);
+        log::info!("MTT VDD: physical monitor devices disabled for the session");
+        Ok(())
+    }
+
+    fn heartbeat_physical_outputs(&self) -> Result<()> {
+        if self.physical_locked_by_us.get() {
+            fs::write(self.physical_heartbeat_file(), b"alive").with_context(|| {
+                format!(
+                    "updating physical-monitor heartbeat {}",
+                    self.physical_heartbeat_file().display()
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn unlock_physical_outputs(&self) -> Result<()> {
+        if !self.physical_locked_by_us.get()
+            && !self.physical_state_file().exists()
+            && !self.physical_ready_file().exists()
+        {
+            return Ok(());
+        }
+        self.run_helper(&format!("unlock-physical {}", std::process::id()))?;
+        self.wait_for_physical_helper(false)?;
+        self.physical_locked_by_us.set(false);
+        log::info!("MTT VDD: physical monitor devices restored");
+        Ok(())
+    }
+
     fn detach(&self, attachment: Attachment) -> Result<()> {
+        self.unlock_physical_outputs()?;
         match attachment {
             Attachment::Mtt { device_name } => {
                 log::debug!("MTT VDD: releasing {device_name}");
@@ -248,6 +320,27 @@ impl VirtualDisplay for MttVdd {
     }
 
     fn cleanup(&self) -> Result<()> {
+        // Recover monitor devices left disabled if a previous helper watcher
+        // was interrupted before it could observe the host exit.
+        self.run_helper("unlock-stale")?;
+        let deadline = Instant::now() + PHYSICAL_TIMEOUT;
+        loop {
+            let pending = fs::read_dir(self.dir())?
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .any(|name| {
+                    name.starts_with("physical-")
+                        && (name.ends_with(".txt") || name.ends_with(".ready"))
+                });
+            if !pending {
+                break;
+            }
+            if Instant::now() >= deadline {
+                bail!("elevated helper did not restore stale physical monitors within {PHYSICAL_TIMEOUT:?}");
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        self.physical_locked_by_us.set(false);
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         if display::present_matching(&is_virtual).is_empty() {
             return Ok(());

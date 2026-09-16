@@ -10,9 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
-use windows::Win32::System::Power::{
-    SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
-};
+use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED};
 
 use crate::crypto::{self, Identity, PairLimiter, PeerList, SecureReader, SecureWriter};
 use crate::display::{self, Mode, Monitor, OutputLocation, Placement};
@@ -28,8 +26,15 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const PONG_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest a single encrypted frame write may block before the client is
+/// treated as stalled. Bounds `pump` so a wedged client cannot freeze it.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const ENCODER_RESTART_DELAY: Duration = Duration::from_millis(250);
 const ENCODER_RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Let a game's fullscreen modeset finish before we touch display config.
+const RECOVERY_SETTLE: Duration = Duration::from_millis(750);
+/// Never reassert the virtual-only topology more often than this.
+const REASSERT_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -42,6 +47,11 @@ pub struct ServerConfig {
     pub gop_seconds: u32,
     pub quality: Quality,
     pub intra_refresh: bool,
+    /// Force the ffmpeg encoder path even on NVIDIA (skip the in-process one).
+    pub prefer_ffmpeg: bool,
+    /// Disable the physical monitor device nodes for the session (keeps games
+    /// from reactivating them). Off = only remove them from the desktop.
+    pub lock_physical: bool,
     /// GPU that renders the virtual display and encodes the stream.
     pub gpu: GpuInfo,
     /// Dev mode (`None`): stream the primary monitor instead of adding a virtual one.
@@ -89,16 +99,16 @@ fn bind_dual_stack(port: u16) -> Result<TcpListener> {
     Ok(socket.into())
 }
 
-/// Keeps Windows from blanking displays or sleeping while a client is connected.
-/// Desktop Duplication stops delivering frames the moment DWM stops presenting
-/// (display-off timer, sleep), which would freeze the stream on an idle desktop.
+/// Keeps the PC awake while a client is connected. Do not request
+/// `ES_DISPLAY_REQUIRED`: it applies to every physical connector and can wake
+/// monitors that TravelDisplay has deliberately removed from the desktop.
 /// Per-thread state, so this must live on the session thread.
 struct KeepAwake;
 
 impl KeepAwake {
     fn new() -> Self {
         unsafe {
-            SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
         }
         KeepAwake
     }
@@ -122,6 +132,11 @@ struct DisplayLease {
 
 impl Drop for DisplayLease {
     fn drop(&mut self) {
+        if let Some((driver, _)) = &self.driver {
+            if let Err(e) = driver.unlock_physical_outputs() {
+                log::warn!("could not re-enable physical monitor devices: {e:#}");
+            }
+        }
         if let Some(snapshot) = self.snapshot.take() {
             if let Err(e) = snapshot.restore() {
                 log::warn!("could not restore the display layout: {e:#}");
@@ -150,6 +165,100 @@ impl Source {
     pub fn monitor(&self) -> &Monitor {
         &self.lease.monitor
     }
+
+    /// Games can ask Windows to restore a display topology when entering or
+    /// leaving fullscreen.  Keep the virtual monitor as the only output and
+    /// then rediscover its DXGI index, which may change after any mode switch.
+    ///
+    /// `may_reassert` gates the one heavy, dangerous step — forcing a
+    /// virtual-only topology with `topology::exclusive`. The caller only sets it
+    /// once the game's own fullscreen modeset has had time to settle and not
+    /// more than once every couple of seconds, so we never trade blows with an
+    /// in-flight display change (that fight hard-froze the whole machine).
+    /// Returns `true` when it actually reasserted the topology.
+    fn recover_exclusive(
+        &mut self,
+        driver: Option<&Arc<dyn VirtualDisplay>>,
+        gpu: &GpuInfo,
+        want: Mode,
+        may_reassert: bool,
+    ) -> Result<bool> {
+        let Some(driver) = driver else {
+            self.placement = display::current_placement(&self.lease.monitor.device_name)?;
+            self.location = display::dxgi_output_for(&self.lease.monitor.device_name)?;
+            return Ok(false);
+        };
+
+        let pnp_id = driver.pnp_id();
+        let attached: Vec<Monitor> = display::enumerate()
+            .into_iter()
+            .filter(|monitor| monitor.attached)
+            .collect();
+        let virtual_monitor = attached
+            .iter()
+            .find(|monitor| monitor.has_pnp_id(pnp_id))
+            .cloned();
+        let physical: Vec<&str> = attached
+            .iter()
+            .filter(|monitor| !monitor.has_pnp_id(pnp_id))
+            .map(|monitor| monitor.device_name.as_str())
+            .collect();
+        let mode_is_correct = virtual_monitor
+            .as_ref()
+            .and_then(|monitor| display::current_placement(&monitor.device_name).ok())
+            .is_some_and(|placement| {
+                placement.x == 0
+                    && placement.y == 0
+                    && placement.width == want.width
+                    && placement.height == want.height
+                    && placement.hz == want.hz
+            });
+
+        let (monitor, reasserted) = match virtual_monitor {
+            Some(monitor) if physical.is_empty() && mode_is_correct => (monitor, false),
+            _ if !may_reassert => {
+                // The topology is not right yet, but it is not our turn to touch
+                // display config. Let the caller wait and retry rather than fight
+                // the game's in-flight fullscreen modeset.
+                bail!("virtual-only topology not restored yet; waiting before reasserting");
+            }
+            _ => {
+                log::warn!(
+                    "display topology changed during capture (physical displays active: {}); reasserting virtual-only {}x{}@{}",
+                    if physical.is_empty() { "none".to_string() } else { physical.join(", ") },
+                    want.width,
+                    want.height,
+                    want.hz
+                );
+                (topology::exclusive(pnp_id, want)?, true)
+            }
+        };
+
+        let placement = display::current_placement(&monitor.device_name)?;
+        if (placement.width, placement.height, placement.hz) != (want.width, want.height, want.hz) {
+            bail!(
+                "virtual display recovered at {}x{}@{} instead of {}x{}@{}",
+                placement.width,
+                placement.height,
+                placement.hz,
+                want.width,
+                want.height,
+                want.hz
+            );
+        }
+        let location = display::dxgi_output_for(&monitor.device_name)?;
+        if location.adapter_luid != gpu.luid {
+            bail!(
+                "recovered virtual display moved to '{}' instead of selected GPU '{}'",
+                location.adapter_name,
+                gpu.name
+            );
+        }
+        self.lease.monitor = monitor;
+        self.placement = placement;
+        self.location = location;
+        Ok(reasserted)
+    }
 }
 
 /// Create the virtual display for a session and make it the only active one,
@@ -158,6 +267,7 @@ pub fn acquire_display(
     driver: Option<&Arc<dyn VirtualDisplay>>,
     gpu: &GpuInfo,
     want: Mode,
+    lock_physical: bool,
 ) -> Result<Source> {
     let Some(driver) = driver else {
         let monitor = display::primary().ok_or_else(|| anyhow!("no primary display"))?;
@@ -199,6 +309,11 @@ pub fn acquire_display(
 
     let monitor = topology::exclusive(driver.pnp_id(), want)?;
     lease.monitor = monitor;
+    if lock_physical {
+        driver.lock_physical_outputs()?;
+    } else {
+        log::info!("physical monitor device lock disabled (--no-lock-physical)");
+    }
     let name = lease.monitor.device_name.clone();
     let placement = display::current_placement(&name)?;
     if (placement.width, placement.height, placement.hz) != (want.width, want.height, want.hz) {
@@ -238,6 +353,12 @@ pub fn acquire_display(
 fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -> Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
+    // A stalled client (e.g. its decoder wedges at a game's fullscreen match
+    // load) must never block the send loop indefinitely: without this, a full
+    // socket send buffer hangs `pump` inside `send_nals`, the stats go silent,
+    // and the display lease never drops to restore the physical monitors. With
+    // it, a stuck write fails, the session ends, and the layout comes back.
+    stream.set_write_timeout(Some(SEND_TIMEOUT))?;
 
     // --- key agreement, then pairing if this client is new ------------------
     let hs = crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired.lock().unwrap())
@@ -314,7 +435,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         height: hello.height as u32,
         hz: if hello.refresh == 0 { 60 } else { hello.refresh as u32 },
     };
-    let source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want)?;
+    let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
     let placement = source.placement;
     let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));
     log::info!(
@@ -322,7 +443,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         source.monitor().device_name,
         if codec == Codec::Hevc { "HEVC" } else { "H.264" },
         cfg.bitrate_mbps,
-        crate::encoder::encoder_name(cfg.gpu.vendor, codec)
+        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg)
     );
 
     tx.send(
@@ -331,7 +452,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         &protocol::stream_start(placement.width as u16, placement.height as u16, fps as u16, codec),
     )?;
 
-    let encoder_config = EncoderConfig {
+    let mut encoder_config = EncoderConfig {
         ffmpeg: cfg.ffmpeg.clone(),
         vendor: cfg.gpu.vendor,
         capture_adapter_idx: source.location.adapter_index,
@@ -343,6 +464,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         gop: cfg.gop_seconds.max(1) * fps,
         quality: cfg.quality,
         intra_refresh: cfg.intra_refresh,
+        prefer_ffmpeg: cfg.prefer_ffmpeg,
     };
     let mut encoder = Encoder::spawn(&encoder_config)?;
 
@@ -366,13 +488,14 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
             })?
     };
 
-    let result = pump(
-        &mut tx,
-        &mut encoder,
-        &encoder_config,
-        &stop,
-        &last_pong,
-    );
+    let mut recovery = CaptureRecovery {
+        encoder_config: &mut encoder_config,
+        source: &mut source,
+        driver: cfg.driver.as_ref(),
+        gpu: &cfg.gpu,
+        want,
+    };
+    let result = pump(&mut tx, &mut encoder, &mut recovery, &stop, &last_pong);
 
     tx.shutdown();
     stop.store(true, Ordering::Relaxed);
@@ -382,11 +505,19 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     result
 }
 
+struct CaptureRecovery<'a> {
+    encoder_config: &'a mut EncoderConfig,
+    source: &'a mut Source,
+    driver: Option<&'a Arc<dyn VirtualDisplay>>,
+    gpu: &'a GpuInfo,
+    want: Mode,
+}
+
 /// Host -> client: encoder output plus pings, until something ends the session.
 fn pump(
     tx: &mut SecureWriter,
     encoder: &mut Encoder,
-    encoder_config: &EncoderConfig,
+    recovery: &mut CaptureRecovery<'_>,
     stop: &AtomicBool,
     last_pong: &Mutex<Instant>,
 ) -> Result<()> {
@@ -401,10 +532,18 @@ fn pump(
     let mut max_send = Duration::ZERO;
     let mut recovery_started: Option<Instant> = None;
     let mut restart_attempts = 0u32;
+    let mut last_reassert: Option<Instant> = None;
+    let mut next_display_heartbeat = Instant::now();
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        if Instant::now() >= next_display_heartbeat {
+            if let Some(driver) = recovery.driver {
+                driver.heartbeat_physical_outputs()?;
+            }
+            next_display_heartbeat = Instant::now() + Duration::from_secs(1);
         }
         let read_at = Instant::now();
         let au = match encoder.next_access_unit() {
@@ -420,7 +559,7 @@ fn pump(
             }
             result => {
                 let failure = match result {
-                    Ok(None) => "ffmpeg exited".to_string(),
+                    Ok(None) => "capture backend ended".to_string(),
                     Err(error) => format!("{error:#}"),
                     Ok(Some(_)) => unreachable!(),
                 };
@@ -443,13 +582,45 @@ fn pump(
                     &mut ping_outstanding,
                     last_pong,
                 )?;
+
+                // A fullscreen transition can change both the active monitor
+                // set and DXGI output numbering. Let the game's own modeset
+                // settle first, then restore the session topology before
+                // creating a new Desktop Duplication object. Never reassert the
+                // topology more than once every REASSERT_MIN_INTERVAL: two
+                // agents modesetting the same virtual display at once can freeze
+                // the whole machine.
+                thread::sleep(RECOVERY_SETTLE);
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let may_reassert =
+                    last_reassert.is_none_or(|t| t.elapsed() >= REASSERT_MIN_INTERVAL);
+                match recovery.source.recover_exclusive(
+                    recovery.driver,
+                    recovery.gpu,
+                    recovery.want,
+                    may_reassert,
+                ) {
+                    Ok(reasserted) => {
+                        if reasserted {
+                            last_reassert = Some(Instant::now());
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("display topology recovery is not ready yet: {error:#}");
+                        thread::sleep(ENCODER_RESTART_DELAY);
+                        continue;
+                    }
+                }
+                recovery.encoder_config.capture_adapter_idx = recovery.source.location.adapter_index;
+                recovery.encoder_config.output_idx = recovery.source.location.output_index;
                 thread::sleep(ENCODER_RESTART_DELAY);
                 if stop.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                match Encoder::spawn(encoder_config) {
-                    Ok(replacement) => {
-                        *encoder = replacement;
+                match encoder.restart(recovery.encoder_config) {
+                    Ok(()) => {
                         restart_attempts += 1;
                         // A fresh encoder emits its own parameter sets. Forward
                         // them even if their bytes match the previous process.

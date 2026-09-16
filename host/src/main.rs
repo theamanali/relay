@@ -98,7 +98,7 @@ struct ServeArgs {
     gop: u32,
 
     /// Encoder speed/quality trade-off, mapped to each vendor's presets
-    #[arg(long, value_enum, default_value_t = Quality::Balanced)]
+    #[arg(long, value_enum, default_value_t = Quality::Speed)]
     quality: Quality,
 
     /// NVIDIA only: spread intra refresh over the GOP instead of sending full IDR frames
@@ -117,6 +117,17 @@ struct ServeArgs {
     /// Dev mode: stream the primary monitor, don't touch the virtual display driver
     #[arg(long)]
     no_vdd: bool,
+
+    /// NVIDIA only: use the in-process D3D11/NVENC capture path. Lower latency,
+    /// but it can hard-hang the GPU during a fullscreen-exclusive game's
+    /// modeset, so it is opt-in. Default: the ffmpeg child (stable).
+    #[arg(long)]
+    native: bool,
+
+    /// Don't disable the physical monitor device nodes during a session, only
+    /// remove them from the desktop (diagnostic / workaround for GPU hangs)
+    #[arg(long)]
+    no_lock_physical: bool,
 
     /// Refuse to inject mouse/keyboard input from the client
     #[arg(long)]
@@ -230,26 +241,28 @@ fn open_driver(kind: DriverKind) -> Result<Arc<dyn VirtualDisplay>> {
 /// Restore the saved display layout (if a session left one) and remove the
 /// virtual monitor. Safe to call when there is nothing to do.
 fn put_displays_back(drv: &Arc<dyn VirtualDisplay>) {
+    // Physical monitor device nodes must exist before their saved topology can
+    // be restored. MTT cleanup also recovers locks left by a crashed host.
+    if let Err(e) = drv.cleanup() {
+        log::warn!("virtual display cleanup failed: {e:#}");
+    }
     match topology::recover_saved() {
         Ok(true) => {}
         Ok(false) => {}
         Err(e) => log::warn!("restoring the display layout failed: {e:#}"),
     }
-    if let Err(e) = drv.cleanup() {
-        log::warn!("virtual display cleanup failed: {e:#}");
-    }
 }
 
 /// `restore` subcommand: the manual way out if the physical displays stayed off.
 fn restore_displays(kind: DriverKind) -> Result<()> {
+    match driver::open(kind) {
+        Ok(drv) => drv.cleanup()?,
+        Err(e) => log::warn!("virtual display driver not available: {e:#}"),
+    }
     let restored = topology::recover_saved()?;
     if !restored {
         log::info!("no saved layout from a session; asking Windows for its own");
         topology::restore_from_database()?;
-    }
-    match driver::open(kind) {
-        Ok(drv) => drv.cleanup()?,
-        Err(e) => log::warn!("virtual display driver not available: {e:#}"),
     }
     log::info!("displays: {}", display::enumerate()
         .iter()
@@ -267,7 +280,7 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     let drv = open_driver(args.driver)?;
 
     let started = std::time::Instant::now();
-    let source = server::acquire_display(Some(&drv), &gpu, want)?;
+    let source = server::acquire_display(Some(&drv), &gpu, want, true)?;
     let monitor = source.monitor().clone();
     log::info!(
         "virtual display active after {:.1}s: {} ({}), {}",
@@ -301,7 +314,7 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
         loc.output_index,
         if loc.adapter_luid == gpu.luid { "rendered on the selected GPU" } else { "NOT on the selected GPU" }
     );
-    log::info!("encoder would be {} on {}", encoder::encoder_name(gpu.vendor, Codec::Hevc), gpu.name);
+    log::info!("encoder would be {} on {}", encoder::encoder_name(gpu.vendor, Codec::Hevc, true), gpu.name);
     log::info!("holding for {seconds}s (your other displays are off until then)");
     std::thread::sleep(Duration::from_secs(seconds));
     let ended = std::time::Instant::now();
@@ -356,6 +369,8 @@ fn serve(args: ServeArgs) -> Result<()> {
         gop_seconds: args.gop,
         quality: args.quality,
         intra_refresh: args.intra_refresh,
+        prefer_ffmpeg: !args.native,
+        lock_physical: !args.no_lock_physical,
         gpu,
         driver,
         allow_input: !args.no_input,

@@ -1,11 +1,6 @@
-//! Milestone-1 capture+encode: an ffmpeg child process doing
-//! `ddagrab` (DXGI Desktop Duplication, GPU-resident) -> the GPU vendor's
-//! hardware encoder, writing a raw Annex-B elementary stream to stdout. We
-//! split that stream into access units and hand them to the server.
-//!
-//! This stays a subprocess on purpose: it validates the whole pipeline with a
-//! few hundred lines. Milestone 5 replaces it with in-process DXGI -> encoder
-//! behind the same `AccessUnit` interface.
+//! Capture and hardware encode behind one `AccessUnit` interface. NVIDIA on a
+//! single adapter uses the in-process D3D11/NVENC path; the ffmpeg path remains
+//! for AMD, Intel, software, cross-adapter systems, and as a startup fallback.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -44,6 +39,11 @@ pub struct EncoderConfig {
     pub gop: u32,
     pub quality: Quality,
     pub intra_refresh: bool,
+    /// Skip the in-process NVIDIA path and always use the ffmpeg child. A
+    /// diagnostic/escape hatch: the native path shares one D3D11 device for
+    /// capture and encode, which can wedge harder during a fullscreen-exclusive
+    /// game's modeset on the virtual display.
+    pub prefer_ffmpeg: bool,
 }
 
 impl EncoderConfig {
@@ -63,7 +63,14 @@ pub struct AccessUnit {
 }
 
 /// ffmpeg encoder name for a vendor/codec pair.
-pub fn encoder_name(vendor: Vendor, codec: Codec) -> &'static str {
+pub fn encoder_name(vendor: Vendor, codec: Codec, prefer_ffmpeg: bool) -> &'static str {
+    if vendor == Vendor::Nvidia && !prefer_ffmpeg {
+        return "NVENC (in process)";
+    }
+    ffmpeg_encoder_name(vendor, codec)
+}
+
+fn ffmpeg_encoder_name(vendor: Vendor, codec: Codec) -> &'static str {
     match (vendor, codec) {
         (Vendor::Nvidia, Codec::Hevc) => "hevc_nvenc",
         (Vendor::Nvidia, Codec::H264) => "h264_nvenc",
@@ -79,7 +86,7 @@ pub fn encoder_name(vendor: Vendor, codec: Codec) -> &'static str {
 /// Build the full ffmpeg command line for a configuration.
 pub fn build_command(cfg: &EncoderConfig) -> Command {
     let hevc = cfg.codec == Codec::Hevc;
-    let encoder = encoder_name(cfg.vendor, cfg.codec);
+    let encoder = ffmpeg_encoder_name(cfg.vendor, cfg.codec);
     let bitrate = format!("{}M", cfg.bitrate_mbps);
     // One frame's worth of VBV: the ultra-low-latency CBR setup. Keeps every
     // frame (including IDRs) close to bitrate/fps bytes so nothing bunches up
@@ -200,7 +207,7 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
     cmd
 }
 
-pub struct Encoder {
+struct FfmpegEncoder {
     child: Child,
     stdout: ChildStdout,
     parser: AnnexBParser,
@@ -208,13 +215,13 @@ pub struct Encoder {
     ready: std::collections::VecDeque<AccessUnit>,
 }
 
-impl Encoder {
-    pub fn spawn(cfg: &EncoderConfig) -> Result<Encoder> {
+impl FfmpegEncoder {
+    fn spawn(cfg: &EncoderConfig) -> Result<FfmpegEncoder> {
         if cfg.vendor == Vendor::Other {
             log::warn!(
                 "no NVIDIA/AMD/Intel encoder on the selected GPU: falling back to software {} \
                  (expect high CPU use and low frame rates at large sizes)",
-                encoder_name(cfg.vendor, cfg.codec)
+                ffmpeg_encoder_name(cfg.vendor, cfg.codec)
             );
         }
         if cfg.cross_adapter() {
@@ -240,7 +247,7 @@ impl Encoder {
             })
             .expect("spawn ffmpeg stderr thread");
 
-        Ok(Encoder {
+        Ok(FfmpegEncoder {
             child,
             stdout,
             parser: AnnexBParser::new(cfg.codec),
@@ -251,7 +258,7 @@ impl Encoder {
 
     /// Block until the next complete access unit is available. `None` means the
     /// encoder exited (stdout closed).
-    pub fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
+    fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
         loop {
             if let Some(au) = self.ready.pop_front() {
                 return Ok(Some(au));
@@ -267,10 +274,128 @@ impl Encoder {
     }
 }
 
-impl Drop for Encoder {
+impl Drop for FfmpegEncoder {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+enum EncoderInner {
+    Native(Box<crate::native_nvenc::NativeNvenc>),
+    Ffmpeg(FfmpegEncoder),
+}
+
+pub struct Encoder {
+    // `None` is the short recovery state between dropping a failed Desktop
+    // Duplication session and creating its replacement.
+    inner: Option<EncoderInner>,
+    fallback: Option<EncoderConfig>,
+}
+
+impl Encoder {
+    /// NVENC and the display driver can stop returning from teardown calls
+    /// during a fullscreen GPU reset. Never let that block the session thread:
+    /// a detached cleanup thread owns every native handle until teardown does
+    /// finish, while the session can restore the user's physical displays.
+    fn retire(inner: EncoderInner) {
+        match inner {
+            EncoderInner::Native(native) => {
+                // Pass the allocation as an address so a failure to create the
+                // janitor thread leaks it instead of synchronously dropping it
+                // on this display-restoration path. Once started, the janitor
+                // is the sole owner and reconstructs the Box exactly once.
+                let native_address = Box::into_raw(native) as usize;
+                if let Err(error) = std::thread::Builder::new()
+                    .name("nvenc-retire".into())
+                    .spawn(move || unsafe {
+                        drop(Box::from_raw(
+                            native_address as *mut crate::native_nvenc::NativeNvenc,
+                        ));
+                    })
+                {
+                    log::warn!("could not start NVENC cleanup thread: {error}");
+                }
+            }
+            EncoderInner::Ffmpeg(ffmpeg) => drop(ffmpeg),
+        }
+    }
+
+    pub fn spawn(cfg: &EncoderConfig) -> Result<Self> {
+        if cfg.vendor == Vendor::Nvidia && !cfg.cross_adapter() && !cfg.prefer_ffmpeg {
+            match crate::native_nvenc::NativeNvenc::spawn(cfg) {
+                Ok(native) => {
+                    return Ok(Self {
+                        inner: Some(EncoderInner::Native(Box::new(native))),
+                        fallback: Some(cfg.clone()),
+                    });
+                }
+                Err(e) => {
+                    log::warn!(
+                        "native NVENC startup failed ({e:#}); falling back to ffmpeg {}",
+                        ffmpeg_encoder_name(cfg.vendor, cfg.codec)
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            inner: Some(EncoderInner::Ffmpeg(FfmpegEncoder::spawn(cfg)?)),
+            fallback: None,
+        })
+    }
+
+    pub fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
+        let Some(inner) = &mut self.inner else {
+            return Ok(None);
+        };
+        let native_error = match inner {
+            EncoderInner::Native(native) => match native.next_access_unit() {
+                Ok(au) => return Ok(au),
+                Err(error) => error,
+            },
+            EncoderInner::Ffmpeg(ffmpeg) => return ffmpeg.next_access_unit(),
+        };
+
+        let cfg = self
+            .fallback
+            .take()
+            .expect("native encoder always has an ffmpeg fallback configuration");
+        log::warn!(
+            "native NVENC capture failed ({native_error:#}); switching this capture attempt to ffmpeg {}",
+            ffmpeg_encoder_name(cfg.vendor, cfg.codec)
+        );
+        if let Some(inner) = self.inner.take() {
+            Self::retire(inner);
+        }
+        self.inner = Some(EncoderInner::Ffmpeg(FfmpegEncoder::spawn(&cfg)?));
+        match self.inner.as_mut().expect("ffmpeg was just installed") {
+            EncoderInner::Ffmpeg(ffmpeg) => ffmpeg.next_access_unit(),
+            EncoderInner::Native(_) => unreachable!(),
+        }
+    }
+
+    /// Drop the failed capture backend before constructing its replacement.
+    /// Desktop Duplication recovery is unreliable if the old duplication
+    /// object is still alive while `DuplicateOutput` creates the next one.
+    pub fn restart(&mut self, cfg: &EncoderConfig) -> Result<()> {
+        if let Some(inner) = self.inner.take() {
+            Self::retire(inner);
+        }
+        match Self::spawn(cfg) {
+            Ok(replacement) => {
+                *self = replacement;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            Self::retire(inner);
+        }
     }
 }
 
@@ -519,6 +644,7 @@ mod tests {
             gop: 240,
             quality: Quality::Balanced,
             intra_refresh: false,
+            prefer_ffmpeg: false,
         }
     }
 
