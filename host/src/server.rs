@@ -18,7 +18,9 @@ use crate::driver::{Attachment, VirtualDisplay};
 use crate::encoder::{Encoder, EncoderConfig, Quality};
 use crate::gpu::GpuInfo;
 use crate::input::Injector;
-use crate::protocol::{self, msg, stop_reason, ClientHello, Codec, FLAG_KEYFRAME};
+use crate::protocol::{
+    self, msg, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME, UNKNOWN_MICROS,
+};
 use crate::topology;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,6 +28,9 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const PONG_TIMEOUT: Duration = Duration::from_secs(5);
+/// Enough samples for responsive rolling stats without adding a second network
+/// message to every video frame.
+const FRAME_TIMING_INTERVAL: u64 = 4;
 /// Longest a single encrypted frame write may block before the client is
 /// treated as stalled. Bounds `pump` so a wedged client cannot freeze it.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -471,16 +476,20 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
     // Reader thread: client -> host messages (input, pongs).
     let stop = Arc::new(AtomicBool::new(false));
     let last_pong = Arc::new(Mutex::new(Instant::now()));
+    let last_ping_sent = Arc::new(Mutex::new(None));
+    let network_rtt = Arc::new(Mutex::new(None));
     rx.set_read_timeout(None)?;
     let reader = {
         let stop = Arc::clone(&stop);
         let last_pong = Arc::clone(&last_pong);
+        let last_ping_sent = Arc::clone(&last_ping_sent);
+        let network_rtt = Arc::clone(&network_rtt);
         let injector = (cfg.allow_input && hello.wants_input)
             .then(|| Injector::new(placement, cfg.driver.is_some()));
         thread::Builder::new()
             .name(format!("client-rx-{peer}"))
             .spawn(move || {
-                let r = read_loop(rx, injector, &last_pong);
+                let r = read_loop(rx, injector, &last_pong, &last_ping_sent, &network_rtt);
                 if let Err(e) = r {
                     log::debug!("client reader finished: {e:#}");
                 }
@@ -495,7 +504,15 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         gpu: &cfg.gpu,
         want,
     };
-    let result = pump(&mut tx, &mut encoder, &mut recovery, &stop, &last_pong);
+    let result = pump(
+        &mut tx,
+        &mut encoder,
+        &mut recovery,
+        &stop,
+        &last_pong,
+        &last_ping_sent,
+        &network_rtt,
+    );
 
     tx.shutdown();
     stop.store(true, Ordering::Relaxed);
@@ -520,6 +537,8 @@ fn pump(
     recovery: &mut CaptureRecovery<'_>,
     stop: &AtomicBool,
     last_pong: &Mutex<Instant>,
+    last_ping_sent: &Mutex<Option<Instant>>,
+    network_rtt: &Mutex<Option<Duration>>,
 ) -> Result<()> {
     let mut last_config: Vec<Vec<u8>> = Vec::new();
     let mut next_ping = Instant::now() + PING_INTERVAL;
@@ -534,6 +553,7 @@ fn pump(
     let mut restart_attempts = 0u32;
     let mut last_reassert: Option<Instant> = None;
     let mut next_display_heartbeat = Instant::now();
+    let mut frame_sequence = 0u64;
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -581,6 +601,7 @@ fn pump(
                     &mut next_ping,
                     &mut ping_outstanding,
                     last_pong,
+                    last_ping_sent,
                 )?;
 
                 // A fullscreen transition can change both the active monitor
@@ -642,6 +663,25 @@ fn pump(
         }
         let flags = if au.keyframe { FLAG_KEYFRAME } else { 0 };
         tx.send_nals(msg::FRAME, flags, &au.nals)?;
+        let frame_send = send_at.elapsed();
+        if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
+            let (capture_us, encode_us) = au.timing.map_or(
+                (UNKNOWN_MICROS, UNKNOWN_MICROS),
+                |timing| (duration_us(timing.capture), duration_us(timing.encode)),
+            );
+            let timing = FrameTiming {
+                sequence: frame_sequence,
+                capture_us,
+                encode_us,
+                send_us: duration_us(frame_send),
+                network_rtt_us: network_rtt
+                    .lock()
+                    .unwrap()
+                    .map_or(UNKNOWN_MICROS, duration_us),
+            };
+            tx.send(msg::FRAME_TIMING, 0, &timing.payload())?;
+        }
+        frame_sequence = frame_sequence.wrapping_add(1);
         let elapsed = send_at.elapsed();
         send_time += elapsed;
         max_send = max_send.max(elapsed);
@@ -653,6 +693,7 @@ fn pump(
             &mut next_ping,
             &mut ping_outstanding,
             last_pong,
+            last_ping_sent,
         )?;
         let now = Instant::now();
         if now.duration_since(stats_at) >= Duration::from_secs(5) {
@@ -680,6 +721,7 @@ fn maintain_connection(
     next_ping: &mut Instant,
     ping_outstanding: &mut Option<Instant>,
     last_pong: &Mutex<Instant>,
+    last_ping_sent: &Mutex<Option<Instant>>,
 ) -> Result<()> {
     let now = Instant::now();
     if let Some(sent) = *ping_outstanding {
@@ -698,6 +740,7 @@ fn maintain_connection(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
         .unwrap_or(0);
+    *last_ping_sent.lock().unwrap() = Some(now);
     tx.send(msg::PING, 0, &us.to_be_bytes())?;
     *ping_outstanding = Some(now);
     *next_ping = now + PING_INTERVAL;
@@ -708,11 +751,18 @@ fn read_loop(
     mut rx: SecureReader,
     mut injector: Option<Injector>,
     last_pong: &Mutex<Instant>,
+    last_ping_sent: &Mutex<Option<Instant>>,
+    network_rtt: &Mutex<Option<Duration>>,
 ) -> Result<()> {
     loop {
         let (ty, _flags, p) = rx.recv()?;
         match ty {
-            msg::PONG => *last_pong.lock().unwrap() = Instant::now(),
+            msg::PONG => {
+                *last_pong.lock().unwrap() = Instant::now();
+                if let Some(sent) = *last_ping_sent.lock().unwrap() {
+                    *network_rtt.lock().unwrap() = Some(sent.elapsed());
+                }
+            }
             msg::MOUSE_MOVE if p.len() >= 4 => {
                 if let Some(inj) = &injector {
                     inj.mouse_move(u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]));
@@ -737,4 +787,8 @@ fn read_loop(
             other => log::debug!("ignoring client message 0x{other:02x} ({} bytes)", p.len()),
         }
     }
+}
+
+fn duration_us(duration: Duration) -> u32 {
+    duration.as_micros().min(u128::from(u32::MAX - 1)) as u32
 }

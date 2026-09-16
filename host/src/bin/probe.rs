@@ -113,7 +113,8 @@ fn main() -> Result<()> {
 
     let start = Instant::now();
     let deadline = start + Duration::from_secs(args.seconds);
-    let (mut frames, mut keyframes, mut bytes, mut configs) = (0u64, 0u64, 0u64, 0u64);
+    let (mut frames, mut keyframes, mut bytes, mut configs, mut timings) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut first_frame_at: Option<Duration> = None;
     let mut last_wiggle = Instant::now();
     let mut phase = 0u32;
@@ -155,6 +156,11 @@ fn main() -> Result<()> {
             msg::PING => {
                 tx.send(msg::PONG, 0, &p)?;
             }
+            msg::FRAME_TIMING => {
+                if protocol::FrameTiming::parse(&p).is_some() {
+                    timings += 1;
+                }
+            }
             msg::STREAM_STOP => {
                 println!("STREAM_STOP reason {}", p.first().copied().unwrap_or(255));
                 break;
@@ -177,7 +183,7 @@ fn main() -> Result<()> {
 
     let secs = start.elapsed().as_secs_f64();
     println!(
-        "{frames} frames ({keyframes} key) in {secs:.1}s = {:.1} fps, {:.1} Mbps avg, {configs} codec configs",
+        "{frames} frames ({keyframes} key) in {secs:.1}s = {:.1} fps, {:.1} Mbps avg, {configs} codec configs, {timings} timing samples",
         frames as f64 / secs,
         bytes as f64 * 8.0 / secs / 1e6
     );

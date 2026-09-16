@@ -33,7 +33,7 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::cursor_overlay::CursorOverlay;
-use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, Quality};
+use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality};
 use crate::protocol::Codec;
 
 pub struct NativeNvenc {
@@ -49,7 +49,7 @@ pub struct NativeNvenc {
     codec: Codec,
     encoder: *mut c_void,
     slots: Vec<EncodeSlot>,
-    worker_tx: Option<Sender<PendingOutput>>,
+    worker_tx: Option<Sender<(PendingOutput, Duration)>>,
     worker_rx: Option<Receiver<CompletedOutput>>,
     worker: Option<JoinHandle<()>>,
     frame_idx: u32,
@@ -96,6 +96,7 @@ unsafe impl Send for PendingOutput {}
 struct CompletedOutput {
     slot_index: usize,
     result: Result<AccessUnit>,
+    capture_latency: Duration,
     /// submit -> NVENC output ready, for latency instrumentation.
     encode_latency: Duration,
 }
@@ -509,7 +510,8 @@ impl NativeNvenc {
 
     /// Fold a finished picture's timings into the rolling stats (logging a line
     /// every `STAT_INTERVAL` frames) and hand its access unit to the caller.
-    fn record_and_return(&mut self, completed: CompletedOutput) -> Result<Option<AccessUnit>> {
+    fn record_and_return(&mut self, mut completed: CompletedOutput) -> Result<Option<AccessUnit>> {
+        self.stat_capture += completed.capture_latency;
         self.stat_encode += completed.encode_latency;
         self.stat_frames += 1;
         if self.stat_frames >= STAT_INTERVAL {
@@ -523,6 +525,12 @@ impl NativeNvenc {
             self.stat_frames = 0;
             self.stat_capture = Duration::ZERO;
             self.stat_encode = Duration::ZERO;
+        }
+        if let Ok(access_unit) = &mut completed.result {
+            access_unit.timing = Some(EncoderTiming {
+                capture: completed.capture_latency,
+                encode: completed.encode_latency,
+            });
         }
         completed.result.map(Some)
     }
@@ -618,8 +626,7 @@ impl NativeNvenc {
                 .CopyResource(&self.slots[slot_index].texture, &self.composition_texture);
         }
         let first = self.frame_idx == 0;
-        self.submit(slot_index)?;
-        self.stat_capture += work_start.elapsed();
+        self.submit(slot_index, work_start)?;
 
         let now = Instant::now();
         if first {
@@ -633,7 +640,7 @@ impl NativeNvenc {
         Ok(true)
     }
 
-    fn submit(&mut self, slot_index: usize) -> Result<()> {
+    fn submit(&mut self, slot_index: usize, capture_started: Instant) -> Result<()> {
         let registered = self.slots[slot_index].registered;
         let bitstream = self.slots[slot_index].bitstream;
         let completion_event = self.slots[slot_index].event.0;
@@ -706,11 +713,12 @@ impl NativeNvenc {
             event: self.slots[slot_index].event,
             submitted_at: Instant::now(),
         };
+        let capture_latency = capture_started.elapsed();
         if self
             .worker_tx
             .as_ref()
             .ok_or_else(|| anyhow!("NVENC output worker is not running"))?
-            .send(pending)
+            .send((pending, capture_latency))
             .is_err()
         {
             self.unmap(map.mappedResource)?;
@@ -737,10 +745,10 @@ impl NativeNvenc {
 
 fn output_worker(
     context: OutputWorkerContext,
-    pending_rx: Receiver<PendingOutput>,
+    pending_rx: Receiver<(PendingOutput, Duration)>,
     completed_tx: Sender<CompletedOutput>,
 ) {
-    while let Ok(pending) = pending_rx.recv() {
+    while let Ok((pending, capture_latency)) = pending_rx.recv() {
         let slot_index = pending.slot_index;
         let submitted_at = pending.submitted_at;
         let result = read_worker_output(&context, pending);
@@ -748,6 +756,7 @@ fn output_worker(
             .send(CompletedOutput {
                 slot_index,
                 result,
+                capture_latency,
                 encode_latency: submitted_at.elapsed(),
             })
             .is_err()

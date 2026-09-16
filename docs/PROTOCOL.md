@@ -140,6 +140,7 @@ If the client stops answering PINGs for 5 s the host closes the connection.
 | 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
 | 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired) |
 | 0x07 | PING           | `u64 host_time_us` |
+| 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
 
 `codec`: 1 = H.264, 2 = HEVC, 3 = AV1 (reserved).
 
@@ -148,6 +149,14 @@ and `hvcC`/`avcC` expect (4-byte NAL lengths), so the client can hand them to
 VideoToolbox without rewriting. A new CODEC_CONFIG may arrive before any
 keyframe; the client must rebuild its format description when the bytes differ
 from the last one it saw.
+
+`FRAME_TIMING` is sampled diagnostic data and does not alter the video stream.
+Sequence numbers start at zero for each session and identify the preceding FRAME;
+the host need not send telemetry for every frame. Native NVENC reports capture and encode durations;
+the ffmpeg fallback reports those fields as unavailable because its output pipe
+cannot associate an encoded access unit with the originating capture. The client
+estimates one-way network latency as half the measured ping round trip. Existing
+clients can ignore this message and continue decoding the preceding FRAME normally.
 
 ## Client → host
 

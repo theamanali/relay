@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
@@ -60,6 +61,15 @@ pub struct AccessUnit {
     /// Parameter sets (VPS/SPS/PPS or SPS/PPS) that preceded this AU, if any.
     pub param_sets: Vec<Vec<u8>>,
     pub keyframe: bool,
+    /// Native capture/encode timings. The ffmpeg fallback cannot associate its
+    /// piped output with the original captured frame, so it leaves this empty.
+    pub timing: Option<EncoderTiming>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EncoderTiming {
+    pub capture: Duration,
+    pub encode: Duration,
 }
 
 /// ffmpeg encoder name for a vendor/codec pair.
@@ -502,6 +512,7 @@ impl AnnexBParser {
             nals: std::mem::take(&mut self.pending),
             param_sets: std::mem::take(&mut self.pending_param_sets),
             keyframe: self.pending_key,
+            timing: None,
         });
         self.pending_has_vcl = false;
         self.pending_key = false;

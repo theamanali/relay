@@ -17,6 +17,9 @@ pub mod msg {
     pub const CURSOR: u8 = 0x05;
     pub const STREAM_STOP: u8 = 0x06;
     pub const PING: u8 = 0x07;
+    /// Timing for the immediately preceding FRAME. Optional telemetry; clients
+    /// that do not know this message safely ignore it.
+    pub const FRAME_TIMING: u8 = 0x08;
     pub const PAIR_RESULT: u8 = 0xA1;
     // client -> host
     pub const CLIENT_HELLO: u8 = 0x81;
@@ -30,6 +33,42 @@ pub mod msg {
 }
 
 pub const FLAG_KEYFRAME: u8 = 0x01;
+pub const UNKNOWN_MICROS: u32 = u32::MAX;
+
+/// Per-frame diagnostics sent immediately after the matching FRAME.
+/// Durations use microseconds; `UNKNOWN_MICROS` means unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTiming {
+    pub sequence: u64,
+    pub capture_us: u32,
+    pub encode_us: u32,
+    pub send_us: u32,
+    pub network_rtt_us: u32,
+}
+
+impl FrameTiming {
+    pub const PAYLOAD_LEN: usize = 24;
+
+    pub fn payload(self) -> [u8; Self::PAYLOAD_LEN] {
+        let mut p = [0u8; Self::PAYLOAD_LEN];
+        p[0..8].copy_from_slice(&self.sequence.to_be_bytes());
+        p[8..12].copy_from_slice(&self.capture_us.to_be_bytes());
+        p[12..16].copy_from_slice(&self.encode_us.to_be_bytes());
+        p[16..20].copy_from_slice(&self.send_us.to_be_bytes());
+        p[20..24].copy_from_slice(&self.network_rtt_us.to_be_bytes());
+        p
+    }
+
+    pub fn parse(p: &[u8]) -> Option<Self> {
+        (p.len() == Self::PAYLOAD_LEN).then(|| Self {
+            sequence: u64::from_be_bytes(p[0..8].try_into().unwrap()),
+            capture_us: u32::from_be_bytes(p[8..12].try_into().unwrap()),
+            encode_us: u32::from_be_bytes(p[12..16].try_into().unwrap()),
+            send_us: u32::from_be_bytes(p[16..20].try_into().unwrap()),
+            network_rtt_us: u32::from_be_bytes(p[20..24].try_into().unwrap()),
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -150,4 +189,22 @@ pub fn read_msg(r: &mut impl Read) -> io::Result<(u8, u8, Vec<u8>)> {
     let mut payload = vec![0u8; len as usize];
     r.read_exact(&mut payload)?;
     Ok((hdr[0], hdr[1], payload))
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::FrameTiming;
+
+    #[test]
+    fn frame_timing_round_trips() {
+        let timing = FrameTiming {
+            sequence: 0x0102_0304_0506_0708,
+            capture_us: 231,
+            encode_us: 3_204,
+            send_us: 61,
+            network_rtt_us: 482,
+        };
+        assert_eq!(FrameTiming::parse(&timing.payload()), Some(timing));
+        assert_eq!(FrameTiming::parse(&timing.payload()[..23]), None);
+    }
 }
