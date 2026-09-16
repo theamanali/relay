@@ -86,12 +86,15 @@ handled before the next read is issued. Expected gain is a fraction of a
 millisecond per frame plus less jitter; measured as the third row above
 (mean −0.7 ms, p95 −2.6 ms; the p95 change is mostly jitter removal).
 
-The Bonjour path is now pinned to a wired Ethernet interface when the host
+The Bonjour connection is pinned to a wired Ethernet interface when the host
 was discovered on one (`NWParameters.requiredInterface`), falling back to any
-interface if that attempt fails. The PC session's runs showed the client
-choosing the LAN over the cable when both were up, at 2–3 ms more RTT/2.
-Startup logs `HostConnection: connected via wired Ethernet [...]` (or Wi-Fi)
-so a measurement can say which link it was on.
+interface if that attempt fails. Supported setups are unchanged: Wi-Fi only
+(nothing to pin), a direct cable, or both machines on one LAN. The pin only
+matters when the Mac is on Wi-Fi *and* cabled to the PC, where it guarantees
+the cable. No latency win has been measured from it; the PC session's higher
+RTT/2 readings were two wired machines through a LAN switch, not a wrong
+interface choice. Startup logs `HostConnection: connected via wired Ethernet
+[...]` (or Wi-Fi) so a measurement can say which link it was on.
 
 Compare the client timings under motion and after load spikes. Verify letterboxing,
 pointer alignment, capture restarts, reconnect and the quit shortcut. No specific

@@ -120,10 +120,10 @@ final class HostConnection {
             }
             self.browser?.cancel()
             self.browser = nil
-            // The service is usually visible on several interfaces at once
-            // (cable + Wi-Fi/LAN). Left to itself Network.framework may pick
-            // the LAN path, which measured 2-3 ms more RTT/2 than the cable;
-            // pin to wired Ethernet when the host was seen on one.
+            // A Mac on hotel Wi-Fi with the cable to the PC sees the host on
+            // both; pin to wired Ethernet so the cable is the path. Wi-Fi-only
+            // and same-LAN setups are unaffected (nothing wired, or only the
+            // wired LAN interface).
             let wired = first.interfaces.first { $0.type == .wiredEthernet }
             self.connect(to: first.endpoint, via: wired)
         }
