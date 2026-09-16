@@ -57,7 +57,17 @@ pub struct NativeNvenc {
     frame_interval: Duration,
     next_frame_at: Instant,
     pacer: FramePacer,
+    // Rolling per-stage latency instrumentation, logged every `STAT_INTERVAL`
+    // frames. `capture` is the on-GPU work of turning an acquired frame into a
+    // submitted encode (copy + cursor + slot copy + the encode call); `encode`
+    // is submit -> NVENC output ready, measured on the worker thread.
+    stat_frames: u32,
+    stat_capture: Duration,
+    stat_encode: Duration,
 }
+
+/// How many frames between native per-stage latency log lines (~5 s at 120 fps).
+const STAT_INTERVAL: u32 = 600;
 
 const PIPELINE_DEPTH: usize = 2;
 const ENCODE_WAIT_MS: u32 = 2_000;
@@ -75,6 +85,8 @@ struct PendingOutput {
     mapped: NV_ENC_INPUT_PTR,
     bitstream: NV_ENC_OUTPUT_PTR,
     event: HANDLE,
+    /// When the picture was handed to NVENC, for the submit->output latency.
+    submitted_at: Instant,
 }
 
 // NVENC's Windows asynchronous API explicitly permits output processing on a
@@ -84,6 +96,8 @@ unsafe impl Send for PendingOutput {}
 struct CompletedOutput {
     slot_index: usize,
     result: Result<AccessUnit>,
+    /// submit -> NVENC output ready, for latency instrumentation.
+    encode_latency: Duration,
 }
 
 struct OutputWorkerContext {
@@ -187,6 +201,9 @@ impl NativeNvenc {
             frame_interval: Duration::from_secs_f64(1.0 / f64::from(cfg.fps.max(1))),
             next_frame_at: Instant::now(),
             pacer: FramePacer::new(),
+            stat_frames: 0,
+            stat_capture: Duration::ZERO,
+            stat_encode: Duration::ZERO,
         };
         native.initialize_encoder(cfg)?;
         native.start_output_worker()?;
@@ -455,7 +472,7 @@ impl NativeNvenc {
     pub fn next_access_unit(&mut self) -> Result<Option<AccessUnit>> {
         loop {
             if let Some(completed) = self.try_completed()? {
-                return completed.result.map(Some);
+                return self.record_and_return(completed);
             }
 
             let now = Instant::now();
@@ -481,13 +498,33 @@ impl NativeNvenc {
                 Duration::from_secs(2)
             };
             if let Some(completed) = self.wait_completed(timeout)? {
-                return completed.result.map(Some);
+                return self.record_and_return(completed);
             }
             if pipeline_full {
                 bail!("timed out waiting for the NVENC output worker");
             }
             // The next capture deadline won the race; loop and submit it.
         }
+    }
+
+    /// Fold a finished picture's timings into the rolling stats (logging a line
+    /// every `STAT_INTERVAL` frames) and hand its access unit to the caller.
+    fn record_and_return(&mut self, completed: CompletedOutput) -> Result<Option<AccessUnit>> {
+        self.stat_encode += completed.encode_latency;
+        self.stat_frames += 1;
+        if self.stat_frames >= STAT_INTERVAL {
+            let n = self.stat_frames.max(1) as f64;
+            log::info!(
+                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms",
+                self.stat_frames,
+                self.stat_capture.as_secs_f64() * 1000.0 / n,
+                self.stat_encode.as_secs_f64() * 1000.0 / n,
+            );
+            self.stat_frames = 0;
+            self.stat_capture = Duration::ZERO;
+            self.stat_encode = Duration::ZERO;
+        }
+        completed.result.map(Some)
     }
 
     fn try_completed(&mut self) -> Result<Option<CompletedOutput>> {
@@ -548,6 +585,9 @@ impl NativeNvenc {
             }
         };
 
+        // Time the on-GPU work (copy + cursor + slot copy + encode call), not
+        // the idle wait for a frame above.
+        let work_start = Instant::now();
         if let Some((resource, frame_info)) = captured {
             let copied = (|| -> Result<()> {
                 let resource =
@@ -579,6 +619,7 @@ impl NativeNvenc {
         }
         let first = self.frame_idx == 0;
         self.submit(slot_index)?;
+        self.stat_capture += work_start.elapsed();
 
         let now = Instant::now();
         if first {
@@ -663,6 +704,7 @@ impl NativeNvenc {
             mapped: map.mappedResource,
             bitstream,
             event: self.slots[slot_index].event,
+            submitted_at: Instant::now(),
         };
         if self
             .worker_tx
@@ -700,9 +742,14 @@ fn output_worker(
 ) {
     while let Ok(pending) = pending_rx.recv() {
         let slot_index = pending.slot_index;
+        let submitted_at = pending.submitted_at;
         let result = read_worker_output(&context, pending);
         if completed_tx
-            .send(CompletedOutput { slot_index, result })
+            .send(CompletedOutput {
+                slot_index,
+                result,
+                encode_latency: submitted_at.elapsed(),
+            })
             .is_err()
         {
             break;
