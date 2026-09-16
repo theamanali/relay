@@ -15,7 +15,7 @@ final class MetalPresenter {
     private let pipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
     private var textureCache: CVMetalTextureCache?
-    private let queue = DispatchQueue(label: "traveldisplay.present", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "relay.present", qos: .userInteractive)
     private let lock = NSLock()
     private struct Frame {
         let image: CVPixelBuffer

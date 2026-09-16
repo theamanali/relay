@@ -25,7 +25,7 @@ not weaken pairing — the PIN proof and the stored-key check are unchanged.
 
 ## Spec paragraph for `docs/PROTOCOL.md` (add when the host change lands)
 
-> **Discovery.** The host advertises `_traveldisplay._tcp` over mDNS with a TXT
+> **Discovery.** The host advertises `_relay._tcp` over mDNS with a TXT
 > record containing `v` (protocol version, decimal) and `pk` (the host's
 > identity public key, 32 bytes as 64 lowercase hex characters). Clients use
 > `pk` to show whether a host is already paired before connecting; it is
@@ -33,8 +33,8 @@ not weaken pairing — the PIN proof and the stored-key check are unchanged.
 
 ## Verify
 
-`dns-sd -B _traveldisplay._tcp` then `dns-sd -L "<name>" _traveldisplay._tcp`
+`dns-sd -B _relay._tcp` then `dns-sd -L "<name>" _relay._tcp`
 on the Mac shows the TXT record. In the client, the host's row then shows its
 fingerprint (`fingerprint()` of `pk`, same as the PIN dialog) and the "name
-match" suffix disappears; `traveldisplay-host pin` after a re-key should move
+match" suffix disappears; `relay-host pin` after a re-key should move
 the host to *Not paired*.

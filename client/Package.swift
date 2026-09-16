@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "TravelDisplay",
+    name: "Relay",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "TravelDisplay",
-            path: "Sources/TravelDisplay",
+            name: "Relay",
+            path: "Sources/Relay",
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Network"),
@@ -18,6 +18,6 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
             ]
         ),
-        .testTarget(name: "TravelDisplayTests", dependencies: ["TravelDisplay"]),
+        .testTarget(name: "RelayTests", dependencies: ["Relay"]),
     ]
 )

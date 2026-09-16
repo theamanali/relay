@@ -1,7 +1,7 @@
 import CoreVideo
 import simd
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class MetalPresenterTests: XCTestCase {
     /// NV12 buffer of the given size; `fill` writes (Y, Cb, Cr) per pixel.

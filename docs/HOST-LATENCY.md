@@ -81,7 +81,7 @@ host-first per the usual rule. Only worth it after items 1–3.
 
 ## Measurements from the PC session (2026-09-16)
 
-`traveldisplay-host --no-vdd` + `probe --hz 120 --wiggle`, so the capture
+`relay-host --no-vdd` + `probe --hz 120 --wiggle`, so the capture
 source is the PC's 2560x1440@120 primary rather than the 6 MP virtual
 display; encode scales with pixels (×1.6 for the Mac mode), the rest does not.
 

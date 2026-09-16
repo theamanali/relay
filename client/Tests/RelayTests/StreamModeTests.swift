@@ -1,5 +1,5 @@
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class StreamModeTests: XCTestCase {
     // Built-in panels: 13" Air, 14" Pro, 16" Pro, 15" Air.
@@ -38,9 +38,9 @@ final class StreamModeTests: XCTestCase {
     }
 
     func testFlagsRecordWhetherGiven() {
-        XCTAssertFalse(LaunchOptions.parse(["TravelDisplay"]).scaleGiven)
-        XCTAssertFalse(LaunchOptions.parse(["TravelDisplay"]).maxFPSGiven)
-        let o = LaunchOptions.parse(["TravelDisplay", "--scale", "0.5", "--max-fps", "60"])
+        XCTAssertFalse(LaunchOptions.parse(["Relay"]).scaleGiven)
+        XCTAssertFalse(LaunchOptions.parse(["Relay"]).maxFPSGiven)
+        let o = LaunchOptions.parse(["Relay", "--scale", "0.5", "--max-fps", "60"])
         XCTAssertTrue(o.scaleGiven); XCTAssertEqual(o.scale, 0.5)
         XCTAssertTrue(o.maxFPSGiven); XCTAssertEqual(o.maxFPS, 60)
     }

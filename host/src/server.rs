@@ -106,7 +106,7 @@ fn bind_dual_stack(port: u16) -> Result<TcpListener> {
 
 /// Keeps the PC awake while a client is connected. Do not request
 /// `ES_DISPLAY_REQUIRED`: it applies to every physical connector and can wake
-/// monitors that TravelDisplay has deliberately removed from the desktop.
+/// monitors that Relay has deliberately removed from the desktop.
 /// Per-thread state, so this must live on the session thread.
 struct KeepAwake;
 

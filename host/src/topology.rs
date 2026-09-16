@@ -119,10 +119,7 @@ fn source_gdi_name(adapter: LUID, id: u32) -> Option<String> {
 }
 
 fn snapshot_file() -> Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("LOCALAPPDATA is not set"))?;
-    Ok(base.join("TravelDisplay").join("display-snapshot.bin"))
+    Ok(crate::state_dir()?.join("display-snapshot.bin"))
 }
 
 impl Snapshot {
@@ -174,7 +171,7 @@ impl Snapshot {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 16 || &bytes[..8] != SNAPSHOT_MAGIC {
-            bail!("not a TravelDisplay snapshot");
+            bail!("not a Relay snapshot");
         }
         let num_paths = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         let num_modes = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;

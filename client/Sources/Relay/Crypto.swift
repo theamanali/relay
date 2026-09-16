@@ -29,14 +29,21 @@ func fingerprint(_ publicKey: Data) -> String {
     return Data(digest).prefix(4).map { String(format: "%02X", $0) }.joined()
 }
 
-// MARK: - Persistent state (~/Library/Application Support/TravelDisplay)
+// MARK: - Persistent state (~/Library/Application Support/Relay)
 
 enum ClientState {
     static var directory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("TravelDisplay", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
+        let dir = base.appendingPathComponent("Relay", isDirectory: true)
+        let fm = FileManager.default
+        // The app was called TravelDisplay; carry identity and pairings over
+        // once so nothing needs re-pairing after the rename.
+        let old = base.appendingPathComponent("TravelDisplay", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path), fm.fileExists(atPath: old.path) {
+            try? fm.moveItem(at: old, to: dir)
+        }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
         return dir
     }
 
@@ -102,7 +109,7 @@ struct SessionKeys {
 enum Handshake {
     static let magic = Data("TDH2".utf8)
     static let version: UInt16 = 2
-    static let info = Data("TravelDisplay v2".utf8)
+    static let info = Data("TravelDisplay v2".utf8) // wire constant kept from the original name (see PROTOCOL.md)
 
     /// One handshake in progress: keeps the ephemeral key and msg1 until msg2 arrives.
     struct Pending {
@@ -130,7 +137,7 @@ enum Handshake {
         func complete(message2 raw: Data) throws -> (keys: SessionKeys, hostKey: Data, paired: Bool) {
             let message2 = Data(raw) // fresh indices, in case a slice was passed
             guard message2.count == 71, message2.prefix(4) == Handshake.magic else {
-                throw CryptoError.badHello("not a TravelDisplay v2 handshake")
+                throw CryptoError.badHello("not a Relay v2 handshake")
             }
             let version = message2.be16(at: 4)
             guard version == Handshake.version else {

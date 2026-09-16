@@ -58,7 +58,7 @@ struct LaunchOptions {
                 o.metalVSync = true
             case "--help", "-h":
                 print("""
-                TravelDisplay client
+                Relay client
                   --host <addr[:port]>       connect directly instead of browsing Bonjour
                   --max-fps <n>              cap the requested refresh rate (default 120)
                   --scale <f>                request f x native pixel size (0.75 or 0.5 keep the aspect)
@@ -368,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
             let alert = NSAlert()
             alert.messageText = "Pair with \(host)"
-            alert.informativeText = "Enter the pairing PIN shown by TravelDisplay on the PC (host fingerprint \(fingerprint)). You only need to do this once per PC."
+            alert.informativeText = "Enter the pairing PIN shown by Relay on the PC (host fingerprint \(fingerprint)). You only need to do this once per PC."
             alert.addButton(withTitle: "Pair")
             alert.addButton(withTitle: "Cancel")
             let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))

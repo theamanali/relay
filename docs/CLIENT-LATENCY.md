@@ -46,14 +46,14 @@ switches, reconnect, and recording the latency A/B numbers.
 Run from `client/`, keeping the host settings unchanged between runs:
 
 ```
-swift run -c release TravelDisplay --renderer metal --latency-stats
-swift run -c release TravelDisplay --renderer avsbdl --latency-stats
+swift run -c release Relay --renderer metal --latency-stats
+swift run -c release Relay --renderer avsbdl --latency-stats
 ```
 
 To compare Metal with VSync enabled, run:
 
 ```
-swift run -c release TravelDisplay --renderer metal --metal-vsync --latency-stats
+swift run -c release Relay --renderer metal --metal-vsync --latency-stats
 ```
 
 The default (VSync off) permits earlier presentation but may cause tearing;

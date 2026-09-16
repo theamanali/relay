@@ -5,7 +5,7 @@ import Foundation
 enum Proto {
     static let version: UInt16 = 2
     static let defaultPort: UInt16 = 8468
-    static let serviceType = "_traveldisplay._tcp"
+    static let serviceType = "_relay._tcp"
     static let headerSize = 8
     static let maxPayload: UInt32 = 64 * 1024 * 1024
 

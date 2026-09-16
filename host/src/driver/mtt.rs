@@ -45,7 +45,7 @@ const ACTION_FILE: &str = "action.txt";
 pub const MONITOR_PNP_ID: &str = "MTT1337";
 /// Scheduled task (registered by tools/install-host.ps1, "run with highest
 /// privileges") that runs vdd-device.ps1 with the order in action.txt.
-pub const HELPER_TASK: &str = "TravelDisplay display driver";
+pub const HELPER_TASK: &str = "Relay display driver";
 
 const APPEAR_TIMEOUT: Duration = Duration::from_secs(30);
 const GONE_TIMEOUT: Duration = Duration::from_secs(15);

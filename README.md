@@ -1,4 +1,4 @@
-# TravelDisplay
+# Relay
 
 Use a MacBook as a real extra monitor for a Windows PC over a direct Ethernet
 cable. Plug in, open the Mac app, and Windows gets a new display at the Mac's
@@ -112,16 +112,16 @@ from `-Resolutions "WxH@Hz",...`, five at most.
 Then run:
 
 ```powershell
-host\target\release\traveldisplay-host.exe            # serve (default); prints the pairing PIN
-host\target\release\traveldisplay-host.exe pin        # show the PIN (--new to change it)
-host\target\release\traveldisplay-host.exe paired     # paired Macs (--forget <fingerprint>)
-host\target\release\traveldisplay-host.exe gpus       # adapters and which one is used
-host\target\release\traveldisplay-host.exe displays   # what Windows/DXGI see
-host\target\release\traveldisplay-host.exe attach-test --width 3024 --height 1964 --hz 120
+host\target\release\relay-host.exe            # serve (default); prints the pairing PIN
+host\target\release\relay-host.exe pin        # show the PIN (--new to change it)
+host\target\release\relay-host.exe paired     # paired Macs (--forget <fingerprint>)
+host\target\release\relay-host.exe gpus       # adapters and which one is used
+host\target\release\relay-host.exe displays   # what Windows/DXGI see
+host\target\release\relay-host.exe attach-test --width 3024 --height 1964 --hz 120
                                                       # full session dance for 10 s: your monitors go dark!
-host\target\release\traveldisplay-host.exe restore    # put the displays back if something went wrong
-host\target\release\traveldisplay-host.exe layout     # show the current layout (--reapply to test restore)
-host\target\release\traveldisplay-host.exe --no-vdd   # dev: stream the primary monitor
+host\target\release\relay-host.exe restore    # put the displays back if something went wrong
+host\target\release\relay-host.exe layout     # show the current layout (--reapply to test restore)
+host\target\release\relay-host.exe --no-vdd   # dev: stream the primary monitor
 ```
 
 Useful flags: `--gpu 4090` (substring of the adapter name; default is the
@@ -140,8 +140,8 @@ monitor and Windows brings the physical ones back, and the next host start (or
 
 ```sh
 cd client
-swift run TravelDisplay            # dev
-./bundle.sh && open TravelDisplay.app   # proper .app (local-network permission prompt)
+swift run Relay            # dev
+./bundle.sh && open Relay.app   # proper .app (local-network permission prompt)
 ```
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
@@ -206,5 +206,5 @@ ffplay -f hevc capture.hevc
 - Pairing is PIN-based, not a PAKE: someone actively in the middle of the *first*
   pairing could brute-force the PIN. Pair on the cable or at home; afterwards the
   pinned keys make impersonation impossible, and hotel Wi-Fi is fine. Both sides
-  keep their keys and pairings in `%LOCALAPPDATA%TravelDisplay` and
-  `~/Library/Application Support/TravelDisplay`.
+  keep their keys and pairings in `%LOCALAPPDATA%Relay` and
+  `~/Library/Application Support/Relay`.

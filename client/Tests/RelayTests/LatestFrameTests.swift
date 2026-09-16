@@ -1,5 +1,5 @@
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class LatestFrameTests: XCTestCase {
     func testBurstKeepsNewestAndRejectsLateCallback() {
@@ -27,9 +27,9 @@ final class LatestFrameTests: XCTestCase {
     }
 
     func testRendererSelection() {
-        XCTAssertEqual(LaunchOptions.parse(["TravelDisplay"]).renderer, "metal")
-        XCTAssertEqual(LaunchOptions.parse(["TravelDisplay", "--renderer", "avsbdl"]).renderer, "avsbdl")
-        XCTAssertFalse(LaunchOptions.parse(["TravelDisplay"]).metalVSync)
-        XCTAssertTrue(LaunchOptions.parse(["TravelDisplay", "--metal-vsync"]).metalVSync)
+        XCTAssertEqual(LaunchOptions.parse(["Relay"]).renderer, "metal")
+        XCTAssertEqual(LaunchOptions.parse(["Relay", "--renderer", "avsbdl"]).renderer, "avsbdl")
+        XCTAssertFalse(LaunchOptions.parse(["Relay"]).metalVSync)
+        XCTAssertTrue(LaunchOptions.parse(["Relay", "--metal-vsync"]).metalVSync)
     }
 }

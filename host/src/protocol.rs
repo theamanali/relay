@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 
 pub const VERSION: u16 = 2;
 pub const DEFAULT_PORT: u16 = 8468;
-pub const SERVICE_TYPE: &str = "_traveldisplay._tcp.local.";
+pub const SERVICE_TYPE: &str = "_relay._tcp.local.";
 pub const MAX_PAYLOAD: u32 = 64 * 1024 * 1024;
 
 #[allow(dead_code)] // the full table documents the protocol even where the host has no use yet

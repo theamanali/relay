@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  One-time, elevated setup for the TravelDisplay host on this PC.
+  One-time, elevated setup for the Relay host on this PC.
 
 .DESCRIPTION
   Default (-Driver mtt): installs MikeTheTech's Virtual Display Driver, the open-source
@@ -97,12 +97,15 @@ if ($Driver -eq "mtt") {
     # A task that runs with highest privileges can be started by its owner
     # without a UAC prompt; the host passes its order via action.txt.
     Copy-Item (Join-Path $root "tools\vdd-device.ps1") (Join-Path $vddDir "vdd-device.ps1") -Force
-    $helperTask = "TravelDisplay display driver"
+    $helperTask = "Relay display driver"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$vddDir\vdd-device.ps1`""
     $principal = New-ScheduledTaskPrincipal -UserId $hostUser -LogonType Interactive -RunLevel Highest
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $helperTask -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
-    Unregister-ScheduledTask -TaskName "TravelDisplay display driver restart" -Confirm:$false -ErrorAction SilentlyContinue
+    # Names from before the rename to Relay.
+    foreach ($old in "TravelDisplay display driver", "TravelDisplay display driver restart", "TravelDisplay host") {
+        Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
+    }
     Write-Host "Scheduled task '$helperTask' registered (guards the virtual and physical monitor devices for the host)."
 
     # --- 3. driver ------------------------------------------------------------
@@ -190,9 +193,10 @@ else {
 
 # --- 3. firewall ------------------------------------------------------------
 foreach ($rule in @(
-    @{ Name = "TravelDisplay host (TCP $Port)"; Proto = "TCP"; Port = $Port },
-    @{ Name = "TravelDisplay mDNS (UDP 5353)";  Proto = "UDP"; Port = 5353 }
+    @{ Name = "Relay host (TCP $Port)"; Proto = "TCP"; Port = $Port },
+    @{ Name = "Relay mDNS (UDP 5353)";  Proto = "UDP"; Port = 5353 }
 )) {
+    Remove-NetFirewallRule -DisplayName ($rule.Name -replace '^Relay', 'TravelDisplay') -ErrorAction SilentlyContinue
     if (-not (Get-NetFirewallRule -DisplayName $rule.Name -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $rule.Name -Direction Inbound -Protocol $rule.Proto -LocalPort $rule.Port -Action Allow -Profile Any | Out-Null
         Write-Host "Firewall rule added: $($rule.Name)"
@@ -203,11 +207,11 @@ foreach ($rule in @(
 
 # --- 4. auto start ----------------------------------------------------------
 if ($AutoStart) {
-    $exe = Join-Path $root "host\target\release\traveldisplay-host.exe"
+    $exe = Join-Path $root "host\target\release\relay-host.exe"
     if (-not (Test-Path $exe)) {
         throw "build the release host first: cd host; cargo build --release"
     }
-    $taskName = "TravelDisplay host"
+    $taskName = "Relay host"
     $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650)
@@ -216,4 +220,4 @@ if ($AutoStart) {
 }
 
 Write-Host ""
-Write-Host "Done. Test the driver with:  host\target\release\traveldisplay-host.exe attach-test --width 3024 --height 1964 --hz 120"
+Write-Host "Done. Test the driver with:  host\target\release\relay-host.exe attach-test --width 3024 --height 1964 --hz 120"

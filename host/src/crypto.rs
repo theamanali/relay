@@ -49,7 +49,7 @@ use crate::protocol::{self, msg, MAX_PAYLOAD};
 
 const MAGIC: &[u8; 4] = b"TDH2";
 const HANDSHAKE_VERSION: u16 = 2;
-const HKDF_INFO: &[u8] = b"TravelDisplay v2";
+const HKDF_INFO: &[u8] = b"TravelDisplay v2"; // wire constant kept from the original name (see PROTOCOL.md)
 const PIN_PREFIX: &[u8] = b"pin:";
 const TAG_LEN: usize = 16;
 
@@ -289,7 +289,7 @@ fn parse_hello(
     what: &str,
 ) -> Result<(PublicKey, PublicKey, Option<bool>)> {
     if body.len() != expected_len || &body[..4] != MAGIC {
-        bail!("{what}: not a TravelDisplay v2 handshake");
+        bail!("{what}: not a Relay v2 handshake");
     }
     let version = u16::from_be_bytes([body[4], body[5]]);
     if version != HANDSHAKE_VERSION {

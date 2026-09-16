@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>TravelDisplay</string>
+    <string>Relay</string>
     <key>CFBundleDisplayName</key>
-    <string>TravelDisplay</string>
+    <string>Relay</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.traveldisplay.client</string>
+    <string>dev.relay.client</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleExecutable</key>
-    <string>TravelDisplay</string>
+    <string>Relay</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -23,10 +23,10 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>TravelDisplay looks for your PC on the local network and streams its display to this Mac.</string>
+    <string>Relay looks for your PC on the local network and streams its display to this Mac.</string>
     <key>NSBonjourServices</key>
     <array>
-        <string>_traveldisplay._tcp</string>
+        <string>_relay._tcp</string>
     </array>
 </dict>
 </plist>

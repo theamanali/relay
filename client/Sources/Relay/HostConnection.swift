@@ -40,7 +40,7 @@ final class HostConnection {
     }
 
     weak var delegate: HostConnectionDelegate?
-    let queue = DispatchQueue(label: "traveldisplay.connection", qos: .userInteractive)
+    let queue = DispatchQueue(label: "relay.connection", qos: .userInteractive)
 
     private let options: Options
     private let identity: Curve25519.KeyAgreement.PrivateKey

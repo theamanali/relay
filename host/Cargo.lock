@@ -846,7 +846,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "traveldisplay-host"
+name = "relay-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",

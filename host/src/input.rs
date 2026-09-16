@@ -49,7 +49,7 @@ pub fn enable_physical_pixel_coordinates() -> windows::core::Result<()> {
 
 impl Injector {
     pub fn new(target: Placement, exclusive: bool) -> Self {
-        // A normal TravelDisplay session has already made the target the only
+        // A normal Relay session has already made the target the only
         // display at (0, 0), so its normalized input coordinates are also the
         // normalized virtual-desktop coordinates. This remains exact even if
         // a Windows API unexpectedly reports DPI-virtualised metrics.

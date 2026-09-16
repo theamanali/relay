@@ -1,5 +1,5 @@
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class LatencyStatsTests: XCTestCase {
     func testBackendMetricsCannotMasqueradeAsSameLatency() {

@@ -1,7 +1,7 @@
-# TravelDisplay wire protocol (v2)
+# Relay wire protocol (v2)
 
 One TCP connection, one client at a time. Host (Windows PC) listens on **TCP 8468**
-and advertises itself over mDNS as `_traveldisplay._tcp.local.`. The client
+and advertises itself over mDNS as `_relay._tcp.local.`. The client
 (MacBook) browses for that service, connects, and the host adds a virtual monitor
 for the duration of the connection.
 
@@ -11,7 +11,7 @@ no congestion control. All integers are **big-endian**.
 
 ## Discovery
 
-The host advertises `_traveldisplay._tcp` over mDNS with a TXT record containing
+The host advertises `_relay._tcp` over mDNS with a TXT record containing
 `v` (protocol version, decimal) and `pk` (the host's identity public key, 32
 bytes as 64 lowercase hex characters). Clients use `pk` to show whether a host
 is already paired before connecting; it is informational and never trusted in
@@ -60,6 +60,11 @@ ikm   = X25519(E_c, E_h) || X25519(E_c, S_h) || X25519(S_c, E_h)
 okm   = HKDF-SHA256(salt = th, ikm, info = "TravelDisplay v2", 96 bytes)
 k_c2h = okm[0..32]      k_h2c = okm[32..64]      k_pair = okm[64..96]
 ```
+
+The `info` string and the `TDH2` magic keep the project's original name on
+purpose: they are wire constants covered by the test vector below, and renaming
+the app to Relay was not a reason to break every existing pairing.
+
 
 The second and third DH terms require the host's and the client's identity
 private keys respectively, which is what authenticates each side to the other.

@@ -1,6 +1,6 @@
-# Elevated helper for the TravelDisplay host.
+# Elevated helper for the Relay host.
 #
-# Started through the scheduled task "TravelDisplay display driver", which runs with
+# Started through the scheduled task "Relay display driver", which runs with
 # highest privileges and is owned by the user, so the unprivileged host can start it
 # without a UAC prompt. schtasks cannot pass arguments, so the host writes its order
 # into action.txt next to this script first:

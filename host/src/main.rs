@@ -1,6 +1,6 @@
-//! TravelDisplay host: makes a connected client a virtual monitor of this PC.
+//! Relay host: makes a connected client a virtual monitor of this PC.
 
-use traveldisplay_host::{crypto, display, driver, encoder, gpu, protocol, server, topology};
+use relay_host::{crypto, display, driver, encoder, gpu, protocol, server, topology};
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use gpu::GpuInfo;
 use protocol::Codec;
 
 #[derive(Parser, Debug)]
-#[command(name = "traveldisplay-host", version, about)]
+#[command(name = "relay-host", version, about)]
 struct Cli {
     /// Serving is the default when no subcommand is given; these are its options.
     #[command(flatten)]
@@ -133,7 +133,7 @@ struct ServeArgs {
     #[arg(long)]
     no_input: bool,
 
-    /// Pairing PIN (4-8 digits). Default: the one stored under %LOCALAPPDATA%TravelDisplay
+    /// Pairing PIN (4-8 digits). Default: the one stored under %LOCALAPPDATA%Relay
     #[arg(long)]
     pin: Option<String>,
 }
@@ -163,7 +163,7 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level))
         .format_timestamp_millis()
         .init();
-    if let Err(error) = traveldisplay_host::input::enable_physical_pixel_coordinates() {
+    if let Err(error) = relay_host::input::enable_physical_pixel_coordinates() {
         log::warn!("could not enable physical-pixel input coordinates: {error}");
     }
 
@@ -375,7 +375,7 @@ fn serve(args: ServeArgs) -> Result<()> {
     let name = args
         .name
         .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .unwrap_or_else(|| "TravelDisplay".into());
+        .unwrap_or_else(|| "Relay".into());
 
     let gpu = select_gpu(args.gpu.as_deref())?;
     let driver = if args.no_vdd {
@@ -425,10 +425,7 @@ fn serve(args: ServeArgs) -> Result<()> {
 
 /// Where identity, PIN and the paired-client list live.
 fn state_dir() -> Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .context("LOCALAPPDATA is not set")?;
-    Ok(base.join("TravelDisplay"))
+    relay_host::state_dir()
 }
 
 fn show_pin(new: bool) -> Result<()> {

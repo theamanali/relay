@@ -4,7 +4,7 @@
 /client/.build/
 /client/.swiftpm/
 /client/*.xcodeproj
-/client/TravelDisplay.app/
+/client/Relay.app/
 # Editors / OS
 .DS_Store
 Thumbs.db

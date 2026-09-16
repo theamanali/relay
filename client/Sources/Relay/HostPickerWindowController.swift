@@ -46,7 +46,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             backing: .buffered,
             defer: false
         )
-        window.title = "TravelDisplay"
+        window.title = "Relay"
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)

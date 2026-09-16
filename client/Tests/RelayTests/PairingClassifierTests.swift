@@ -1,6 +1,6 @@
 import Network
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class PairingClassifierTests: XCTestCase {
     private func host(_ name: String, key: Data? = nil) -> DiscoveredHost {
@@ -34,8 +34,8 @@ final class PairingClassifierTests: XCTestCase {
     }
 
     func testFixedHostFlagStillParses() {
-        let o = LaunchOptions.parse(["TravelDisplay", "--host", "192.168.1.5:8468"])
+        let o = LaunchOptions.parse(["Relay", "--host", "192.168.1.5:8468"])
         XCTAssertNotNil(o.fixedHost)
-        XCTAssertNil(LaunchOptions.parse(["TravelDisplay"]).fixedHost)
+        XCTAssertNil(LaunchOptions.parse(["Relay"]).fixedHost)
     }
 }

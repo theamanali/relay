@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 
-use traveldisplay_host::crypto::{self, SecureReader, SecureWriter};
-use traveldisplay_host::protocol::{self, msg, Codec};
+use relay_host::crypto::{self, SecureReader, SecureWriter};
+use relay_host::protocol::{self, msg, Codec};
 
 #[derive(Parser, Debug)]
-#[command(about = "Fake TravelDisplay client for testing the host")]
+#[command(about = "Fake Relay client for testing the host")]
 struct Args {
     /// host:port to connect to
     #[arg(long, default_value = "127.0.0.1:8468")]
@@ -57,10 +57,7 @@ fn main() -> Result<()> {
     let identity = if args.fresh_identity {
         crypto::Identity::generate()
     } else {
-        let dir = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .context("LOCALAPPDATA")?;
-        crypto::Identity::load_or_create(&dir.join("TravelDisplay").join("probe-identity.key"))?
+        crypto::Identity::load_or_create(&relay_host::state_dir()?.join("probe-identity.key"))?
     };
     let hs = crypto::client_handshake(&mut stream, &identity, None)?;
     let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.c2h);

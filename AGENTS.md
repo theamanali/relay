@@ -1,4 +1,4 @@
-# TravelDisplay — working notes for Codex (read on every machine)
+# Relay — working notes for Codex (read on every machine)
 
 Use a MacBook as the *only* display of a Windows PC over a direct Ethernet cable
 (hotel travel router / home LAN / Tailscale also work). One Rust binary on the PC,
@@ -12,7 +12,7 @@ piece of ceremony and it is intentional.
 |---|---|---|
 | `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
-| `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run TravelDisplay`, `./bundle.sh` for a .app) |
+| `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template, elevated helper script | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
@@ -34,9 +34,9 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Running it
 
-PC: `host\target\release\traveldisplay-host.exe` (prints the pairing PIN; `pin`, `paired`,
+PC: `host\target\release\relay-host.exe` (prints the pairing PIN; `pin`, `paired`,
 `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
-`tools\install-host.ps1`. Mac: `swift run TravelDisplay` (flags: `--host`, `--pin`,
+`tools\install-host.ps1`. Mac: `swift run Relay` (flags: `--host`, `--pin`,
 `--max-fps`, `--scale`, `--modifiers`, `--no-input`, `--latency-stats`; toggle latency
 with ⌃⌥⌘L and exit with ⌃⌥⌘Q).
 
@@ -45,7 +45,7 @@ with ⌃⌥⌘L and exit with ⌃⌥⌘Q).
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
   Code 43. The device node is the switch: the host enables/disables it through the
-  scheduled task `TravelDisplay display driver` (runs `C:\VirtualDisplayDriver\vdd-device.ps1`
+  scheduled task `Relay display driver` (runs `C:\VirtualDisplayDriver\vdd-device.ps1`
   with the order in `action.txt`). There is no `Restart-PnpDevice`; use Disable/Enable.
 - The driver keeps one monitor whenever enabled (count 0 == 1), so "invisible when idle"
   means the device is **disabled** between sessions. Enabling takes ~2 s.
@@ -53,7 +53,7 @@ with ⌃⌥⌘L and exit with ⌃⌥⌘Q).
   Windows has never stored. Attach the monitor normally first, read back its modes with
   `QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS)`, then apply a complete one-path config with
   `SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES`. Never save the virtual-only layout
-  to the database. The snapshot for restore lives in `%LOCALAPPDATA%\TravelDisplay`.
+  to the database. The snapshot for restore lives in `%LOCALAPPDATA%\Relay`.
 - DXGI lists the driver's proxy adapter with the **same name and VRAM as the real GPU**;
   D3DKMT's `IndirectDisplayDevice` flag tells them apart (`gpu.rs`).
 - When the PC's monitors are asleep, Desktop Duplication delivers zero frames: a capture
@@ -64,8 +64,8 @@ with ⌃⌥⌘L and exit with ⌃⌥⌘Q).
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on
-  hotel Wi-Fi. Keys/pairings: `%LOCALAPPDATA%\TravelDisplay`,
-  `~/Library/Application Support/TravelDisplay`.
+  hotel Wi-Fi. Keys/pairings: `%LOCALAPPDATA%\Relay`,
+  `~/Library/Application Support/Relay`.
 
 ## Conventions
 

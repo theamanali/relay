@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<!-- TravelDisplay settings for MikeTheTech's Virtual Display Driver.
+<!-- Relay settings for MikeTheTech's Virtual Display Driver.
      The driver reads this file when its device starts. The host keeps the gpu,
      global and resolutions sections in sync with whatever Mac connects (merging,
      never removing) and restarts the device only when it had to change them;

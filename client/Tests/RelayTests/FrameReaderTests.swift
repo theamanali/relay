@@ -1,5 +1,5 @@
 import XCTest
-@testable import TravelDisplay
+@testable import Relay
 
 final class FrameReaderTests: XCTestCase {
     private func frame(_ body: [UInt8]) -> Data {

@@ -62,7 +62,7 @@ final class HostBrowser {
     var onChange: (([DiscoveredHost]) -> Void)?
     var onStatus: ((String) -> Void)?
     private var browser: NWBrowser?
-    private let queue = DispatchQueue(label: "traveldisplay.browse")
+    private let queue = DispatchQueue(label: "relay.browse")
 
     func start() {
         let params = NWParameters()

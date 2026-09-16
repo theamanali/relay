@@ -1,13 +1,13 @@
 #!/bin/sh
-# Build a release binary and wrap it in TravelDisplay.app so macOS treats it as a
+# Build a release binary and wrap it in Relay.app so macOS treats it as a
 # real app (local-network permission prompt, Dock icon, double-click to launch).
 set -eu
 cd "$(dirname "$0")"
 swift build -c release
-APP=TravelDisplay.app
+APP=Relay.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp .build/release/TravelDisplay "$APP/Contents/MacOS/TravelDisplay"
+cp .build/release/Relay "$APP/Contents/MacOS/Relay"
 cp Info.plist "$APP/Contents/Info.plist"
 # Ad-hoc signature so the local-network entitlement dialog attributes to the app.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
