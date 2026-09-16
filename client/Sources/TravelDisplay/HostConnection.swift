@@ -40,6 +40,9 @@ final class HostConnection {
     private var browser: NWBrowser?
     private var connection: NWConnection?
     private var serviceName = ""
+    /// Interface the current attempt is pinned to (the cable when the host
+    /// was seen on one), so a failed attempt can retry unrestricted once.
+    private var pinnedInterface: NWInterface?
 
     // Per-connection security state.
     private var pending: Handshake.Pending?
@@ -117,7 +120,12 @@ final class HostConnection {
             }
             self.browser?.cancel()
             self.browser = nil
-            self.connect(to: first.endpoint)
+            // The service is usually visible on several interfaces at once
+            // (cable + Wi-Fi/LAN). Left to itself Network.framework may pick
+            // the LAN path, which measured 2-3 ms more RTT/2 than the cable;
+            // pin to wired Ethernet when the host was seen on one.
+            let wired = first.interfaces.first { $0.type == .wiredEthernet }
+            self.connect(to: first.endpoint, via: wired)
         }
         self.browser = browser
         browser.start(queue: queue)
@@ -125,7 +133,8 @@ final class HostConnection {
 
     // MARK: connection
 
-    private func connect(to endpoint: NWEndpoint) {
+    private func connect(to endpoint: NWEndpoint, via interface: NWInterface? = nil) {
+        pinnedInterface = interface
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.connectionTimeout = 5
@@ -135,6 +144,10 @@ final class HostConnection {
         tcp.keepaliveCount = 3
         let params = NWParameters(tls: nil, tcp: tcp)
         params.includePeerToPeer = true
+        if let interface {
+            params.requiredInterface = interface
+            NSLog("HostConnection: pinning to %@ (%@)", interface.name, String(describing: interface.type))
+        }
 
         let c = NWConnection(to: endpoint, using: params)
         connection = c
@@ -149,11 +162,19 @@ final class HostConnection {
             guard let self else { return }
             switch state {
             case .ready:
+                if let path = c.currentPath {
+                    let kind = path.usesInterfaceType(.wiredEthernet) ? "wired Ethernet"
+                        : path.usesInterfaceType(.wifi) ? "Wi-Fi" : "other"
+                    let names = path.availableInterfaces.map(\.name).joined(separator: ",")
+                    NSLog("HostConnection: connected via %@ [%@]", kind, names)
+                }
                 self.status("Connected, securing…")
                 self.startHandshake()
             case .waiting(let err):
+                if self.retryUnpinned(endpoint, c, reason: err.localizedDescription) { return }
                 self.status("Waiting for host: \(err.localizedDescription)")
             case .failed(let err):
+                if self.retryUnpinned(endpoint, c, reason: err.localizedDescription) { return }
                 self.finish("connection failed: \(err.localizedDescription)")
             case .cancelled:
                 self.finish("connection closed")
@@ -162,6 +183,18 @@ final class HostConnection {
             }
         }
         c.start(queue: queue)
+    }
+
+    /// A pinned attempt that cannot get through (cable unplugged mid-browse,
+    /// host bound elsewhere) is retried once on any interface.
+    private func retryUnpinned(_ endpoint: NWEndpoint, _ c: NWConnection, reason: String) -> Bool {
+        guard pinnedInterface != nil, connection === c else { return false }
+        NSLog("HostConnection: pinned attempt failed (%@); retrying on any interface", reason)
+        c.stateUpdateHandler = nil
+        c.cancel()
+        connection = nil
+        connect(to: endpoint, via: nil)
+        return true
     }
 
     private func finish(_ reason: String) {
