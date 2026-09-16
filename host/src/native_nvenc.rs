@@ -18,7 +18,7 @@ use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HMODULE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
     D3D11_BIND_RENDER_TARGET, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
@@ -890,6 +890,18 @@ fn create_capture(
         .context("D3D11CreateDevice")?;
         let device = device.ok_or_else(|| anyhow!("D3D11CreateDevice returned no device"))?;
         let context = context.ok_or_else(|| anyhow!("D3D11CreateDevice returned no context"))?;
+        // This one device is driven from two threads: the capture loop (frame
+        // copy, cursor draw, resource map) and the async NVENC output worker,
+        // whose bitstream lock/unlock reaches back into it. The D3D11 immediate
+        // context is not thread-safe unless multithread protection is on, and
+        // NVIDIA's asynchronous DirectX encode path requires it. Without this,
+        // concurrent access can hard-deadlock the GPU scheduler under the load
+        // of a fullscreen game's mode switch (no TDR, whole machine wedged).
+        if let Ok(mt) = context.cast::<ID3D11Multithread>() {
+            let _ = mt.SetMultithreadProtected(BOOL(1));
+        } else {
+            log::warn!("could not enable D3D11 multithread protection for the capture device");
+        }
         // Deliberately leave the capture device at the default GPU queue
         // priority. Raising it to the realtime band (7) starves a fullscreen
         // game's own submissions and could wedge the GPU scheduler hard enough
