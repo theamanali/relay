@@ -70,6 +70,7 @@ the first snapshot. Measurements on a real stream (2026-09-16, Metal, VSync off,
 |---|---|---|---|
 | overlay visible, layer not opaque | 2.97 | 7.92 | 9.41 |
 | layer opaque, overlay hidden during sampling | 2.76 | 5.47 | 9.71 |
+| + single-read receive loop | 2.60 | 4.73 | 7.08 |
 
 The second row's mean/p95 spread (about half a frame / a full frame above
 decode) is the wait for the Mac's next refresh, since the host's capture clock
@@ -82,7 +83,8 @@ The receive loop now does one socket read per message instead of a 4-byte
 length read followed by a body read (`FrameReader`): each read is sized to
 finish the current frame, and every complete message already buffered is
 handled before the next read is issued. Expected gain is a fraction of a
-millisecond per frame plus less jitter; not yet measured on a real stream.
+millisecond per frame plus less jitter; measured as the third row above
+(mean −0.7 ms, p95 −2.6 ms; the p95 change is mostly jitter removal).
 
 Compare the client timings under motion and after load spikes. Verify letterboxing,
 pointer alignment, capture restarts, reconnect and the quit shortcut. No specific
