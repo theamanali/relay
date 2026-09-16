@@ -111,6 +111,10 @@ final class MetalPresenter {
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = true
+        // Direct-to-display (bypassing the compositor when VSync is off)
+        // requires an opaque layer covering the screen with nothing drawn on
+        // top; the latency overlay breaks that while it is visible.
+        layer.isOpaque = true
         layer.maximumDrawableCount = 2
         layer.presentsWithTransaction = false
         layer.displaySyncEnabled = vsync

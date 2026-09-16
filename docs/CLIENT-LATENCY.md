@@ -60,6 +60,14 @@ The default (VSync off) permits earlier presentation but may cause tearing;
 `--metal-vsync` trades that for tear-free output. The flag affects only Metal;
 startup logs report its actual state.
 
+The overlay itself is a view on top of the Metal layer, which prevents
+direct-to-display presentation while visible and adds up to a frame to the
+numbers it shows. To read a clean value, hide it (⌃⌥⌘L), wait at least six
+seconds so the 600-frame window is entirely overlay-free, then show it and read
+the first snapshot. First measurement on a real stream (2026-09-16, overlay
+visible, Metal, VSync off): Rx→decode p50 2.97 ms, Rx→present mean 7.92 ms /
+p95 9.41 ms at 120 fps.
+
 Compare the client timings under motion and after load spikes. Verify letterboxing,
 pointer alignment, capture restarts, reconnect and the quit shortcut. No specific
 millisecond improvement has been measured yet. The notes below record the original
