@@ -5,10 +5,13 @@
 The client now defaults to `--renderer metal`. VideoToolbox still decodes all
 compressed frames in order. A single-slot mailbox keeps the newest decoded
 image, rejects late callbacks, and is invalidated on decoder generation changes.
-A dedicated user-interactive queue waits for a `CAMetalLayer` drawable; Core Image
-uses Metal to convert the decoder's YUV output with its color metadata and render
-an aspect-fitted image over black. There are two drawables and one GPU command
-buffer in flight. VSync is off by default (`--metal-vsync` turns it on). `--renderer avsbdl`
+A dedicated user-interactive queue waits for a `CAMetalLayer` drawable. The
+decoder's 8-bit biplanar 4:2:0 output is wrapped as two Metal textures over the
+same IOSurface through a `CVMetalTextureCache` (no copy) and drawn as one
+aspect-fitted quad by a fixed YCbCr→RGB shader; the buffer's matrix attachment
+(601/709/2020) and pixel format (video/full range) choose the constants. This
+replaced a Core Image pass, which rebuilt a filter graph per frame. There are
+two drawables and one GPU command buffer in flight. VSync is off by default (`--metal-vsync` turns it on). `--renderer avsbdl`
 selects the previous backend; lack of a Metal device also falls back to it.
 
 The overlay shows post-decrypt receive→decode-callback p50 for both backends.
@@ -35,7 +38,9 @@ decryption, excluding earlier socket/receive/decrypt delay. Software presentatio
 timestamps do not measure physical panel response or full input-to-photon latency.
 
 Verified: release compilation and tests for frame replacement, out-of-order
-callbacks, decoder generation changes, and renderer selection. Still pending:
+callbacks, decoder generation changes, renderer selection, and offscreen GPU
+renders of synthetic NV12 buffers (limited/full range colour, orientation,
+letterboxing). Still pending:
 real stream color/orientation, mode switches, reconnect, and latency A/B testing.
 Run from `client/`, keeping the host settings unchanged between runs:
 

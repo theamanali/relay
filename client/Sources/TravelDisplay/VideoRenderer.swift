@@ -203,7 +203,12 @@ final class VideoRenderer {
         var imageAttrs: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
         ]
-        if metal != nil { imageAttrs[kCVPixelBufferMetalCompatibilityKey] = true }
+        if metal != nil {
+            imageAttrs[kCVPixelBufferMetalCompatibilityKey] = true
+            // The shader reads 8-bit biplanar planes directly; this is the
+            // hardware decoder's native output, so no conversion is added.
+            imageAttrs[kCVPixelBufferPixelFormatTypeKey] = MetalPresenter.pixelFormats
+        }
         var s: VTDecompressionSession?
         let status = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault,
