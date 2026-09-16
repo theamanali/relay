@@ -166,3 +166,24 @@ primaries and transfer BT.709 (sRGB's), limited range. Verified with
 signalled a 601 matrix (`bt470bg`, same coefficients) from ddagrab's frame
 metadata, so it was left alone. The Mac's Metal shader takes the matrix from
 the pixel buffer, so no client change is needed.
+
+## Item 4 results (2026-09-16, real Mac, Valorant launcher trailer as motion)
+
+Mac overlay, read after 10 s of continuous motion with the overlay hidden:
+
+| | default | `--intra-refresh` |
+|---|---|---|
+| Rx→present mean / p95 | **4.15 / 5.31** | 4.84 / 7.28 |
+| Rx→decode p50 | 2.55 | 2.83 |
+| Host work p50 / p95 | 5.89 / 6.46 | 6.01 / 6.63 |
+
+Intra-refresh makes every frame a little bigger and slower to decode, while
+a 2 s IDR is one big frame in 240 that the p95 barely sees. It stays off.
+For reference the same overlay on the free-running host this morning read
+4.73 / 7.08: the phase-locked tick took 1.8 ms off the client p95 with the
+mean nearly unchanged, which is the bunching gone.
+
+Note the client connected over the LAN (global IPv6), not the cable; RTT/2
+moved 3.1 → 4.1 ms between two runs on identical settings, so treat
+sub-millisecond differences on this link as noise. `--codec h264` and
+`--scale 0.75` are still untested.
