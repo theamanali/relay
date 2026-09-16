@@ -28,6 +28,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     private let table = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "Looking for hosts…")
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
+    private let resolutionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let refreshPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var nativePixelSize = CGSize(width: 2, height: 2)
+    private var maxRefresh = 60
+    /// Called when the user changes either popup.
+    var onModeChange: ((StreamMode) -> Void)?
     private var rows: [Row] = []
     private var hosts: [DiscoveredHost] = []
     /// Name (or key) to select when the list next changes, e.g. after a disconnect.
@@ -35,7 +41,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 380),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -84,14 +90,31 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         connectButton.isEnabled = false
         connectButton.translatesAutoresizingMaskIntoConstraints = false
 
+        resolutionPopup.target = self
+        resolutionPopup.action = #selector(modeChanged)
+        refreshPopup.target = self
+        refreshPopup.action = #selector(modeChanged)
+        let modeRow = NSStackView(views: [
+            NSTextField(labelWithString: "Resolution"), resolutionPopup,
+            NSTextField(labelWithString: "Refresh"), refreshPopup,
+        ])
+        modeRow.orientation = .horizontal
+        modeRow.spacing = 8
+        modeRow.setCustomSpacing(20, after: resolutionPopup)
+        modeRow.translatesAutoresizingMaskIntoConstraints = false
+
         content.addSubview(scroll)
+        content.addSubview(modeRow)
         content.addSubview(statusLabel)
         content.addSubview(connectButton)
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: connectButton.topAnchor, constant: -12),
+            scroll.bottomAnchor.constraint(equalTo: modeRow.topAnchor, constant: -12),
+            modeRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+            modeRow.bottomAnchor.constraint(equalTo: connectButton.topAnchor, constant: -14),
             statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
@@ -100,6 +123,45 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             connectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
         reload()
+    }
+
+    // MARK: stream mode
+
+    /// Rebuild the popups for a screen. Keeps the current choice when it is
+    /// still offered, otherwise falls back to native / the highest rate.
+    func configure(nativePixelSize: CGSize, maxRefresh: Int, initial: StreamMode? = nil) {
+        let keep = (initial ?? mode).clamped(toMaxRefresh: maxRefresh)
+        self.nativePixelSize = nativePixelSize
+        self.maxRefresh = maxRefresh
+        resolutionPopup.removeAllItems()
+        for (i, entry) in StreamMode.sizes(native: nativePixelSize).enumerated() {
+            let pct = entry.scale == 1 ? "native" : "\(Int(entry.scale * 100))%"
+            resolutionPopup.addItem(withTitle: "\(entry.width) × \(entry.height) (\(pct))")
+            resolutionPopup.lastItem?.tag = i
+        }
+        refreshPopup.removeAllItems()
+        for hz in StreamMode.refreshRates(max: maxRefresh) {
+            refreshPopup.addItem(withTitle: "\(hz) Hz")
+            refreshPopup.lastItem?.tag = hz
+        }
+        mode = keep
+    }
+
+    var mode: StreamMode {
+        get {
+            let scale = StreamMode.scales[max(0, min(StreamMode.scales.count - 1, resolutionPopup.selectedTag()))]
+            let refresh = refreshPopup.selectedTag() > 0 ? refreshPopup.selectedTag() : maxRefresh
+            return StreamMode(scale: scale, refresh: refresh)
+        }
+        set {
+            let m = newValue.clamped(toMaxRefresh: maxRefresh)
+            resolutionPopup.selectItem(withTag: StreamMode.scales.firstIndex(of: m.scale) ?? 0)
+            refreshPopup.selectItem(withTag: m.refresh)
+        }
+    }
+
+    @objc private func modeChanged() {
+        onModeChange?(mode)
     }
 
     // MARK: input from the app

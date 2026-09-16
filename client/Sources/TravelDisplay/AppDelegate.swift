@@ -15,6 +15,9 @@ struct LaunchOptions {
     var fixedHost: NWEndpoint? = nil
     var maxFPS = 120
     var scale = 1.0
+    /// Whether --max-fps / --scale were given; they override the remembered mode.
+    var maxFPSGiven = false
+    var scaleGiven = false
     var modifiers: ModifierMapping = .mac
     var noInput = false
     var pin: String? = nil
@@ -34,9 +37,9 @@ struct LaunchOptions {
                     o.fixedHost = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? .init(rawValue: Proto.defaultPort)!)
                 }
             case "--max-fps":
-                if let v = it.next(), let n = Int(v) { o.maxFPS = n }
+                if let v = it.next(), let n = Int(v) { o.maxFPS = n; o.maxFPSGiven = true }
             case "--scale":
-                if let v = it.next(), let s = Double(v) { o.scale = s }
+                if let v = it.next(), let s = Double(v) { o.scale = s; o.scaleGiven = true }
             case "--modifiers":
                 if let v = it.next(), let m = ModifierMapping(rawValue: v) { o.modifiers = m }
             case "--no-input":
@@ -59,6 +62,8 @@ struct LaunchOptions {
                   --host <addr[:port]>       connect directly instead of browsing Bonjour
                   --max-fps <n>              cap the requested refresh rate (default 120)
                   --scale <f>                request f x native pixel size (0.75 or 0.5 keep the aspect)
+                                             (the picker offers both and remembers the last choice;
+                                             these flags override it for this launch)
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
@@ -101,8 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// The host of the current or last session, for reselecting it in the picker.
     private var currentHost: DiscoveredHost?
     private var kioskActive = false
-    private var requestedPixelSize = CGSize.zero
-    private var requestedRefresh = 60
+    private var screenObserver: Any?
     private var cursorHidden = false
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
@@ -116,12 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
-        requestedPixelSize = CGSize(
-            width: screen.frame.width * screen.backingScaleFactor * options.scale,
-            height: screen.frame.height * screen.backingScaleFactor * options.scale
-        )
-        requestedRefresh = min(options.maxFPS, screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60)
-
         view = StreamView(frame: screen.frame)
         view.delegate = self
         view.keyMap = KeyMap(modifiers: options.modifiers)
@@ -182,14 +180,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
         if let fixed = options.fixedHost {
             // --host: no picker, dial directly and keep re-dialing on drops.
-            enterKiosk()
-            startSession(.init(endpoint: fixed, reconnects: true))
+            let mode = initialMode(for: screen)
+            enterKiosk(on: screen, mode: mode)
+            startSession(.init(endpoint: fixed, reconnects: true), screen: screen, mode: mode)
         } else {
             showPicker()
             browser.onChange = { [weak self] hosts in self?.picker?.update(hosts: hosts) }
             browser.onStatus = { [weak self] s in self?.picker?.status = s }
             browser.start()
         }
+    }
+
+    // MARK: stream mode
+
+    private static func nativePixelSize(of screen: NSScreen) -> CGSize {
+        CGSize(width: screen.frame.width * screen.backingScaleFactor,
+               height: screen.frame.height * screen.backingScaleFactor)
+    }
+
+    private static func maxRefresh(of screen: NSScreen) -> Int {
+        screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60
+    }
+
+    /// Command-line flags win, then the remembered choice, then native at the
+    /// panel's highest rate. Always clamped to what this screen can do.
+    private func initialMode(for screen: NSScreen) -> StreamMode {
+        let max = Self.maxRefresh(of: screen)
+        var mode = StreamMode.load() ?? StreamMode(scale: 1.0, refresh: max)
+        if options.scaleGiven { mode.scale = options.scale }
+        if options.maxFPSGiven { mode.refresh = min(options.maxFPS, max) }
+        return mode.clamped(toMaxRefresh: max)
+    }
+
+    private func configurePicker(for screen: NSScreen, initial: StreamMode? = nil) {
+        picker?.configure(nativePixelSize: Self.nativePixelSize(of: screen),
+                          maxRefresh: Self.maxRefresh(of: screen), initial: initial)
     }
 
     // MARK: picker <-> kiosk
@@ -200,26 +225,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             p.pickerDelegate = self
             p.window?.delegate = self
             picker = p
+            let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
+            configurePicker(for: screen, initial: initialMode(for: screen))
+            p.onModeChange = { mode in mode.save() }
+            // Display plugged/unplugged or the window dragged to another
+            // screen: offer that screen's sizes and rates.
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.pickerScreenChanged() }
         }
         picker?.showWindow(nil)
         picker?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func pickerScreenChanged() {
+        guard let p = picker, !kioskActive else { return }
+        configurePicker(for: p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0])
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        if (notification.object as? NSWindow) === picker?.window { pickerScreenChanged() }
+    }
+
     func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost) {
         currentHost = host
+        let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let mode = p.mode
+        mode.save()
         p.window?.orderOut(nil)
-        enterKiosk()
+        enterKiosk(on: screen, mode: mode)
         startSession(.init(
             endpoint: host.endpoint,
             interface: host.wiredInterface,
             serviceName: host.name
-        ))
+        ), screen: screen, mode: mode)
     }
 
-    private func enterKiosk() {
+    private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
         kioskActive = true
-        view.status = "Starting…"
+        window.setFrame(screen.frame, display: false)
+        view.status = "Starting \(mode.label(native: Self.nativePixelSize(of: screen)))…"
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
@@ -240,15 +286,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         NSApp.presentationOptions = []
         setCursorHidden(false)
         showPicker()
+        pickerScreenChanged()
         picker?.status = reason
         if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
     }
 
-    private func startSession(_ base: HostConnection.Options) {
+    private func startSession(_ base: HostConnection.Options, screen: NSScreen, mode: StreamMode) {
         var opts = base
-        opts.requestedWidth = Int(requestedPixelSize.width.rounded())
-        opts.requestedHeight = Int(requestedPixelSize.height.rounded())
-        opts.requestedRefresh = requestedRefresh
+        let (w, h) = StreamMode.size(native: Self.nativePixelSize(of: screen), scale: mode.scale)
+        opts.requestedWidth = w
+        opts.requestedHeight = h
+        opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
         opts.wantsInput = !options.noInput
         opts.clientName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         opts.pin = options.pin

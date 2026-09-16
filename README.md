@@ -147,14 +147,18 @@ swift run TravelDisplay            # dev
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
 **Not paired**. Return, double-click or *Connect* starts the session in a
 full-screen kiosk window; when the session ends the list comes back with the
-same host selected. Paired status comes from the host's advertised identity key
+same host selected. Two popups under the list choose the stream mode — native,
+75% or 50% of the panel the window is on (labelled in pixels) and 120 or 60 Hz
+(120 only where the panel supports it); the last choice is remembered. This
+works on any Mac: the sizes and rates come from the screen at runtime.
+Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record) or, for hosts that don't advertise it yet, from
 a remembered name — the handshake still verifies the real key.
 
 Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
-`--pin 123456` (otherwise a dialog asks the first time), `--max-fps 60` (default 120),
-`--scale 0.75` or `0.5` (request ¾ or ½ the pixels: softer on the panel but
-much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
+`--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`
+(override the remembered mode for one launch; ¾ or ½ the pixels is softer on
+the panel but much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
 and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
 **Exit with ⌃⌥⌘Q.** By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
 Win so ⌘C/⌘V behave like Mac shortcuts.
