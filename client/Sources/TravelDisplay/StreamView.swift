@@ -3,6 +3,7 @@
 
 import AppKit
 import Foundation
+import QuartzCore
 
 protocol StreamViewDelegate: AnyObject {
     func streamView(_ v: StreamView, send data: Data)
@@ -81,6 +82,19 @@ final class StreamView: NSView {
     override func layout() {
         super.layout()
         layer?.sublayers?.first?.frame = bounds
+        updateDrawableSize()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
+    }
+
+    private func updateDrawableSize() {
+        guard let metal = layer?.sublayers?.first as? CAMetalLayer else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        metal.contentsScale = scale
+        metal.drawableSize = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
     }
 
     // MARK: focus & tracking

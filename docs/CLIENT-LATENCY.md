@@ -1,7 +1,66 @@
-# Client latency status and next step
+# Client latency status and validation
 
-**For the Mac session (`client/`).** The host is not the bottleneck; the remaining
-perceptible latency is in the Mac presentation path. The client now owns an explicit
+## Metal implementation (2026-09-16)
+
+The client now defaults to `--renderer metal`. VideoToolbox still decodes all
+compressed frames in order. A single-slot mailbox keeps the newest decoded
+image, rejects late callbacks, and is invalidated on decoder generation changes.
+A dedicated user-interactive queue waits for a `CAMetalLayer` drawable; Core Image
+uses Metal to convert the decoder's YUV output with its color metadata and render
+an aspect-fitted image over black. There are two drawables and one GPU command
+buffer in flight. VSync is off by default (`--metal-vsync` turns it on). `--renderer avsbdl`
+selects the previous backend; lack of a Metal device also falls back to it.
+
+The overlay shows post-decrypt receive→decode-callback p50 for both backends.
+Metal receive→present mean and p95 use the last 600 valid drawable presentation
+timestamps, with the sample count shown. AVFoundation instead reports cumulative
+delay relative to prescribed presentation times; with DisplayImmediately this is
+not a validated receive→present measurement. It is explicitly labeled scheduling
+delay and must not be compared directly with Metal receive→present. Its average
+divides by total frames minus reported dropped frames, matching the delay's
+displayed-frame population.
+
+Metal counters distinguish intentional pending-frame replacement, late decoded
+output, unavailable drawable/command, zero-time presentation callbacks, GPU
+errors, and invalid timing samples. These are session counts; zero-time callbacks
+are only observed callbacks, not a complete accounting of every unpresented frame.
+AVFoundation's reported drops have a different scope. Decode FPS counts decoded
+outputs, not display refreshes. Sampling continues with the overlay hidden.
+Unavailable metrics clear old values. Metal timing samples clear on decoder reset.
+
+The previous overlay's Total estimate has been removed: summing unrelated host
+medians, RTT/2 and a client mean did not measure end-to-end latency. RTT/2 includes
+protocol processing and is only an estimate. The receive timestamp starts after
+decryption, excluding earlier socket/receive/decrypt delay. Software presentation
+timestamps do not measure physical panel response or full input-to-photon latency.
+
+Verified: release compilation and tests for frame replacement, out-of-order
+callbacks, decoder generation changes, and renderer selection. Still pending:
+real stream color/orientation, mode switches, reconnect, and latency A/B testing.
+Run from `client/`, keeping the host settings unchanged between runs:
+
+```
+swift run -c release TravelDisplay --renderer metal --latency-stats
+swift run -c release TravelDisplay --renderer avsbdl --latency-stats
+```
+
+To compare Metal with VSync enabled, run:
+
+```
+swift run -c release TravelDisplay --renderer metal --metal-vsync --latency-stats
+```
+
+The default (VSync off) permits earlier presentation but may cause tearing;
+`--metal-vsync` trades that for tear-free output. The flag affects only Metal;
+startup logs report its actual state.
+
+Compare the client timings under motion and after load spikes. Verify letterboxing,
+pointer alignment, capture restarts, reconnect and the quit shortcut. No specific
+millisecond improvement has been measured yet. The notes below record the original
+motivation and implementation plan.
+
+**For the Mac session (`client/`).** Mac presentation is a candidate for reducing
+the remaining latency. The previous client owns an explicit
 real-time `VTDecompressionSession`; decoded IOSurface-backed frames are submitted to
 `AVSampleBufferDisplayLayer` for immediate display. The wire format remains unchanged
 (see `docs/PROTOCOL.md`).
@@ -15,8 +74,8 @@ native latency avg over 600 frames: capture 0.23 ms, encode 3.30 ms
 120.0 fps, encoder wait avg 8.27 ms, encrypt/send avg 0.06 ms
 ```
 
-So the host contributes ~3.5 ms (capture + encode) plus ~one 120 Hz frame of
-pipeline, and the network is ~0.06 ms on the wire. The `encoder wait avg 8.27 ms`
+So the measured capture and encode work contributes ~3.5 ms. Encrypt/send time
+does not establish network transit time. The `encoder wait avg 8.27 ms`
 is just the gap between 120 Hz frames, not added latency. That leaves the Mac
 client as the place with the most latency to reclaim.
 
@@ -69,7 +128,8 @@ its decoded pixel buffers to a `CAMetalLayer`:
    `CVImageBuffer`. Render it straight to a `CAMetalLayer` drawable (a trivial
    textured-quad blit, or `CIContext`/`MTKView`). Do **not** wait on a display link
    for a "correct" presentation time — present the newest decoded frame on the next
-   drawable and drop any older undecoded backlog. If two frames are ready, show the
+   drawable and drop older decoded presentation candidates. Never skip arbitrary
+   compressed P-frames, which may be needed as references. If two frames are ready, show the
    newest and discard the older (never queue).
 
 5. **Kiosk window unchanged.** Keep the existing borderless full-screen

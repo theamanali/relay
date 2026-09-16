@@ -19,6 +19,8 @@ struct LaunchOptions {
     var noInput = false
     var pin: String? = nil
     var showLatency = false
+    var renderer = "metal"
+    var metalVSync = false
 
     static func parse(_ args: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -43,6 +45,14 @@ struct LaunchOptions {
                 if let v = it.next() { o.pin = v }
             case "--latency-stats":
                 o.showLatency = true
+            case "--renderer":
+                guard let value = it.next(), ["metal", "avsbdl"].contains(value) else {
+                    print("--renderer requires metal or avsbdl")
+                    exit(2)
+                }
+                o.renderer = value
+            case "--metal-vsync":
+                o.metalVSync = true
             case "--help", "-h":
                 print("""
                 TravelDisplay client
@@ -53,6 +63,8 @@ struct LaunchOptions {
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
                   --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
+                  --renderer metal|avsbdl    presentation backend (default metal)
+                  --metal-vsync              enable Metal VSync (default off; avoids tearing)
                 Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)
@@ -82,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private let options: LaunchOptions
     private var window: NSWindow!
     private var view: StreamView!
-    private let renderer = VideoRenderer()
+    private let renderer: VideoRenderer
     private var connection: HostConnection?
     private var cursorHidden = false
     private var exitMonitor: Any?
@@ -91,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     init(options: LaunchOptions) {
         self.options = options
+        renderer = VideoRenderer(renderer: options.renderer, metalVSync: options.metalVSync)
         super.init()
     }
 
@@ -306,12 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     private func refreshLatencyOverlay() {
-        guard view.latencyVisible else { return }
         renderer.loadPerformanceSnapshot { [weak self] performance in
             guard let self else { return }
-            if let performance {
-                self.latencyStats.recordVideoPerformance(performance)
-            }
+            self.latencyStats.recordVideoPerformance(performance)
             let text = self.latencyStats.snapshot().overlayText
             DispatchQueue.main.async {
                 if self.view.latencyVisible {

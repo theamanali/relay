@@ -55,7 +55,9 @@ small encrypted protocol between them.
    refused before anything is streamed.
 5. **Client.** Native macOS app: an explicit real-time `VTDecompressionSession`
    hardware-decodes HEVC into IOSurface-backed pixel buffers, then submits them
-   for immediate display through `AVSampleBufferDisplayLayer`. Trackpad and
+   to a Metal presenter with a single pending decoded frame, VSync off by default
+   (`--metal-vsync` re-enables it). `--renderer avsbdl` selects the previous
+   `AVSampleBufferDisplayLayer` backend. Trackpad and
    keyboard forwarding are optional. Windows' cursor is part of the video, so a
    mouse attached directly to the PC and the Mac trackpad control the same
    visible pointer.
@@ -67,6 +69,7 @@ small encrypted protocol between them.
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
+| Mac Metal presentation | implemented; release build and scheduling tests verified. Live color, mode changes and latency comparison still require a PC streaming session |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |

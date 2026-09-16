@@ -14,27 +14,41 @@ final class LatencyStats {
         let totalEstimate: Double?
         let droppedFrames: Int?
         let samples: Int
+        var clientP95: Double? = nil
+        var performance: VideoPerformanceSnapshot? = nil
 
         var overlayText: String {
             func ms(_ value: Double?) -> String {
                 value.map { String(format: "%6.2f ms", $0) } ?? "      --"
             }
             var lines = [
-                String(format: "FPS          %6.1f", fps),
-                "Total est.   \(ms(totalEstimate))",
-                "Host         \(ms(hostMedian))",
-                "Network ~    \(ms(networkMedian))",
-                "Client       \(ms(clientAverage))",
+                String(format: "Decode FPS   %6.1f", fps),
+                "Host work p50 \(ms(hostMedian))",
+                "RTT/2 est.    \(ms(networkMedian))",
             ]
-            if clientAverage == nil {
-                lines.append("  decode/q   \(ms(decodeMedian))")
-                lines.append("  display       hidden")
-            }
+            lines.append("Rx→decode p50 \(ms(decodeMedian))")
+            if let p = performance {
+                if p.backend == "metal" {
+                    lines.append("Metal Rx→present (last \(p.samples))")
+                    lines.append("  mean        \(ms(p.clientMilliseconds))")
+                    lines.append("  p95         \(ms(p.clientP95))")
+                    lines.append("Session counts:")
+                    lines.append("  replaced    \(p.replaced)")
+                    lines.append("  late output \(p.late)")
+                    lines.append("  no drawable/command \(p.unavailable)")
+                    lines.append("  zero-time callbacks \(p.droppedFrames)")
+                    lines.append("  GPU errors  \(p.gpuFailures)")
+                    lines.append("  invalid timing \(p.invalidTimes)")
+                } else {
+                    lines.append("AV scheduling delay (cumulative)")
+                    lines.append("  mean        \(ms(p.clientMilliseconds))")
+                    lines.append("AV reported drops \(p.droppedFrames)")
+                    lines.append("Rx→present unavailable")
+                }
+            } else { lines.append("Presentation metrics unavailable") }
             lines.append("Host p95     \(ms(hostP95))")
-            if let droppedFrames {
-                lines.append(String(format: "Dropped      %6d", droppedFrames))
-            }
-            lines.append(String(format: "Samples      %6d", samples))
+            lines.append("Host samples \(samples) (last 600)")
+            lines.append("Rx starts after decrypt; not input→photon")
             return lines.joined(separator: "\n")
         }
     }
@@ -45,7 +59,9 @@ final class LatencyStats {
     private var network: [Double] = []
     private var decode: [Double] = []
     private var clientAverage: Double?
+    private var clientP95: Double?
     private var droppedFrames: Int?
+    private var performance: VideoPerformanceSnapshot?
     private var framesSinceSnapshot = 0
     private var lastSnapshotAt = DispatchTime.now().uptimeNanoseconds
 
@@ -55,7 +71,9 @@ final class LatencyStats {
         network.removeAll(keepingCapacity: true)
         decode.removeAll(keepingCapacity: true)
         clientAverage = nil
+        clientP95 = nil
         droppedFrames = nil
+        performance = nil
         framesSinceSnapshot = 0
         lastSnapshotAt = DispatchTime.now().uptimeNanoseconds
         lock.unlock()
@@ -63,7 +81,9 @@ final class LatencyStats {
 
     func recordFrame(sequence _: UInt64, decodeMilliseconds: Double) {
         lock.lock()
-        Self.append(decodeMilliseconds, to: &decode)
+        if decodeMilliseconds.isFinite && decodeMilliseconds >= 0 {
+            Self.append(decodeMilliseconds, to: &decode)
+        }
         framesSinceSnapshot += 1
         lock.unlock()
     }
@@ -82,10 +102,12 @@ final class LatencyStats {
         lock.unlock()
     }
 
-    func recordVideoPerformance(_ snapshot: VideoPerformanceSnapshot) {
+    func recordVideoPerformance(_ snapshot: VideoPerformanceSnapshot?) {
         lock.lock()
-        clientAverage = snapshot.clientMilliseconds
-        droppedFrames = snapshot.droppedFrames
+        performance = snapshot
+        clientAverage = snapshot?.clientMilliseconds
+        clientP95 = snapshot?.clientP95
+        droppedFrames = snapshot?.droppedFrames
         lock.unlock()
     }
 
@@ -101,10 +123,6 @@ final class LatencyStats {
 
         let hostMedian = percentile(host, 0.5)
         let networkMedian = percentile(network, 0.5)
-        let total = [hostMedian, networkMedian, clientAverage]
-        let totalEstimate = total.allSatisfy { $0 != nil }
-            ? total.compactMap { $0 }.reduce(0, +)
-            : nil
         return Snapshot(
             fps: fps,
             hostMedian: hostMedian,
@@ -112,9 +130,11 @@ final class LatencyStats {
             networkMedian: networkMedian,
             clientAverage: clientAverage,
             decodeMedian: percentile(decode, 0.5),
-            totalEstimate: totalEstimate,
+            totalEstimate: nil,
             droppedFrames: droppedFrames,
-            samples: host.count
+            samples: host.count,
+            clientP95: clientP95,
+            performance: performance
         )
     }
 

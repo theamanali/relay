@@ -14,7 +14,11 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("VideoToolbox"),
+                .linkedFramework("Metal"),
+                .linkedFramework("CoreImage"),
+                .linkedFramework("QuartzCore"),
             ]
         ),
+        .testTarget(name: "TravelDisplayTests", dependencies: ["TravelDisplay"]),
     ]
 )
