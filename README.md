@@ -154,6 +154,9 @@ ffplay -f hevc capture.hevc
 - The ffmpeg-based encoder learns a frame is complete only when the next one
   starts, which adds one frame interval (~8 ms at 120 fps) of latency. Fixed by
   milestone 5.
+- Fullscreen and display-mode transitions can invalidate Windows Desktop
+  Duplication briefly. The host restarts capture for up to 15 seconds without
+  disconnecting the Mac or restoring the PC's physical monitors.
 - Only the NVIDIA path has been run. AMD (AMF) uses the same zero-copy D3D11
   route and is expected to work; Intel (Quick Sync) is best-effort until tested.
   A GPU with no hardware encoder falls back to software x264/x265 and will not

@@ -28,6 +28,8 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const PONG_TIMEOUT: Duration = Duration::from_secs(5);
+const ENCODER_RESTART_DELAY: Duration = Duration::from_millis(250);
+const ENCODER_RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -329,7 +331,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         &protocol::stream_start(placement.width as u16, placement.height as u16, fps as u16, codec),
     )?;
 
-    let mut encoder = Encoder::spawn(&EncoderConfig {
+    let encoder_config = EncoderConfig {
         ffmpeg: cfg.ffmpeg.clone(),
         vendor: cfg.gpu.vendor,
         capture_adapter_idx: source.location.adapter_index,
@@ -341,7 +343,8 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         gop: cfg.gop_seconds.max(1) * fps,
         quality: cfg.quality,
         intra_refresh: cfg.intra_refresh,
-    })?;
+    };
+    let mut encoder = Encoder::spawn(&encoder_config)?;
 
     // Reader thread: client -> host messages (input, pongs).
     let stop = Arc::new(AtomicBool::new(false));
@@ -363,7 +366,13 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
             })?
     };
 
-    let result = pump(&mut tx, &mut encoder, &stop, &last_pong);
+    let result = pump(
+        &mut tx,
+        &mut encoder,
+        &encoder_config,
+        &stop,
+        &last_pong,
+    );
 
     tx.shutdown();
     stop.store(true, Ordering::Relaxed);
@@ -377,26 +386,81 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
 fn pump(
     tx: &mut SecureWriter,
     encoder: &mut Encoder,
+    encoder_config: &EncoderConfig,
     stop: &AtomicBool,
     last_pong: &Mutex<Instant>,
 ) -> Result<()> {
     let mut last_config: Vec<Vec<u8>> = Vec::new();
-    let mut last_ping = Instant::now();
+    let mut next_ping = Instant::now() + PING_INTERVAL;
+    let mut ping_outstanding: Option<Instant> = None;
     let mut frames: u64 = 0;
     let mut bytes: u64 = 0;
     let mut stats_at = Instant::now();
     let mut encoder_wait = Duration::ZERO;
     let mut send_time = Duration::ZERO;
     let mut max_send = Duration::ZERO;
+    let mut recovery_started: Option<Instant> = None;
+    let mut restart_attempts = 0u32;
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
         let read_at = Instant::now();
-        let Some(au) = encoder.next_access_unit()? else {
-            let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
-            bail!("encoder exited");
+        let au = match encoder.next_access_unit() {
+            Ok(Some(au)) => {
+                if let Some(started) = recovery_started.take() {
+                    log::info!(
+                        "capture recovered after {:.1}s and {restart_attempts} encoder restart(s)",
+                        started.elapsed().as_secs_f64()
+                    );
+                    restart_attempts = 0;
+                }
+                au
+            }
+            result => {
+                let failure = match result {
+                    Ok(None) => "ffmpeg exited".to_string(),
+                    Err(error) => format!("{error:#}"),
+                    Ok(Some(_)) => unreachable!(),
+                };
+                let started = *recovery_started.get_or_insert_with(|| {
+                    log::warn!(
+                        "capture interrupted ({failure}); keeping the display session active while it recovers"
+                    );
+                    Instant::now()
+                });
+                if started.elapsed() >= ENCODER_RECOVERY_TIMEOUT {
+                    let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
+                    bail!(
+                        "capture did not recover within {ENCODER_RECOVERY_TIMEOUT:?} after {restart_attempts} restart(s): {failure}"
+                    );
+                }
+
+                maintain_connection(
+                    tx,
+                    &mut next_ping,
+                    &mut ping_outstanding,
+                    last_pong,
+                )?;
+                thread::sleep(ENCODER_RESTART_DELAY);
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                match Encoder::spawn(encoder_config) {
+                    Ok(replacement) => {
+                        *encoder = replacement;
+                        restart_attempts += 1;
+                        // A fresh encoder emits its own parameter sets. Forward
+                        // them even if their bytes match the previous process.
+                        last_config.clear();
+                    }
+                    Err(error) => {
+                        log::debug!("encoder restart failed: {error:#}");
+                    }
+                }
+                continue;
+            }
         };
 
         encoder_wait += read_at.elapsed();
@@ -413,18 +477,13 @@ fn pump(
         frames += 1;
         bytes += au.nals.iter().map(|n| n.len() as u64).sum::<u64>();
 
+        maintain_connection(
+            tx,
+            &mut next_ping,
+            &mut ping_outstanding,
+            last_pong,
+        )?;
         let now = Instant::now();
-        if now.duration_since(last_ping) >= PING_INTERVAL {
-            let us = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_micros() as u64)
-                .unwrap_or(0);
-            tx.send(msg::PING, 0, &us.to_be_bytes())?;
-            last_ping = now;
-            if now.duration_since(*last_pong.lock().unwrap()) > PONG_TIMEOUT {
-                bail!("client stopped answering pings");
-            }
-        }
         if now.duration_since(stats_at) >= Duration::from_secs(5) {
             let secs = now.duration_since(stats_at).as_secs_f64();
             log::info!(
@@ -443,6 +502,35 @@ fn pump(
             max_send = Duration::ZERO;
         }
     }
+}
+
+fn maintain_connection(
+    tx: &mut SecureWriter,
+    next_ping: &mut Instant,
+    ping_outstanding: &mut Option<Instant>,
+    last_pong: &Mutex<Instant>,
+) -> Result<()> {
+    let now = Instant::now();
+    if let Some(sent) = *ping_outstanding {
+        if *last_pong.lock().unwrap() >= sent {
+            *ping_outstanding = None;
+        } else if now.duration_since(sent) > PONG_TIMEOUT {
+            bail!("client stopped answering pings");
+        } else {
+            return Ok(());
+        }
+    }
+    if now < *next_ping {
+        return Ok(());
+    }
+    let us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+    tx.send(msg::PING, 0, &us.to_be_bytes())?;
+    *ping_outstanding = Some(now);
+    *next_ping = now + PING_INTERVAL;
+    Ok(())
 }
 
 fn read_loop(
