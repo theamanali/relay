@@ -32,8 +32,9 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod, TIMERR_NOERROR};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateWaitableTimerExW, SetWaitableTimerEx, WaitForSingleObject,
-    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS,
+    CreateEventW, CreateWaitableTimerExW, GetCurrentThread, SetThreadPriority, SetWaitableTimerEx,
+    WaitForSingleObject, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, THREAD_PRIORITY_HIGHEST,
+    TIMER_ALL_ACCESS,
 };
 
 use crate::cursor_overlay::CursorOverlay;
@@ -88,7 +89,7 @@ const ACQUIRE_POLL: Duration = Duration::from_micros(200);
 const FIRST_FRAME_POLL: Duration = Duration::from_millis(20);
 /// How long after DWM's present the tick should land. Margin against the
 /// virtual display's vblank jitter; the content is about this old at submit.
-const TARGET_LEAD: Duration = Duration::from_micros(1_200);
+const TARGET_LEAD: Duration = Duration::from_micros(800);
 /// Phase servo: correct this fraction of the lead error per tick ...
 const SERVO_DIVISOR: u32 = 4;
 /// ... but never move a tick by more than this, so the cadence stays even.
@@ -682,6 +683,7 @@ impl CaptureLoop {
     /// Thread body. Runs until stopped, until Desktop Duplication loses access
     /// (reported as `CaptureLost`) or until something fails (`CaptureFailed`).
     fn run(mut self) -> Self {
+        raise_thread_priority("nvenc-capture");
         while !self.stop.load(Ordering::Relaxed) {
             match self.step() {
                 Ok(true) => {}
@@ -962,12 +964,25 @@ fn qpc_frequency() -> i64 {
 
 /// Waits for each submitted picture, reads its bitstream, returns the slot to
 /// the capture thread and the access unit to the server thread.
+/// Capture and output are a few hundred microseconds of work per frame that
+/// must not queue behind a game's render threads; a late poll or a late
+/// bitstream read shows straight up in the client's p95. `HIGHEST` (priority
+/// 15 in the normal class) is deliberate: `TIME_CRITICAL` (the realtime band)
+/// starves DWM and the GPU scheduler enough that the virtual display stops
+/// presenting.
+fn raise_thread_priority(name: &str) {
+    if let Err(error) = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) } {
+        log::warn!("could not raise {name} thread priority: {error}");
+    }
+}
+
 fn output_worker(
     context: OutputWorkerContext,
     pending_rx: Receiver<(PendingOutput, CaptureInfo)>,
     events_tx: Sender<OutputEvent>,
     free_tx: Sender<usize>,
 ) {
+    raise_thread_priority("nvenc-output");
     while let Ok((pending, capture)) = pending_rx.recv() {
         let slot_index = pending.slot_index;
         let submitted_at = pending.submitted_at;

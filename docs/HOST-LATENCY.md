@@ -187,3 +187,18 @@ Note the client connected over the LAN (global IPv6), not the cable; RTT/2
 moved 3.1 → 4.1 ms between two runs on identical settings, so treat
 sub-millisecond differences on this link as noise. `--codec h264` and
 `--scale 0.75` are still untested.
+
+## Thread priority and tighter lead (2026-09-16)
+
+The capture and output-worker threads raise themselves to `THREAD_PRIORITY_HIGHEST`
+so a game's render threads cannot delay a poll or a bitstream read (the delay
+would land in the client p95). `TIME_CRITICAL` was tried first and is wrong: at
+the realtime band it starves DWM and the GPU scheduler, and the virtual display
+stops presenting (capture drops to a handful of fresh frames per 600). `TARGET_LEAD`
+is lowered 1200 -> 800 us now that the measured vblank jitter is under a millisecond;
+frame age at submit settles around 0.5-1.0 ms.
+
+GPU BGRA->NV12 conversion (feeding NVENC NV12 instead of ARGB) was built and
+measured: encode was identical to the ARGB path at 6 MP (4.4 / 6.2 ms both), so
+it was reverted. NVENC's internal RGB->YUV is effectively free on Ampere. Colour
+stays correct via the BT.601 VUI tag from item 5.
