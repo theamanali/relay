@@ -35,8 +35,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 PC: `host\target\release\traveldisplay-host.exe` (prints the pairing PIN; `pin`, `paired`,
 `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
-`tools\install-host.ps1`. Mac: `swift run TravelDisplay` (flags: `--host`, `--pin`,
-`--max-fps`, `--scale`, `--modifiers`, `--no-input`; exit with ⌃⌥⌘Q).
+`tools\install-host.ps1`. Mac: `swift run TravelDisplay` opens a picker listing hosts
+found over Bonjour under *Paired* / *Not paired*; choosing one enters the kiosk window,
+and a dropped session returns to the picker. `--host` skips the picker and re-dials on
+drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
+`--latency-stats`, `--renderer`, `--metal-vsync`; exit with ⌃⌥⌘Q.
 
 ## Hard-won facts — do not relearn these
 

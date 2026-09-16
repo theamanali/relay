@@ -1,0 +1,41 @@
+import Network
+import XCTest
+@testable import TravelDisplay
+
+final class PairingClassifierTests: XCTestCase {
+    private func host(_ name: String, key: Data? = nil) -> DiscoveredHost {
+        DiscoveredHost(name: name, endpoint: .service(name: name, type: Proto.serviceType, domain: "local.", interface: nil),
+                       interfaces: [], publicKey: key)
+    }
+
+    private let keyA = Data(repeating: 0xA, count: 32)
+    private let keyB = Data(repeating: 0xB, count: 32)
+
+    func testAdvertisedKeyDecides() {
+        let known = [keyA: "Desk PC"]
+        let r = PairingClassifier.classify([host("Desk PC", key: keyA), host("Desk PC", key: keyB), host("Other", key: keyB)], known: known)
+        XCTAssertEqual(r.paired.map(\.host.name), ["Desk PC"])
+        XCTAssertFalse(r.paired[0].byNameOnly)
+        // Same name but a different key is not paired, even though the name matches.
+        XCTAssertEqual(r.unpaired.map(\.name), ["Desk PC", "Other"])
+    }
+
+    func testNameFallbackWhenKeyNotAdvertised() {
+        let known = [keyA: "Desk PC"]
+        let r = PairingClassifier.classify([host("Desk PC"), host("Laptop")], known: known)
+        XCTAssertEqual(r.paired.map(\.host.name), ["Desk PC"])
+        XCTAssertTrue(r.paired[0].byNameOnly)
+        XCTAssertEqual(r.unpaired.map(\.name), ["Laptop"])
+    }
+
+    func testEmptyRememberedNameNeverMatches() {
+        let r = PairingClassifier.classify([host("")], known: [keyA: ""])
+        XCTAssertTrue(r.paired.isEmpty)
+    }
+
+    func testFixedHostFlagStillParses() {
+        let o = LaunchOptions.parse(["TravelDisplay", "--host", "192.168.1.5:8468"])
+        XCTAssertNotNil(o.fixedHost)
+        XCTAssertNil(LaunchOptions.parse(["TravelDisplay"]).fixedHost)
+    }
+}

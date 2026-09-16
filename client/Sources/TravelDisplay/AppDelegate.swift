@@ -90,12 +90,19 @@ struct LaunchOptions {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate, StreamViewDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate, StreamViewDelegate, NSWindowDelegate, HostPickerDelegate {
     private let options: LaunchOptions
     private var window: NSWindow!
     private var view: StreamView!
     private let renderer: VideoRenderer
     private var connection: HostConnection?
+    private let browser = HostBrowser()
+    private var picker: HostPickerWindowController?
+    /// The host of the current or last session, for reselecting it in the picker.
+    private var currentHost: DiscoveredHost?
+    private var kioskActive = false
+    private var requestedPixelSize = CGSize.zero
+    private var requestedRefresh = 60
     private var cursorHidden = false
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
@@ -109,18 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
-        let pixelSize = CGSize(
+        requestedPixelSize = CGSize(
             width: screen.frame.width * screen.backingScaleFactor * options.scale,
             height: screen.frame.height * screen.backingScaleFactor * options.scale
         )
-        let refresh = min(options.maxFPS, screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60)
+        requestedRefresh = min(options.maxFPS, screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60)
 
         view = StreamView(frame: screen.frame)
         view.delegate = self
         view.keyMap = KeyMap(modifiers: options.modifiers)
         view.forwardInput = !options.noInput
         view.attach(videoLayer: renderer.layer)
-        view.status = "Starting…"
         view.latencyVisible = options.showLatency
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
         renderer.firstFrameHandler = { [weak self] in
@@ -170,24 +176,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             }
             return nil
         }
+        latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshLatencyOverlay()
+        }
+
+        if let fixed = options.fixedHost {
+            // --host: no picker, dial directly and keep re-dialing on drops.
+            enterKiosk()
+            startSession(.init(endpoint: fixed, reconnects: true))
+        } else {
+            showPicker()
+            browser.onChange = { [weak self] hosts in self?.picker?.update(hosts: hosts) }
+            browser.onStatus = { [weak self] s in self?.picker?.status = s }
+            browser.start()
+        }
+    }
+
+    // MARK: picker <-> kiosk
+
+    private func showPicker() {
+        if picker == nil {
+            let p = HostPickerWindowController()
+            p.pickerDelegate = self
+            p.window?.delegate = self
+            picker = p
+        }
+        picker?.showWindow(nil)
+        picker?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost) {
+        currentHost = host
+        p.window?.orderOut(nil)
+        enterKiosk()
+        startSession(.init(
+            endpoint: host.endpoint,
+            interface: host.wiredInterface,
+            serviceName: host.name
+        ))
+    }
+
+    private func enterKiosk() {
+        kioskActive = true
+        view.status = "Starting…"
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         NSApp.activate(ignoringOtherApps: true)
         setCursorHidden(true)
+    }
 
-        let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    /// Back to the host list (picker mode only): the stream window goes
+    /// away, the menu bar and cursor come back, and the same host is selected
+    /// so Return reconnects.
+    private func leaveKiosk(reason: String) {
+        kioskActive = false
+        connection?.stop()
+        connection = nil
+        view.releaseAllKeys()
+        view.streamSize = .zero
+        window.orderOut(nil)
+        NSApp.presentationOptions = []
+        setCursorHidden(false)
+        showPicker()
+        picker?.status = reason
+        if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
+    }
+
+    private func startSession(_ base: HostConnection.Options) {
+        var opts = base
+        opts.requestedWidth = Int(requestedPixelSize.width.rounded())
+        opts.requestedHeight = Int(requestedPixelSize.height.rounded())
+        opts.requestedRefresh = requestedRefresh
+        opts.wantsInput = !options.noInput
+        opts.clientName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        opts.pin = options.pin
         let c: HostConnection
         do {
-            c = try HostConnection(options: .init(
-                fixedHost: options.fixedHost,
-                requestedWidth: Int(pixelSize.width.rounded()),
-                requestedHeight: Int(pixelSize.height.rounded()),
-                requestedRefresh: refresh,
-                wantsInput: !options.noInput,
-                clientName: name,
-                pin: options.pin
-            ))
+            c = try HostConnection(options: opts)
         } catch {
             view.status = "Cannot create this Mac's identity key: \(error.localizedDescription)"
             return
@@ -195,9 +262,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         c.delegate = self
         connection = c
         c.start()
-        latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.refreshLatencyOverlay()
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -217,13 +281,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     // MARK: window focus -> cursor / stuck keys
 
     func windowDidBecomeKey(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
         window.makeFirstResponder(view)
         setCursorHidden(true)
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
         setCursorHidden(false)
         view.releaseAllKeys()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === picker?.window { NSApp.terminate(nil) }
+        return true
     }
 
     private func setCursorHidden(_ hidden: Bool) {
@@ -265,9 +336,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             self.window.makeFirstResponder(self.view)
             self.setCursorHidden(true)
             guard response == .alertFirstButtonReturn else {
-                // Cancel means "let me out", not "ask again in a second".
+                // Cancel means "let me out": the connection ends with
+                // "pairing cancelled", which returns to the picker, or quits
+                // in --host mode where there is no list to go back to.
                 completion(nil)
-                NSApp.terminate(nil)
+                if self.options.fixedHost != nil { NSApp.terminate(nil) }
                 return
             }
             completion(field.stringValue.trimmingCharacters(in: .whitespaces))
@@ -303,8 +376,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         renderer.reset()
         DispatchQueue.main.async {
+            guard self.connection === c else { return }
             self.view.releaseAllKeys()
             self.view.status = "Disconnected: \(reason)"
+            if self.options.fixedHost == nil, self.kioskActive {
+                self.leaveKiosk(reason: "Disconnected: \(reason)")
+            }
         }
     }
 

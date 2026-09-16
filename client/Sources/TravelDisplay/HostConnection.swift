@@ -22,12 +22,19 @@ protocol HostConnectionDelegate: AnyObject {
 
 final class HostConnection {
     struct Options {
-        var fixedHost: NWEndpoint? = nil
-        var requestedWidth: Int
-        var requestedHeight: Int
-        var requestedRefresh: Int
+        var endpoint: NWEndpoint
+        /// Interface to pin the connection to (the cable, when the host was seen on one).
+        var interface: NWInterface? = nil
+        /// Bonjour instance name, for status messages and the paired-host list.
+        var serviceName = ""
+        /// Re-dial after a drop (fixed --host mode); the picker flow instead
+        /// returns to the host list.
+        var reconnects = false
+        var requestedWidth = 0
+        var requestedHeight = 0
+        var requestedRefresh = 60
         var wantsInput: Bool = true
-        var clientName: String
+        var clientName = ""
         /// PIN to use without asking (e.g. from the command line).
         var pin: String? = nil
     }
@@ -37,9 +44,8 @@ final class HostConnection {
 
     private let options: Options
     private let identity: Curve25519.KeyAgreement.PrivateKey
-    private var browser: NWBrowser?
     private var connection: NWConnection?
-    private var serviceName = ""
+    private var serviceName: String
     /// Interface the current attempt is pinned to (the cable when the host
     /// was seen on one), so a failed attempt can retry unrestricted once.
     private var pinnedInterface: NWInterface?
@@ -58,6 +64,7 @@ final class HostConnection {
 
     init(options: Options) throws {
         self.options = options
+        self.serviceName = options.serviceName
         self.identity = try ClientState.identity()
     }
 
@@ -65,18 +72,12 @@ final class HostConnection {
 
     func start() {
         queue.async { [self] in
-            if let endpoint = options.fixedHost {
-                connect(to: endpoint)
-            } else {
-                browse()
-            }
+            connect(to: options.endpoint, via: options.interface)
         }
     }
 
     func stop() {
         queue.async { [self] in
-            browser?.cancel()
-            browser = nil
             connection?.cancel()
             connection = nil
         }
@@ -97,38 +98,6 @@ final class HostConnection {
         } catch {
             finish("encryption failed: \(error.localizedDescription)")
         }
-    }
-
-    // MARK: discovery
-
-    private func browse() {
-        status("Looking for a TravelDisplay host…")
-        let params = NWParameters()
-        params.includePeerToPeer = true
-        let browser = NWBrowser(for: .bonjour(type: Proto.serviceType, domain: nil), using: params)
-        browser.stateUpdateHandler = { [weak self] state in
-            if case .failed(let err) = state {
-                self?.status("Bonjour browse failed: \(err.localizedDescription) — retrying")
-                self?.queue.asyncAfter(deadline: .now() + 2) { self?.browse() }
-            }
-        }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            guard let self, self.connection == nil, let first = results.first else { return }
-            if case .service(let name, _, _, _) = first.endpoint {
-                self.serviceName = name
-                self.status("Found \(name), connecting…")
-            }
-            self.browser?.cancel()
-            self.browser = nil
-            // A Mac on hotel Wi-Fi with the cable to the PC sees the host on
-            // both; pin to wired Ethernet so the cable is the path. Wi-Fi-only
-            // and same-LAN setups are unaffected (nothing wired, or only the
-            // wired LAN interface).
-            let wired = first.interfaces.first { $0.type == .wiredEthernet }
-            self.connect(to: first.endpoint, via: wired)
-        }
-        self.browser = browser
-        browser.start(queue: queue)
     }
 
     // MARK: connection
@@ -203,14 +172,11 @@ final class HostConnection {
         connection = nil
         ready = false
         delegate?.connectionDidEnd(self, reason: reason)
-        // Go back to looking for a host; the host is probably just restarting.
+        guard options.reconnects else { return }
+        // Fixed-host mode: the host is probably just restarting, re-dial.
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self, self.connection == nil else { return }
-            if let fixed = self.options.fixedHost {
-                self.connect(to: fixed)
-            } else {
-                self.browse()
-            }
+            self.connect(to: self.options.endpoint, via: self.options.interface)
         }
     }
 
