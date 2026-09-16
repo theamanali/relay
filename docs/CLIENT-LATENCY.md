@@ -40,8 +40,9 @@ timestamps do not measure physical panel response or full input-to-photon latenc
 Verified: release compilation and tests for frame replacement, out-of-order
 callbacks, decoder generation changes, renderer selection, and offscreen GPU
 renders of synthetic NV12 buffers (limited/full range colour, orientation,
-letterboxing). Still pending:
-real stream color/orientation, mode switches, reconnect, and latency A/B testing.
+letterboxing). Colour and
+orientation were confirmed on a real stream (2026-09-16). Still pending: mode
+switches, reconnect, and recording the latency A/B numbers.
 Run from `client/`, keeping the host settings unchanged between runs:
 
 ```
