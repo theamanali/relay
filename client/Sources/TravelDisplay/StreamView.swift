@@ -160,7 +160,7 @@ final class StreamView: NSView {
     private static let exitHotkeyKeyCode: UInt16 = 12 // Q
     private static let exitHotkeyFlags: NSEvent.ModifierFlags = [.control, .option, .command]
 
-    private func isExitHotkey(_ event: NSEvent) -> Bool {
+    static func isExitHotkey(_ event: NSEvent) -> Bool {
         event.keyCode == StreamView.exitHotkeyKeyCode
             && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .isSuperset(of: StreamView.exitHotkeyFlags)
@@ -173,7 +173,7 @@ final class StreamView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if isExitHotkey(event) {
+        if Self.isExitHotkey(event) {
             releaseAllKeys()
             delegate?.streamViewRequestedExit(self)
             return

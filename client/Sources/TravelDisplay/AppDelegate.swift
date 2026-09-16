@@ -3,6 +3,13 @@
 import AppKit
 import Network
 
+/// Borderless windows must opt in to keyboard focus; ordering one in front
+/// alone does not make AppKit deliver keyboard events to its content view.
+final class StreamWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 struct LaunchOptions {
     var fixedHost: NWEndpoint? = nil
     var maxFPS = 120
@@ -73,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private let renderer = VideoRenderer()
     private var connection: HostConnection?
     private var cursorHidden = false
+    private var exitMonitor: Any?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -94,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         view.attach(videoLayer: renderer.layer)
         view.status = "Starting…"
 
-        window = NSWindow(
+        window = StreamWindow(
             contentRect: screen.frame,
             styleMask: [.borderless],
             backing: .buffered,
@@ -108,6 +116,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         window.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
         window.acceptsMouseMovedEvents = true
         window.delegate = self
+        // Keep the escape hatch independent of which view (or PIN field) has
+        // focus. All other key events follow AppKit's normal responder chain.
+        exitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, StreamView.isExitHotkey(event) else { return event }
+            self.view.releaseAllKeys()
+            if NSApp.modalWindow != nil {
+                // The pairing callback treats this as Cancel and terminates
+                // after runModal() has unwound.
+                NSApp.abortModal()
+            } else {
+                NSApp.terminate(nil)
+            }
+            return nil
+        }
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
@@ -136,6 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let exitMonitor {
+            NSEvent.removeMonitor(exitMonitor)
+            self.exitMonitor = nil
+        }
         view.releaseAllKeys()
         connection?.stop()
         setCursorHidden(false)
@@ -146,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     // MARK: window focus -> cursor / stuck keys
 
     func windowDidBecomeKey(_ notification: Notification) {
+        window.makeFirstResponder(view)
         setCursorHidden(true)
     }
 
