@@ -50,7 +50,8 @@ drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`
   HKDF info string and `TDH2` handshake magic, which stay so pairings survive. Both state
   directories are moved from the old name automatically on first run. On the PC the
   installer must be re-run once (new task and firewall names; it removes the old ones).
-  The repo directory / GitHub name is still `travel-display`.
+  GitHub repo is `theamanali/relay` (old `travel-display` URLs redirect); a local clone
+  directory may still be called `travel-display`.
 
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
