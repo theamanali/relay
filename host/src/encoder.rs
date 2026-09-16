@@ -91,10 +91,10 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
 
     // --- capture graph -----------------------------------------------------
     let mut graph = format!(
-        // The Mac renders its pointer locally so cursor motion never waits for
-        // capture, encoding, transport and decode. Capturing Windows' pointer
-        // too would show a second, delayed cursor behind it.
-        "ddagrab=output_idx={}:framerate={}:draw_mouse=0",
+        // Keep Windows' cursor in the captured display. This lets the same
+        // streamed pointer reflect input from either the Mac or a mouse
+        // connected directly to the PC.
+        "ddagrab=output_idx={}:framerate={}:draw_mouse=1",
         cfg.output_idx, cfg.fps
     );
     if software || cross {
@@ -533,7 +533,7 @@ mod tests {
         assert!(args.contains(&"d3d11va=hw:0".to_string()));
         let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
         assert!(!graph.contains("hwdownload"), "same adapter must stay on the GPU");
-        assert!(graph.contains("draw_mouse=0"), "the Mac renders the cursor locally");
+        assert!(graph.contains("draw_mouse=1"), "Windows' cursor must be captured");
         assert!(args.contains(&"p4".to_string()));
         for (option, value) in [
             ("-fps_mode", "passthrough"),

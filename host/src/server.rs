@@ -15,7 +15,6 @@ use windows::Win32::System::Power::{
 };
 
 use crate::crypto::{self, Identity, PairLimiter, PeerList, SecureReader, SecureWriter};
-use crate::cursor::CursorTracker;
 use crate::display::{self, Mode, Monitor, OutputLocation, Placement};
 use crate::driver::{Attachment, VirtualDisplay};
 use crate::encoder::{Encoder, EncoderConfig, Quality};
@@ -389,14 +388,10 @@ fn pump(
     let mut encoder_wait = Duration::ZERO;
     let mut send_time = Duration::ZERO;
     let mut max_send = Duration::ZERO;
-    let mut cursor = CursorTracker::new();
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
-        }
-        if let Some(update) = cursor.poll() {
-            tx.send(msg::CURSOR, 0, &update.payload())?;
         }
         let read_at = Instant::now();
         let Some(au) = encoder.next_access_unit()? else {
@@ -462,14 +457,6 @@ fn read_loop(
             msg::MOUSE_MOVE if p.len() >= 4 => {
                 if let Some(inj) = &injector {
                     inj.mouse_move(u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]));
-                }
-            }
-            msg::MOUSE_MOVE_RELATIVE if p.len() >= 4 => {
-                if let Some(inj) = &injector {
-                    inj.mouse_move_relative(
-                        i16::from_be_bytes([p[0], p[1]]),
-                        i16::from_be_bytes([p[2], p[3]]),
-                    );
                 }
             }
             msg::MOUSE_BUTTON if p.len() >= 2 => {

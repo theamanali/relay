@@ -137,7 +137,7 @@ If the client stops answering PINGs for 5 s the host closes the connection.
 | 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u8 codec`, `u8 reserved` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
-| 0x05 | CURSOR         | Hidden: `u8 visible = 0`. Visible fallback: `u8 visible = 1`, `u8 format = 0`. Shape: `u8 visible = 1`, `u8 format = 1` (premultiplied BGRA), `u16 width`, `u16 height`, `u16 hotspot_x`, `u16 hotspot_y`, then `width * height * 4` bytes. Sent only when visibility or shape changes; macOS moves the cursor locally. |
+| 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
 | 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired) |
 | 0x07 | PING           | `u64 host_time_us` |
 
@@ -159,7 +159,6 @@ from the last one it saw.
 | 0x91 | MOUSE_BUTTON | `u8 button` (0 left, 1 right, 2 middle, 3 back, 4 forward), `u8 down` |
 | 0x92 | MOUSE_WHEEL  | `i16 dx`, `i16 dy` — Windows wheel units, 120 = one notch; positive dy scrolls up (content moves down), positive dx scrolls right |
 | 0x93 | KEY          | `u16 hid_usage` (USB HID Keyboard/Keypad page 0x07), `u8 down` |
-| 0x94 | MOUSE_MOVE_RELATIVE | `i16 dx`, `i16 dy` — relative mouse motion for games that hide/confine the cursor |
 
 CLIENT_HELLO `flags`: bit 0 = client wants to send input. `codecs` bitmask:
 bit 0 = H.264, bit 1 = HEVC, bit 2 = AV1. `width_px`/`height_px` are the
@@ -170,11 +169,6 @@ request; the host may answer with a lower `fps` in STREAM_START.
 Keys are sent as HID usages so the protocol is platform-neutral; the client
 decides how macOS modifiers map (default: ⌘→Ctrl, ⌥→Alt, ⌃→Win) and the host
 translates HID usages to PS/2 scan codes for `SendInput`.
-
-While CURSOR reports a visible pointer, the client sends absolute MOUSE_MOVE
-positions and displays the supplied Windows shape at the Mac's local pointer.
-When Windows hides the pointer (the usual fullscreen-game capture state), the
-client hides and detaches its local pointer and sends MOUSE_MOVE_RELATIVE deltas.
 
 ## Notes
 

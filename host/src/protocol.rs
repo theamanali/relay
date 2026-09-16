@@ -25,7 +25,6 @@ pub mod msg {
     pub const MOUSE_BUTTON: u8 = 0x91;
     pub const MOUSE_WHEEL: u8 = 0x92;
     pub const KEY: u8 = 0x93;
-    pub const MOUSE_MOVE_RELATIVE: u8 = 0x94;
     // pairing (client -> host proof, host -> client verdict)
     pub const PAIR: u8 = 0xA0;
 }

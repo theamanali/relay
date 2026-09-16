@@ -48,7 +48,7 @@ struct LaunchOptions {
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
-                Exit with ⌃⌥⌘Q. Toggle relative game-mouse mode with ⌃⌥⌘M.
+                Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)
             default:
@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var view: StreamView!
     private let renderer = VideoRenderer()
     private var connection: HostConnection?
+    private var cursorHidden = false
     private var exitMonitor: Any?
 
     init(options: LaunchOptions) {
@@ -133,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         NSApp.activate(ignoringOtherApps: true)
-        NSCursor.arrow.set()
+        setCursorHidden(true)
 
         let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         let c: HostConnection
@@ -161,9 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSEvent.removeMonitor(exitMonitor)
             self.exitMonitor = nil
         }
-        view.prepareForExit()
         view.releaseAllKeys()
         connection?.stop()
+        setCursorHidden(false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -172,12 +173,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
         window.makeFirstResponder(view)
-        view.setWindowActive(true)
+        setCursorHidden(true)
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        view.setWindowActive(false)
+        setCursorHidden(false)
         view.releaseAllKeys()
+    }
+
+    private func setCursorHidden(_ hidden: Bool) {
+        guard hidden != cursorHidden else { return }
+        cursorHidden = hidden
+        if hidden { NSCursor.hide() } else { NSCursor.unhide() }
     }
 
     // MARK: HostConnectionDelegate (called on the connection queue)
@@ -193,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             let kioskLevel = self.window.level
             self.window.level = .normal
             NSApp.presentationOptions = []
+            self.setCursorHidden(false)
 
             let alert = NSAlert()
             alert.messageText = "Pair with \(host)"
@@ -210,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSApp.presentationOptions = [.hideDock, .hideMenuBar]
             self.window.makeKeyAndOrderFront(nil)
             self.window.makeFirstResponder(self.view)
-            NSCursor.arrow.set()
+            self.setCursorHidden(true)
             guard response == .alertFirstButtonReturn else {
                 // Cancel means "let me out", not "ask again in a second".
                 completion(nil)
@@ -224,7 +232,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
         renderer.streamDidStart(stream)
         DispatchQueue.main.async {
-            self.view.resetRemoteCursor()
             self.view.streamSize = self.renderer.streamSize
             self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
@@ -242,14 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
     }
 
-    func connection(_ c: HostConnection, didUpdateCursor cursor: Proto.CursorUpdate) {
-        DispatchQueue.main.async { self.view.applyCursor(cursor) }
-    }
-
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         renderer.reset()
         DispatchQueue.main.async {
-            self.view.resetRemoteCursor()
             self.view.releaseAllKeys()
             self.view.status = "Disconnected: \(reason)"
         }

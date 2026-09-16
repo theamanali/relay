@@ -26,7 +26,6 @@ enum Proto {
         case mouseButton = 0x91
         case mouseWheel = 0x92
         case key = 0x93
-        case mouseMoveRelative = 0x94
         case pair = 0xA0
     }
 
@@ -72,47 +71,6 @@ enum Proto {
             height = Int(p.be16(at: 2))
             fps = Int(p.be16(at: 4))
             self.codec = codec
-        }
-    }
-
-    struct CursorUpdate {
-        let visible: Bool
-        let width: Int
-        let height: Int
-        let hotspotX: Int
-        let hotspotY: Int
-        let bgra: Data?
-
-        init?(_ payload: Data) {
-            guard let first = payload.first else { return nil }
-            visible = first != 0
-            if !visible {
-                width = 0
-                height = 0
-                hotspotX = 0
-                hotspotY = 0
-                bgra = nil
-                return
-            }
-            guard payload.count >= 2 else { return nil }
-            let format = payload[payload.startIndex + 1]
-            if format == 0 {
-                width = 0
-                height = 0
-                hotspotX = 0
-                hotspotY = 0
-                bgra = nil
-                return
-            }
-            guard format == 1, payload.count >= 10 else { return nil }
-            width = Int(payload.be16(at: 2))
-            height = Int(payload.be16(at: 4))
-            hotspotX = Int(payload.be16(at: 6))
-            hotspotY = Int(payload.be16(at: 8))
-            guard width > 0, height > 0, width <= 256, height <= 256,
-                  hotspotX < width, hotspotY < height,
-                  payload.count == 10 + width * height * 4 else { return nil }
-            bgra = payload.subdata(in: (payload.startIndex + 10)..<payload.endIndex)
         }
     }
 
@@ -166,13 +124,6 @@ enum Proto {
         p.appendBE16(UInt16(clamping: Int((x.clamped01) * 65535)))
         p.appendBE16(UInt16(clamping: Int((y.clamped01) * 65535)))
         return message(.mouseMove, payload: p)
-    }
-
-    static func mouseMoveRelative(dx: Int16, dy: Int16) -> Data {
-        var p = Data(capacity: 4)
-        p.appendBE16(UInt16(bitPattern: dx))
-        p.appendBE16(UInt16(bitPattern: dy))
-        return message(.mouseMoveRelative, payload: p)
     }
 
     static func mouseButton(_ button: UInt8, down: Bool) -> Data {

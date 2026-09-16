@@ -2,7 +2,6 @@
 // events into protocol messages.
 
 import AppKit
-import CoreGraphics
 import Foundation
 
 protocol StreamViewDelegate: AnyObject {
@@ -24,16 +23,8 @@ final class StreamView: NSView {
     private var heldKeys = Set<UInt16>()
     private var wheelRemainderX = 0.0
     private var wheelRemainderY = 0.0
-    private var relativeRemainderX = 0.0
-    private var relativeRemainderY = 0.0
     private var trackingArea: NSTrackingArea?
     private let statusLabel = NSTextField(labelWithString: "")
-    private var remoteCursor = NSCursor.arrow
-    private var remoteCursorVisible = true
-    private var cursorHidden = false
-    private var windowActive = true
-    private var relativeInputActive = false
-    private var relativeInputForced = false
 
     var status: String = "" {
         didSet {
@@ -89,98 +80,6 @@ final class StreamView: NSView {
         trackingArea = ta
     }
 
-    override func resetCursorRects() {
-        if remoteCursorVisible {
-            // Windows' cursor is excluded from video. Its current shape is
-            // reproduced here and motion remains entirely local.
-            addCursorRect(bounds, cursor: remoteCursor)
-        }
-    }
-
-    func applyCursor(_ update: Proto.CursorUpdate) {
-        remoteCursorVisible = update.visible
-        if update.visible {
-            remoteCursor = makeCursor(update) ?? .arrow
-        }
-        window?.invalidateCursorRects(for: self)
-        updatePointerMode()
-    }
-
-    func resetRemoteCursor() {
-        remoteCursor = .arrow
-        remoteCursorVisible = true
-        relativeInputForced = false
-        window?.invalidateCursorRects(for: self)
-        updatePointerMode()
-    }
-
-    func setWindowActive(_ active: Bool) {
-        windowActive = active
-        updatePointerMode()
-    }
-
-    func prepareForExit() {
-        windowActive = false
-        remoteCursorVisible = true
-        relativeInputForced = false
-        updatePointerMode()
-    }
-
-    private func makeCursor(_ update: Proto.CursorUpdate) -> NSCursor? {
-        guard let bgra = update.bgra,
-              let provider = CGDataProvider(data: bgra as CFData) else { return nil }
-        let alpha = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
-        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(alpha)
-        guard let image = CGImage(
-            width: update.width,
-            height: update.height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: update.width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: bitmapInfo,
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        ) else { return nil }
-        let scale = max(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1, 1)
-        let pointSize = NSSize(
-            width: CGFloat(update.width) / scale,
-            height: CGFloat(update.height) / scale
-        )
-        let nsImage = NSImage(cgImage: image, size: pointSize)
-        return NSCursor(
-            image: nsImage,
-            hotSpot: NSPoint(
-                x: CGFloat(update.hotspotX) / scale,
-                y: CGFloat(update.hotspotY) / scale
-            )
-        )
-    }
-
-    private func updatePointerMode() {
-        let relative = forwardInput && windowActive && (relativeInputForced || !remoteCursorVisible)
-        guard relative != relativeInputActive else {
-            if remoteCursorVisible { remoteCursor.set() }
-            return
-        }
-        relativeInputActive = relative
-        relativeRemainderX = 0
-        relativeRemainderY = 0
-        // In relative mode the hardware pointer may move forever without
-        // reaching a screen edge; Windows receives only its movement deltas.
-        CGAssociateMouseAndMouseCursorPosition(relative ? 0 : 1)
-        setCursorHidden(relative)
-        if !relative, remoteCursorVisible { remoteCursor.set() }
-    }
-
-    private func setCursorHidden(_ hidden: Bool) {
-        guard hidden != cursorHidden else { return }
-        cursorHidden = hidden
-        if hidden { NSCursor.hide() } else { NSCursor.unhide() }
-    }
-
     /// Release every key we told the host is down (connection dropped, app
     /// resigned, etc.) so nothing stays stuck on the Windows side.
     func releaseAllKeys() {
@@ -213,25 +112,7 @@ final class StreamView: NSView {
     }
 
     private func sendMove(_ event: NSEvent) {
-        guard forwardInput else { return }
-        if relativeInputActive {
-            relativeRemainderX += event.deltaX
-            relativeRemainderY += event.deltaY
-            let dx = relativeRemainderX.rounded(.towardZero)
-            let dy = relativeRemainderY.rounded(.towardZero)
-            relativeRemainderX -= dx
-            relativeRemainderY -= dy
-            guard dx != 0 || dy != 0 else { return }
-            delegate?.streamView(
-                self,
-                send: Proto.mouseMoveRelative(
-                    dx: Int16(clamping: Int(dx)),
-                    dy: Int16(clamping: Int(dy))
-                )
-            )
-            return
-        }
-        guard let (x, y) = normalized(convert(event.locationInWindow, from: nil)) else { return }
+        guard forwardInput, let (x, y) = normalized(convert(event.locationInWindow, from: nil)) else { return }
         delegate?.streamView(self, send: Proto.mouseMove(x: x, y: y))
     }
 
@@ -278,16 +159,9 @@ final class StreamView: NSView {
 
     private static let exitHotkeyKeyCode: UInt16 = 12 // Q
     private static let exitHotkeyFlags: NSEvent.ModifierFlags = [.control, .option, .command]
-    private static let relativeHotkeyKeyCode: UInt16 = 46 // M
 
     static func isExitHotkey(_ event: NSEvent) -> Bool {
         event.keyCode == StreamView.exitHotkeyKeyCode
-            && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                .isSuperset(of: StreamView.exitHotkeyFlags)
-    }
-
-    private static func isRelativeHotkey(_ event: NSEvent) -> Bool {
-        event.keyCode == StreamView.relativeHotkeyKeyCode
             && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .isSuperset(of: StreamView.exitHotkeyFlags)
     }
@@ -302,11 +176,6 @@ final class StreamView: NSView {
         if Self.isExitHotkey(event) {
             releaseAllKeys()
             delegate?.streamViewRequestedExit(self)
-            return
-        }
-        if Self.isRelativeHotkey(event) {
-            relativeInputForced.toggle()
-            updatePointerMode()
             return
         }
         // Auto-repeat is handled by Windows itself once the key is down.
