@@ -226,6 +226,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         var rows: [(label: String, value: String)] = []
         if nickname != nil { rows.append(("Name:", host.name)) }
         rows += host.facts.rows
+        if let ip = host.connectAddress { rows.append(("IP:", ip)) }
         rows.append(("Link:", host.allLinks))
         if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
         hoverRows = rows

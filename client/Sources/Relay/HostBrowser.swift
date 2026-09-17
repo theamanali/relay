@@ -18,14 +18,26 @@ struct DiscoveredHost {
     /// Wired interface to pin the connection to, when the host was seen on one.
     var wiredInterface: NWInterface? { interfaces.first { $0.type == .wiredEthernet } }
 
+    /// This Mac's interfaces the host was seen on, in the order the connection
+    /// prefers them (cable first, since the dial is pinned to it).
+    private var rankedInterfaces: [NWInterface] {
+        interfaces
+            .filter { $0.type != .loopback }
+            .sorted { Self.rank($0.type) < Self.rank($1.type) }
+    }
+
     /// The link the connection will use: the cable when the host is seen on
     /// one (the dial is pinned to it), otherwise the best of the rest.
     var preferredLink: String {
-        let ranked = interfaces
-            .filter { $0.type != .loopback }
-            .sorted { Self.rank($0.type) < Self.rank($1.type) }
-        guard let best = ranked.first else { return "This MacBook" }
+        guard let best = rankedInterfaces.first else { return "This MacBook" }
         return Self.label(best)
+    }
+
+    /// The advertised address the connection will dial: the one on the subnet
+    /// of the preferred interface. A Tailscale or other-network address never
+    /// matches, which is the point.
+    var connectAddress: String? {
+        LocalNetworks.address(among: facts.ips, reachedVia: rankedInterfaces.map(\.name))
     }
 
     /// Every link the announcement arrived on, loopback aside (for the tooltip).
@@ -82,25 +94,7 @@ struct HostFacts: Equatable {
         if !cpu.isEmpty { out.append(("CPU:", cpu)) }
         if ramGB > 0 { out.append(("RAM:", "\(ramGB) GB")) }
         if !gpu.isEmpty { out.append(("GPU:", gpu)) }
-        for ip in ips {
-            out.append(("IP:", ip + Self.annotation(for: ip)))
-        }
         return out
-    }
-
-    /// Name the address ranges a user would otherwise puzzle over.
-    static func annotation(for ip: String) -> String {
-        let parts = ip.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4 else { return "" }
-        if parts[0] == 169, parts[1] == 254 {
-            // No DHCP on that link (e.g. a direct cable or an unmanaged switch).
-            return " (self-assigned, no DHCP)"
-        }
-        if parts[0] == 100, (64...127).contains(parts[1]) {
-            // 100.64.0.0/10: Tailscale (and other CGNAT overlays).
-            return " (Tailscale)"
-        }
-        return ""
     }
 }
 
