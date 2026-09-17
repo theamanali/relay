@@ -187,8 +187,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         hostName = host.name
         displayedName = nickname ?? host.name
         nameLabel.stringValue = displayedName
-        var linkOnly = host.linkDescription
-        if linkOnly.hasPrefix("via ") { linkOnly.removeFirst(4) }
+        let linkOnly = host.preferredLink
         // A renamed host keeps its real name in the detail line.
         let link = nickname != nil && !host.name.isEmpty ? host.name + " · " + linkOnly : linkOnly
 
@@ -202,7 +201,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         // Tooltip: facts about the device only.
         var facts: [String] = []
         if nickname != nil { facts.append(host.name) }
-        facts.append("Reachable over " + linkOnly)
+        facts.append("Reachable over " + host.allLinks)
         if let key = host.publicKey { facts.append("Key fingerprint \(fingerprint(key))") }
         facts.append(state == .paired ? "Paired with this Mac" : "Not paired yet")
         toolTip = facts.joined(separator: "\n")

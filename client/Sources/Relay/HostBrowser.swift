@@ -16,19 +16,42 @@ struct DiscoveredHost {
     /// Wired interface to pin the connection to, when the host was seen on one.
     var wiredInterface: NWInterface? { interfaces.first { $0.type == .wiredEthernet } }
 
-    /// This Mac's interfaces the announcement arrived on (not the PC's NICs).
-    var linkDescription: String {
-        let kinds = interfaces.map { i -> String in
-            switch i.type {
-            case .wiredEthernet: return "Ethernet"
-            case .wifi: return "Wi-Fi"
-            case .cellular: return "Cellular"
-            case .loopback: return "Local"
-            default: return i.name
-            }
-        }
+    /// The link the connection will use: the cable when the host is seen on
+    /// one (the dial is pinned to it), otherwise the best of the rest.
+    var preferredLink: String {
+        let ranked = interfaces
+            .filter { $0.type != .loopback }
+            .sorted { Self.rank($0.type) < Self.rank($1.type) }
+        guard let best = ranked.first else { return "This Mac" }
+        return Self.label(best)
+    }
+
+    /// Every link the announcement arrived on, loopback aside (for the tooltip).
+    var allLinks: String {
+        let kinds = interfaces.filter { $0.type != .loopback }.map(Self.label)
         let unique = Array(NSOrderedSet(array: kinds)) as? [String] ?? kinds
-        return "via " + unique.joined(separator: ", ")
+        return unique.isEmpty ? "This Mac" : unique.joined(separator: ", ")
+    }
+
+    private static func rank(_ type: NWInterface.InterfaceType) -> Int {
+        switch type {
+        case .wiredEthernet: return 0
+        case .wifi: return 1
+        case .other: return 2
+        case .cellular: return 3
+        default: return 4
+        }
+    }
+
+    private static func label(_ i: NWInterface) -> String {
+        switch i.type {
+        case .wiredEthernet: return "Ethernet"
+        case .wifi: return "Wi-Fi"
+        case .cellular: return "Cellular"
+        case .loopback: return "This Mac"
+        case .other: return i.name.hasPrefix("utun") ? "VPN" : i.name
+        @unknown default: return i.name
+        }
     }
 }
 

@@ -145,7 +145,7 @@ swift run Relay            # dev
 ```
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
-**Available**, each with its link type (hover for details such as the key
+**Available**, each with the link the connection will use (hover for every link and the key
 fingerprint). For an available PC the button reads **Pair**: it
 asks for the PIN (a sheet on the list), exchanges keys and moves the PC to
 *Paired* — nothing is streamed yet. For a paired PC, Return, double-click or
