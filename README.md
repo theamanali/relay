@@ -69,7 +69,7 @@ small encrypted protocol between them.
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
-| Mac host picker | implemented: Paired / Not paired sections, return-to-list on disconnect, `--host` bypass. Uses the Bonjour TXT `pk` key when the host advertises it (pending on the host), name match until then |
+| Mac host picker | implemented: Paired / Available sections with pairing state and fingerprint per host, return-to-list on disconnect, `--host` bypass. Uses the Bonjour TXT `pk` key when the host advertises it (pending on the host), name match until then |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
@@ -145,11 +145,13 @@ swift run Relay            # dev
 ```
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
-**Not paired**. Return, double-click or *Connect* starts the session in a
-full-screen kiosk window; when the session ends the list comes back with the
-same host selected. Two popups under the list choose the stream mode — native,
-75% or 50% of the panel the window is on (labelled in pixels) and 120 or 60 Hz
-(120 only where the panel supports it); the last choice is remembered. This
+**Available**, each with its link type, pairing state and key fingerprint (so you can
+check it against the PIN prompt). Return, double-click or *Connect* starts the
+session in a full-screen kiosk window; when the session ends the list comes back
+with the same host selected. Under the list a popup chooses the resolution — native,
+75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
+control chooses 120 or 60 Hz (shown only where the panel supports both); the last
+choice is remembered. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record) or, for hosts that don't advertise it yet, from

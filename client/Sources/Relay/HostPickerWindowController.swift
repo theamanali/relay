@@ -1,5 +1,6 @@
-// The launch window: discovered hosts in two sections, paired and not.
-// Return / double-click / Connect starts a session; closing the window quits.
+// The launch window: a compact utility panel listing discovered hosts under
+// Paired / Available. Return / double-click / Connect starts a session;
+// closing the window quits.
 
 import AppKit
 
@@ -10,43 +11,36 @@ protocol HostPickerDelegate: AnyObject {
 final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     weak var pickerDelegate: HostPickerDelegate?
 
-    private enum Row {
-        case header(String)
-        case paired(PairingClassifier.Entry)
-        case unpaired(DiscoveredHost)
-        case empty(String)
-
-        var host: DiscoveredHost? {
-            switch self {
-            case .paired(let e): return e.host
-            case .unpaired(let h): return h
-            default: return nil
-            }
-        }
-    }
-
     private let table = NSTableView()
-    private let statusLabel = NSTextField(labelWithString: "Looking for hosts…")
+    private let scroll = NSScrollView()
+    private let emptyState = NSStackView()
+    private let spinner = NSProgressIndicator()
+    private let statusLabel = NSTextField(labelWithString: "")
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
+    private let helpButton = NSButton(title: "", target: nil, action: nil)
     private let resolutionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let refreshPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let refreshSegment = NSSegmentedControl()
     private var nativePixelSize = CGSize(width: 2, height: 2)
     private var maxRefresh = 60
-    /// Called when the user changes either popup.
+    /// Called when the user changes either control.
     var onModeChange: ((StreamMode) -> Void)?
-    private var rows: [Row] = []
+    private var rows: [PickerRow] = []
     private var hosts: [DiscoveredHost] = []
     /// Name (or key) to select when the list next changes, e.g. after a disconnect.
     private var wanted: (key: Data?, name: String)?
+    private var listVisible = false
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Relay"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -56,30 +50,105 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func build() {
-        guard let content = window?.contentView else { return }
+    // MARK: layout
 
+    private func build() {
+        guard let window, let content = window.contentView else { return }
+        content.wantsLayer = true
+
+        // Header: hero glyph, title, one-line purpose.
+        let hero = NSImageView()
+        hero.image = NSImage(systemSymbolName: "desktopcomputer.and.macbook", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "display.2", accessibilityDescription: nil)
+        hero.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 40, weight: .regular)
+            .applying(.init(hierarchicalColor: .controlAccentColor))
+        hero.setAccessibilityElement(false)
+        let title = NSTextField(labelWithString: "Relay")
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        let subtitle = NSTextField(labelWithString: "Use this Mac as your PC's display.")
+        subtitle.font = .systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
+        let header = NSStackView(views: [hero, title, subtitle])
+        header.orientation = .vertical
+        header.alignment = .centerX
+        header.spacing = 2
+        header.setCustomSpacing(10, after: hero)
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        // List.
         let column = NSTableColumn(identifier: .init("host"))
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         table.headerView = nil
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 44
+        table.rowHeight = 52
         table.style = .inset
         table.selectionHighlightStyle = .regular
+        table.floatsGroupRows = false
+        table.backgroundColor = .clear
         table.doubleAction = #selector(connect)
         table.target = self
         table.allowsEmptySelection = true
+        table.setAccessibilityLabel("PCs")
 
-        let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
+        scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alphaValue = 0
+        scroll.isHidden = true
 
+        // Empty state, shown until the first host appears.
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        let looking = NSTextField(labelWithString: "Looking for your PC…")
+        looking.font = .systemFont(ofSize: 13)
+        looking.textColor = .secondaryLabelColor
+        let hint = NSTextField(wrappingLabelWithString: "Open Relay on the PC and connect it to this Mac or the same network.")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .tertiaryLabelColor
+        hint.alignment = .center
+        hint.preferredMaxLayoutWidth = 300
+        emptyState.setViews([spinner, looking, hint], in: .center)
+        emptyState.orientation = .vertical
+        emptyState.alignment = .centerX
+        emptyState.spacing = 8
+        emptyState.setCustomSpacing(4, after: looking)
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
+
+        let listContainer = NSView()
+        listContainer.translatesAutoresizingMaskIntoConstraints = false
+        listContainer.addSubview(scroll)
+        listContainer.addSubview(emptyState)
+
+        // Footer: mode controls, then help · status · Connect.
+        resolutionPopup.target = self
+        resolutionPopup.action = #selector(modeChanged)
+        resolutionPopup.setAccessibilityLabel("Resolution")
+        resolutionPopup.toolTip = "Resolution to stream"
+        refreshSegment.target = self
+        refreshSegment.action = #selector(modeChanged)
+        refreshSegment.trackingMode = .selectOne
+        refreshSegment.segmentStyle = .rounded
+        refreshSegment.setAccessibilityLabel("Refresh rate")
+        refreshSegment.toolTip = "Refresh rate"
+        let modeRow = NSStackView(views: [resolutionPopup, refreshSegment])
+        modeRow.orientation = .horizontal
+        modeRow.alignment = .centerY
+        modeRow.spacing = 12
+        modeRow.translatesAutoresizingMaskIntoConstraints = false
+
+        helpButton.bezelStyle = .helpButton
+        helpButton.target = self
+        helpButton.action = #selector(showHelp)
+        helpButton.setAccessibilityLabel("Pairing help")
+        helpButton.translatesAutoresizingMaskIntoConstraints = false
+
+        statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
-        statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -90,73 +159,91 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         connectButton.isEnabled = false
         connectButton.translatesAutoresizingMaskIntoConstraints = false
 
-        resolutionPopup.target = self
-        resolutionPopup.action = #selector(modeChanged)
-        refreshPopup.target = self
-        refreshPopup.action = #selector(modeChanged)
-        let modeRow = NSStackView(views: [
-            NSTextField(labelWithString: "Resolution"), resolutionPopup,
-            NSTextField(labelWithString: "Refresh"), refreshPopup,
-        ])
-        modeRow.orientation = .horizontal
-        modeRow.spacing = 8
-        modeRow.setCustomSpacing(20, after: resolutionPopup)
-        modeRow.translatesAutoresizingMaskIntoConstraints = false
-
-        content.addSubview(scroll)
+        content.addSubview(header)
+        content.addSubview(listContainer)
         content.addSubview(modeRow)
+        content.addSubview(helpButton)
         content.addSubview(statusLabel)
         content.addSubview(connectButton)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: modeRow.topAnchor, constant: -12),
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: 44),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            header.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+
+            listContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
+            listContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+            listContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            listContainer.bottomAnchor.constraint(equalTo: modeRow.topAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: listContainer.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: listContainer.bottomAnchor),
+            emptyState.centerXAnchor.constraint(equalTo: listContainer.centerXAnchor),
+            emptyState.centerYAnchor.constraint(equalTo: listContainer.centerYAnchor),
+            emptyState.widthAnchor.constraint(lessThanOrEqualTo: listContainer.widthAnchor, constant: -40),
+
             modeRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             modeRow.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
             modeRow.bottomAnchor.constraint(equalTo: connectButton.topAnchor, constant: -14),
-            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
+
+            helpButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            helpButton.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(equalTo: helpButton.trailingAnchor, constant: 10),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
+            statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
             connectButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            connectButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            connectButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
             connectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
-        reload()
+        window.initialFirstResponder = table
+        spinner.startAnimation(nil)
     }
 
     // MARK: stream mode
 
-    /// Rebuild the popups for a screen. Keeps the current choice when it is
-    /// still offered, otherwise falls back to native / the highest rate.
+    /// Offer this screen's sizes and rates. Keeps the current choice when it
+    /// is still available, otherwise the closest.
     func configure(nativePixelSize: CGSize, maxRefresh: Int, initial: StreamMode? = nil) {
-        let keep = (initial ?? mode).clamped(toMaxRefresh: maxRefresh)
+        let keep = initial ?? mode
         self.nativePixelSize = nativePixelSize
         self.maxRefresh = maxRefresh
+
         resolutionPopup.removeAllItems()
-        for (i, entry) in StreamMode.sizes(native: nativePixelSize).enumerated() {
-            let pct = entry.scale == 1 ? "native" : "\(Int(entry.scale * 100))%"
-            resolutionPopup.addItem(withTitle: "\(entry.width) × \(entry.height) (\(pct))")
+        for (i, s) in StreamMode.sizes(native: nativePixelSize).enumerated() {
+            let name = s.scale == 1.0 ? "Native" : "\(Int(s.scale * 100))%"
+            resolutionPopup.addItem(withTitle: "\(name) (\(s.width) × \(s.height))")
             resolutionPopup.lastItem?.tag = i
         }
-        refreshPopup.removeAllItems()
-        for hz in StreamMode.refreshRates(max: maxRefresh) {
-            refreshPopup.addItem(withTitle: "\(hz) Hz")
-            refreshPopup.lastItem?.tag = hz
+
+        let rates = StreamMode.refreshRates(max: maxRefresh)
+        refreshSegment.segmentCount = rates.count
+        for (i, hz) in rates.enumerated() {
+            refreshSegment.setLabel("\(hz) Hz", forSegment: i)
+            refreshSegment.setTag(hz, forSegment: i)
+            refreshSegment.setWidth(64, forSegment: i)
         }
-        mode = keep
+        refreshSegment.isHidden = rates.count < 2
+
+        mode = keep.clamped(toMaxRefresh: maxRefresh)
     }
 
     var mode: StreamMode {
         get {
-            let scale = StreamMode.scales[max(0, min(StreamMode.scales.count - 1, resolutionPopup.selectedTag()))]
-            let refresh = refreshPopup.selectedTag() > 0 ? refreshPopup.selectedTag() : maxRefresh
+            let scaleIndex = resolutionPopup.selectedItem?.tag ?? 0
+            let scale = StreamMode.scales.indices.contains(scaleIndex) ? StreamMode.scales[scaleIndex] : 1.0
+            let seg = refreshSegment.selectedSegment
+            let refresh = seg >= 0 ? refreshSegment.tag(forSegment: seg) : maxRefresh
             return StreamMode(scale: scale, refresh: refresh)
         }
         set {
-            let m = newValue.clamped(toMaxRefresh: maxRefresh)
-            resolutionPopup.selectItem(withTag: StreamMode.scales.firstIndex(of: m.scale) ?? 0)
-            refreshPopup.selectItem(withTag: m.refresh)
+            let scaleIndex = StreamMode.scales.firstIndex(of: newValue.scale) ?? 0
+            resolutionPopup.selectItem(withTag: scaleIndex)
+            for i in 0..<refreshSegment.segmentCount where refreshSegment.tag(forSegment: i) == newValue.refresh {
+                refreshSegment.selectedSegment = i
+            }
+            if refreshSegment.selectedSegment < 0, refreshSegment.segmentCount > 0 {
+                refreshSegment.selectedSegment = 0
+            }
         }
     }
 
@@ -164,10 +251,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         onModeChange?(mode)
     }
 
-    // MARK: input from the app
+    // MARK: hosts + status
 
-    /// A message that outranks the host count (a disconnect reason, a
-    /// browse error) until the list next changes.
+    /// Footer text that overrides the host count until the list changes,
+    /// e.g. the reason a session ended.
     var status: String = "" {
         didSet { refreshStatus() }
     }
@@ -175,7 +262,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     func update(hosts: [DiscoveredHost]) {
         if hosts.map(\.name) != self.hosts.map(\.name) { status = "" }
         self.hosts = hosts
-        reload()
+        apply(PickerRows.build(hosts: hosts, known: ClientState.knownHosts()))
         refreshStatus()
     }
 
@@ -183,9 +270,9 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         if !status.isEmpty {
             statusLabel.stringValue = status
         } else if hosts.isEmpty {
-            statusLabel.stringValue = "Looking for hosts…"
+            statusLabel.stringValue = ""
         } else {
-            statusLabel.stringValue = hosts.count == 1 ? "1 host found" : "\(hosts.count) hosts found"
+            statusLabel.stringValue = hosts.count == 1 ? "1 PC found" : "\(hosts.count) PCs found"
         }
     }
 
@@ -193,17 +280,33 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     func preselect(key: Data?, name: String) {
         wanted = (key, name)
         applyPreselection()
+        updateConnectEnabled()
     }
 
-    private func reload() {
-        let selected = table.selectedRow >= 0 && table.selectedRow < rows.count ? rows[table.selectedRow].host : nil
-        let (paired, unpaired) = PairingClassifier.classify(hosts, known: ClientState.knownHosts())
-        rows = [.header("Paired")]
-        rows += paired.isEmpty ? [.empty("No paired hosts in range")] : paired.map(Row.paired)
-        rows.append(.header("Not paired"))
-        rows += unpaired.isEmpty ? [.empty(hosts.isEmpty ? "Looking for hosts…" : "None")] : unpaired.map(Row.unpaired)
-        table.reloadData()
-        if let selected, let i = rows.firstIndex(where: { $0.host?.name == selected.name }) {
+    private var selectedHost: DiscoveredHost? {
+        let i = table.selectedRow
+        return i >= 0 && i < rows.count ? rows[i].host : nil
+    }
+
+    private func apply(_ newRows: [PickerRow]) {
+        let selectedName = selectedHost?.name
+        let diff = PickerRows.diff(old: rows, new: newRows)
+        let visible = window?.isVisible ?? false
+        let wasListVisible = listVisible
+        rows = newRows
+        setListVisible(!newRows.isEmpty, animated: visible)
+        if diff.needsFullReload || !visible || !wasListVisible {
+            table.reloadData()
+        } else {
+            table.beginUpdates()
+            table.removeRows(at: diff.removed, withAnimation: .effectFade)
+            table.insertRows(at: diff.inserted, withAnimation: .slideDown)
+            table.endUpdates()
+            if !diff.reloaded.isEmpty {
+                table.reloadData(forRowIndexes: diff.reloaded, columnIndexes: [0])
+            }
+        }
+        if let selectedName, let i = rows.firstIndex(where: { $0.host?.name == selectedName }) {
             table.selectRowIndexes([i], byExtendingSelection: false)
         } else {
             applyPreselection()
@@ -211,7 +314,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         if table.selectedRow < 0, let first = rows.firstIndex(where: { $0.host != nil }) {
             table.selectRowIndexes([first], byExtendingSelection: false)
         }
-        connectButton.isEnabled = table.selectedRow >= 0 && rows[table.selectedRow].host != nil
+        updateConnectEnabled()
     }
 
     private func applyPreselection() {
@@ -227,10 +330,70 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         }
     }
 
+    private func updateConnectEnabled() {
+        connectButton.isEnabled = selectedHost != nil
+    }
+
+    /// Crossfade between the list and the "looking" placeholder.
+    private func setListVisible(_ show: Bool, animated: Bool) {
+        guard show != listVisible else { return }
+        listVisible = show
+        let incoming: NSView = show ? scroll : emptyState
+        let outgoing: NSView = show ? emptyState : scroll
+        if show { spinner.stopAnimation(nil) } else { spinner.startAnimation(nil) }
+        incoming.isHidden = false
+        guard animated else {
+            incoming.alphaValue = 1
+            outgoing.alphaValue = 0
+            outgoing.isHidden = true
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            incoming.animator().alphaValue = 1
+            outgoing.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, self.listVisible == show else { return }
+            outgoing.isHidden = true
+        })
+    }
+
     @objc private func connect() {
-        let i = table.selectedRow
-        guard i >= 0, i < rows.count, let host = rows[i].host else { return }
+        guard let host = selectedHost else { return }
         pickerDelegate?.picker(self, didChoose: host)
+    }
+
+    @objc private func showHelp() {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let title = NSTextField(labelWithString: "Pairing")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let body = NSTextField(wrappingLabelWithString:
+            "The first time you connect to a PC, Relay asks for the PIN shown in the Relay window on that PC. " +
+            "Check that the fingerprint next to the PC's name matches the one in the PIN request. " +
+            "You only pair once per PC.")
+        body.font = .systemFont(ofSize: 11)
+        body.textColor = .secondaryLabelColor
+        body.preferredMaxLayoutWidth = 280
+        let stack = NSStackView(views: [title, body])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let vc = NSViewController()
+        vc.view = NSView()
+        vc.view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: vc.view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: vc.view.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: vc.view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: vc.view.trailingAnchor),
+            vc.view.widthAnchor.constraint(equalToConstant: 308),
+        ])
+        popover.contentViewController = vc
+        popover.show(relativeTo: helpButton.bounds, of: helpButton, preferredEdge: .maxY)
     }
 
     // MARK: table
@@ -238,8 +401,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
-        if case .header = rows[row] { return true }
-        return false
+        rows[row].isHeader
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
@@ -247,57 +409,25 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        switch rows[row] {
-        case .header: return 24
-        case .empty: return 28
-        default: return 44
-        }
+        rows[row].isHeader ? 28 : 52
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        connectButton.isEnabled = table.selectedRow >= 0 && rows[table.selectedRow].host != nil
+        updateConnectEnabled()
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch rows[row] {
-        case .header(let title):
-            let label = NSTextField(labelWithString: title.uppercased())
-            label.font = .systemFont(ofSize: 11, weight: .semibold)
-            label.textColor = .secondaryLabelColor
-            return label
-        case .empty(let text):
-            let label = NSTextField(labelWithString: text)
-            label.font = .systemFont(ofSize: 13)
-            label.textColor = .tertiaryLabelColor
-            return label
-        case .paired(let entry):
-            var detail = entry.host.linkDescription
-            if let key = entry.host.publicKey {
-                detail += " · " + fingerprint(key)
-            } else if entry.byNameOnly {
-                detail += " · name match, key not advertised"
-            }
-            return hostCell(name: entry.host.name, detail: detail)
-        case .unpaired(let host):
-            var detail = host.linkDescription + " · needs the PIN shown on the PC"
-            if let key = host.publicKey { detail += " · " + fingerprint(key) }
-            return hostCell(name: host.name, detail: detail)
+        case .header(let section):
+            let view = tableView.makeView(withIdentifier: SectionHeaderView.identifier, owner: nil) as? SectionHeaderView
+                ?? SectionHeaderView(frame: .zero)
+            view.configure(section: section)
+            return view
+        case .host(let host, let state):
+            let view = tableView.makeView(withIdentifier: HostRowView.identifier, owner: nil) as? HostRowView
+                ?? HostRowView(frame: .zero)
+            view.configure(host: host, state: state)
+            return view
         }
-    }
-
-    private func hostCell(name: String, detail: String) -> NSView {
-        let title = NSTextField(labelWithString: name)
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
-        title.lineBreakMode = .byTruncatingTail
-        let sub = NSTextField(labelWithString: detail)
-        sub.font = .systemFont(ofSize: 11)
-        sub.textColor = .secondaryLabelColor
-        sub.lineBreakMode = .byTruncatingTail
-        let stack = NSStackView(views: [title, sub])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
-        return stack
     }
 }
