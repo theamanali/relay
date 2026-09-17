@@ -555,22 +555,11 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
         let keyboardLabel = NSTextField(labelWithString: "Keyboard")
         keyboardLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        let help = NSTextField(wrappingLabelWithString:
-            "Pairing: the first time you connect to a PC, Relay asks for the PIN shown in the Relay window on that PC. " +
-            "Hover over a PC for its details and key fingerprint. Leave a stream with ⌃⌥⌘Q.")
-        help.font = .systemFont(ofSize: 11)
-        help.textColor = .secondaryLabelColor
-        help.preferredMaxLayoutWidth = 280
-        let rule = NSBox()
-        rule.boxType = .separator
-
-        let stack = NSStackView(views: [keyboardLabel, modifiers, input, latency, rule, help])
+        let stack = NSStackView(views: [keyboardLabel, modifiers, input, latency])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.setCustomSpacing(4, after: keyboardLabel)
-        stack.setCustomSpacing(12, after: latency)
-        stack.setCustomSpacing(12, after: rule)
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let vc = NSViewController()
@@ -581,7 +570,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             stack.bottomAnchor.constraint(equalTo: vc.view.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: vc.view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: vc.view.trailingAnchor),
-            rule.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             vc.view.widthAnchor.constraint(equalToConstant: 312),
         ])
         popover.contentViewController = vc
