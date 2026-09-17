@@ -279,23 +279,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
     }
 
-    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, currentName: String) {
-        guard let key = host.publicKey, let window = p.window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Rename “\(host.name)”"
-        alert.informativeText = "The name is only changed on this Mac."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = currentName == host.name ? "" : currentName
-        field.placeholderString = host.name
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            ClientState.setNickname(field.stringValue, for: key)
-            p.reloadPairing()
-        }
+    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String) {
+        guard let key = host.publicKey else { return }
+        // Typing the PC's own name back is the same as clearing the nickname.
+        ClientState.setNickname(name == host.name ? nil : name, for: key)
+        p.reloadPairing()
     }
 
     /// Tell the host to drop us, then drop it locally whatever the host said:

@@ -30,7 +30,7 @@ final class SectionHeaderView: NSTableCellView {
     }
 }
 
-final class HostRowView: NSTableCellView {
+final class HostRowView: NSTableCellView, NSTextFieldDelegate {
     static let identifier = NSUserInterfaceItemIdentifier("host-row")
 
     private let pcIcon = NSImageView()
@@ -41,6 +41,11 @@ final class HostRowView: NSTableCellView {
     /// Row actions, set by the controller on each configure.
     var onRename: (() -> Void)?
     var onForget: (() -> Void)?
+    /// In-place rename finished: the new text (empty = use the PC's own name), or nil if cancelled.
+    var onRenameEnded: ((String?) -> Void)?
+    private var hostName = ""
+    private var displayedName = ""
+    private(set) var isEditingName = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -52,6 +57,12 @@ final class HostRowView: NSTableCellView {
 
         nameLabel.font = .systemFont(ofSize: 13)
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.delegate = self
+        nameLabel.isEditable = false
+        nameLabel.isSelectable = false
+        nameLabel.isBordered = false
+        nameLabel.drawsBackground = false
+        nameLabel.focusRingType = .default
         detailLabel.font = .systemFont(ofSize: 11)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingTail
@@ -102,11 +113,65 @@ final class HostRowView: NSTableCellView {
     @objc private func renameTapped() { onRename?() }
     @objc private func forgetTapped() { onForget?() }
 
+    // MARK: in-place rename
+
+    /// Turn the name into an editor, Finder-style: white field, text selected.
+    func beginEditingName() {
+        guard !isEditingName, let window else { return }
+        isEditingName = true
+        nameLabel.isEditable = true
+        nameLabel.isSelectable = true
+        nameLabel.drawsBackground = true
+        nameLabel.backgroundColor = .textBackgroundColor
+        nameLabel.textColor = .labelColor
+        nameLabel.placeholderString = hostName
+        // Editing the nickname, not the PC's own name: start from an empty
+        // field when no nickname is set so the placeholder shows the default.
+        if displayedName == hostName { nameLabel.stringValue = "" }
+        window.makeFirstResponder(nameLabel)
+        nameLabel.currentEditor()?.selectAll(nil)
+    }
+
+    /// Finish a pending edit as if Return were pressed (e.g. Connect was clicked).
+    func commitEditingName() { endEditingName(commit: true) }
+
+    private func endEditingName(commit: Bool) {
+        guard isEditingName else { return }
+        isEditingName = false
+        let typed = nameLabel.stringValue
+        nameLabel.isEditable = false
+        nameLabel.isSelectable = false
+        nameLabel.drawsBackground = false
+        nameLabel.placeholderString = nil
+        nameLabel.stringValue = displayedName
+        window?.makeFirstResponder(superview) // back to the table
+        onRenameEnded?(commit ? typed : nil)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        endEditingName(commit: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            endEditingName(commit: false)
+            return true
+        }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            // Return commits the name only; it must not also press Connect.
+            endEditingName(commit: true)
+            return true
+        }
+        return false
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(host: DiscoveredHost, state: HostPairState, nickname: String?) {
-        nameLabel.stringValue = nickname ?? host.name
+        hostName = host.name
+        displayedName = nickname ?? host.name
+        nameLabel.stringValue = displayedName
         var linkOnly = host.linkDescription
         if linkOnly.hasPrefix("via ") { linkOnly.removeFirst(4) }
         // A renamed host keeps its real name in the detail line.

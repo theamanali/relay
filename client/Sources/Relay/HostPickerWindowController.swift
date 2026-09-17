@@ -8,8 +8,8 @@ protocol HostPickerDelegate: AnyObject {
     func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost)
     /// The user wants to drop the pairing with this host (context menu / Delete).
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost)
-    /// The user wants to give this host a local name; `currentName` is what the row shows now.
-    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, currentName: String)
+    /// The user renamed this host in place; empty means "use the PC's own name".
+    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String)
 }
 
 /// Lets Delete / Backspace on a selected row reach the controller.
@@ -46,6 +46,9 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     /// Name (or key) to select when the list next changes, e.g. after a disconnect.
     private var wanted: (key: Data?, name: String)?
     private var listVisible = false
+    /// Row list that arrived while a name was being edited; applied afterwards.
+    private var pendingRows: [PickerRow]?
+    private var editingRow: Int?
 
     init() {
         let window = NSWindow(
@@ -313,6 +316,11 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     private func apply(_ newRows: [PickerRow]) {
+        if editingRow != nil {
+            // Don't tear the editor out from under the user; catch up afterwards.
+            pendingRows = newRows
+            return
+        }
         let selectedName = selectedHost?.name
         let diff = PickerRows.diff(old: rows, new: newRows)
         let visible = window?.isVisible ?? false
@@ -384,6 +392,9 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     @objc private func connect() {
+        if let editingRow, let view = table.view(atColumn: 0, row: editingRow, makeIfNecessary: false) as? HostRowView {
+            view.commitEditingName()
+        }
         guard let host = selectedHost else { return }
         pickerDelegate?.picker(self, didChoose: host)
     }
@@ -413,8 +424,15 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     @objc private func renameClicked() {
-        guard let r = hostRow(at: table.clickedRow), r.host.publicKey != nil else { return }
-        pickerDelegate?.picker(self, rename: r.host, currentName: r.nickname ?? r.host.name)
+        beginRename(row: table.clickedRow)
+    }
+
+    private func beginRename(row: Int) {
+        guard let r = hostRow(at: row), r.host.publicKey != nil,
+              let view = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? HostRowView else { return }
+        table.selectRowIndexes([row], byExtendingSelection: false)
+        editingRow = row
+        view.beginEditingName()
     }
 
     // MARK: context menu
@@ -498,9 +516,18 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             let view = tableView.makeView(withIdentifier: HostRowView.identifier, owner: nil) as? HostRowView
                 ?? HostRowView(frame: .zero)
             view.configure(host: host, state: state, nickname: nickname)
-            view.onRename = { [weak self] in
+            view.onRename = { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.beginRename(row: self.table.row(for: view))
+            }
+            view.onRenameEnded = { [weak self] typed in
                 guard let self else { return }
-                self.pickerDelegate?.picker(self, rename: host, currentName: nickname ?? host.name)
+                self.editingRow = nil
+                if let typed { self.pickerDelegate?.picker(self, rename: host, to: typed) }
+                if let pending = self.pendingRows {
+                    self.pendingRows = nil
+                    self.apply(pending)
+                }
             }
             view.onForget = { [weak self] in
                 guard let self else { return }
