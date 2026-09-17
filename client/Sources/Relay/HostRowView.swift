@@ -202,7 +202,6 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         facts += host.facts.lines
         facts.append("Reachable over " + host.allLinks)
         if let key = host.publicKey { facts.append("Key fingerprint \(fingerprint(key))") }
-        facts.append(state == .paired ? "Paired with this MacBook" : "Not paired yet")
         toolTip = facts.joined(separator: "\n")
     }
 }

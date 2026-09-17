@@ -75,14 +75,17 @@ struct HostFacts: Equatable {
         ips = (txt["ip"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
     }
 
-    /// One line per fact, for the row's tooltip.
+    /// One labelled line per fact, for the row's tooltip.
     var lines: [String] {
         var out: [String] = []
         if !os.isEmpty { out.append(os) }
-        let compute = [cpu, ramGB > 0 ? "\(ramGB) GB" : ""].filter { !$0.isEmpty }
-        if !compute.isEmpty { out.append(compute.joined(separator: " · ")) }
-        if !gpu.isEmpty { out.append(gpu) }
-        if !ips.isEmpty { out.append(ips.joined(separator: ", ")) }
+        if !cpu.isEmpty { out.append("CPU  " + cpu) }
+        if ramGB > 0 { out.append("RAM  \(ramGB) GB") }
+        if !gpu.isEmpty { out.append("GPU  " + gpu) }
+        for ip in ips {
+            // 169.254.x.x is the self-assigned address of a DHCP-less direct cable.
+            out.append("IP   " + ip + (ip.hasPrefix("169.254.") ? " (direct cable)" : ""))
+        }
         return out
     }
 }
