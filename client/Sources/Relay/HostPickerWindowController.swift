@@ -62,7 +62,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -168,20 +168,16 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         separator.translatesAutoresizingMaskIntoConstraints = false
 
         let modeLabel = NSTextField(labelWithString: "Stream")
-        modeLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        modeLabel.font = .systemFont(ofSize: NSFont.systemFontSize)
         modeLabel.textColor = .secondaryLabelColor
         resolutionPopup.target = self
         resolutionPopup.action = #selector(modeChanged)
-        resolutionPopup.controlSize = .small
-        resolutionPopup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         resolutionPopup.setAccessibilityLabel("Resolution")
         resolutionPopup.toolTip = "Resolution to stream"
         refreshSegment.target = self
         refreshSegment.action = #selector(modeChanged)
         refreshSegment.trackingMode = .selectOne
         refreshSegment.segmentStyle = .rounded
-        refreshSegment.controlSize = .small
-        refreshSegment.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         refreshSegment.setAccessibilityLabel("Refresh rate")
         refreshSegment.toolTip = "Refresh rate"
         let modeRow = NSStackView(views: [modeLabel, resolutionPopup, refreshSegment])
@@ -193,8 +189,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
         optionsButton.title = "Options…"
         optionsButton.bezelStyle = .rounded
-        optionsButton.controlSize = .small
-        optionsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
