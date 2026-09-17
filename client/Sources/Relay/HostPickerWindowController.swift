@@ -62,7 +62,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 450, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -92,15 +92,15 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         hero.contentTintColor = .controlAccentColor
         hero.setAccessibilityElement(false)
         let title = NSTextField(labelWithString: "Relay")
-        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        title.font = Style.Font.title
         let subtitle = NSTextField(labelWithString: "Use this MacBook as your PC's display.")
-        subtitle.font = .systemFont(ofSize: 13)
+        subtitle.font = Style.Font.body
         subtitle.textColor = .secondaryLabelColor
         let header = NSStackView(views: [hero, title, subtitle])
         header.orientation = .vertical
         header.alignment = .centerX
-        header.spacing = 2
-        header.setCustomSpacing(10, after: hero)
+        header.spacing = Style.Space.tight
+        header.setCustomSpacing(Style.Space.s, after: hero)
         header.translatesAutoresizingMaskIntoConstraints = false
 
         // List.
@@ -110,7 +110,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         table.headerView = nil
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 52
+        table.rowHeight = Style.rowHeight
         table.style = .inset
         table.selectionHighlightStyle = .regular
         table.floatsGroupRows = false
@@ -137,18 +137,18 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
         let looking = NSTextField(labelWithString: "Looking for your PC…")
-        looking.font = .systemFont(ofSize: 13)
+        looking.font = Style.Font.body
         looking.textColor = .secondaryLabelColor
         let hint = NSTextField(wrappingLabelWithString: "Open Relay on the PC and connect it to this MacBook or the same network.")
-        hint.font = .systemFont(ofSize: 11)
+        hint.font = Style.Font.caption
         hint.textColor = .tertiaryLabelColor
         hint.alignment = .center
         hint.preferredMaxLayoutWidth = 300
         emptyState.setViews([spinner, looking, hint], in: .center)
         emptyState.orientation = .vertical
         emptyState.alignment = .centerX
-        emptyState.spacing = 8
-        emptyState.setCustomSpacing(4, after: looking)
+        emptyState.spacing = Style.Space.s
+        emptyState.setCustomSpacing(Style.Space.xs, after: looking)
         emptyState.translatesAutoresizingMaskIntoConstraints = false
 
         let listContainer = NSView()
@@ -180,7 +180,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let modeRow = NSStackView(views: [resolutionPopup, refreshSegment, optionsButton])
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
-        modeRow.spacing = 10
+        modeRow.spacing = Style.Space.m
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
         optionsButton.title = "Advanced"
@@ -189,7 +189,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         optionsButton.action = #selector(showOptions)
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
 
-        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.font = Style.Font.caption
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         // Long messages truncate (full text in the tooltip) rather than widen the window.
@@ -211,21 +211,21 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         footer.addSubview(statusLabel)
         footer.addSubview(connectButton)
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: content.topAnchor, constant: 44),
-            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            header.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: Style.titleBarClearance),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Style.Space.margin),
+            header.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Style.Space.margin),
 
-            listContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
+            listContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Style.Space.margin),
             listContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             listContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
-            listContainer.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
+            listContainer.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -Style.Space.m),
             scroll.topAnchor.constraint(equalTo: listContainer.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: listContainer.bottomAnchor),
             emptyState.centerXAnchor.constraint(equalTo: listContainer.centerXAnchor),
             emptyState.centerYAnchor.constraint(equalTo: listContainer.centerYAnchor),
-            emptyState.widthAnchor.constraint(lessThanOrEqualTo: listContainer.widthAnchor, constant: -40),
+            emptyState.widthAnchor.constraint(lessThanOrEqualTo: listContainer.widthAnchor, constant: -2 * Style.Space.margin),
 
             footer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -234,19 +234,19 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             separator.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
 
-            modeRow.topAnchor.constraint(equalTo: footer.topAnchor, constant: 14),
-            modeRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
+            modeRow.topAnchor.constraint(equalTo: footer.topAnchor, constant: Style.Space.l),
+            modeRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: Style.Space.margin),
             optionsButton.trailingAnchor.constraint(equalTo: connectButton.trailingAnchor),
 
             // Gear at the end of the Stream line; the status line then reads
             // straight from the left edge.
             optionsButton.widthAnchor.constraint(equalTo: connectButton.widthAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
+            statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: Style.Space.margin),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -Style.Space.m),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
-            connectButton.topAnchor.constraint(equalTo: modeRow.bottomAnchor, constant: 12),
-            connectButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
-            connectButton.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -16),
+            connectButton.topAnchor.constraint(equalTo: modeRow.bottomAnchor, constant: Style.Space.m),
+            connectButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -Style.Space.margin),
+            connectButton.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -Style.Space.l),
             connectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
         window.initialFirstResponder = table
@@ -519,8 +519,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         modifiers.addItem(withTitle: "Keys by physical position")
         modifiers.lastItem?.representedObject = ModifierMapping.physical.rawValue
         modifiers.selectItem(at: prefs.modifiers == .mac ? 0 : 1)
-        modifiers.controlSize = .small
-        modifiers.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         modifiers.target = self
         modifiers.action = #selector(optionChanged(_:))
         modifiers.identifier = .init("modifiers")
@@ -531,19 +529,16 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let latency = NSButton(checkboxWithTitle: "Show latency stats (⌃⌥⌘L)", target: self, action: #selector(optionChanged(_:)))
         latency.state = prefs.showLatency ? .on : .off
         latency.identifier = .init("latency")
-        for c in [input, latency] {
-            c.controlSize = .small
-            c.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        }
 
         let keyboardLabel = NSTextField(labelWithString: "Keyboard")
-        keyboardLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        keyboardLabel.font = Style.Font.section
+        keyboardLabel.textColor = .secondaryLabelColor
         let stack = NSStackView(views: [keyboardLabel, modifiers, input, latency])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.setCustomSpacing(4, after: keyboardLabel)
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
+        stack.spacing = Style.Space.s
+        stack.setCustomSpacing(Style.Space.xs, after: keyboardLabel)
+        stack.edgeInsets = NSEdgeInsets(top: Style.Space.l, left: Style.Space.l, bottom: Style.Space.l, right: Style.Space.l)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let vc = NSViewController()
         vc.view = NSView()
@@ -586,7 +581,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        rows[row].isHeader ? 28 : 52
+        rows[row].isHeader ? Style.sectionRowHeight : Style.rowHeight
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {

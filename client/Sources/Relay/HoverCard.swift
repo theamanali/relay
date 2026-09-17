@@ -12,12 +12,14 @@ final class HoverCard {
     private weak var anchor: NSView?
 
     /// Show `rows` beneath `view` after a short delay (cancelled by `hide`).
-    func schedule(rows: [(label: String, value: String)], for view: NSView) {
+    /// `alignedTo` is the view whose left edge the card lines up with (the
+    /// host name), so the card reads as belonging to that text.
+    func schedule(rows: [(label: String, value: String)], for view: NSView, alignedTo leading: NSView) {
         cancel()
         anchor = view
-        let work = DispatchWorkItem { [weak self, weak view] in
-            guard let self, let view, view.window != nil else { return }
-            self.show(rows: rows, for: view)
+        let work = DispatchWorkItem { [weak self, weak view, weak leading] in
+            guard let self, let view, let leading, view.window != nil else { return }
+            self.show(rows: rows, for: view, alignedTo: leading)
         }
         pending = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
@@ -35,19 +37,19 @@ final class HoverCard {
         pending = nil
     }
 
-    private func show(rows: [(label: String, value: String)], for view: NSView) {
+    private func show(rows: [(label: String, value: String)], for view: NSView, alignedTo leading: NSView) {
         guard let window = view.window, !rows.isEmpty else { return }
         let grid = NSGridView(numberOfColumns: 2, rows: 0)
-        grid.rowSpacing = 3
-        grid.columnSpacing = 8
+        grid.rowSpacing = Style.Space.xs
+        grid.columnSpacing = Style.Space.s
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .leading
         for row in rows {
             let label = NSTextField(labelWithString: row.label)
-            label.font = .systemFont(ofSize: 11, weight: .medium)
+            label.font = Style.Font.section
             label.textColor = .secondaryLabelColor
             let value = NSTextField(labelWithString: row.value)
-            value.font = .systemFont(ofSize: 11)
+            value.font = Style.Font.caption
             value.textColor = .labelColor
             value.lineBreakMode = .byTruncatingTail
             value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -64,10 +66,10 @@ final class HoverCard {
         background.layer?.borderColor = NSColor.separatorColor.cgColor
         background.addSubview(grid)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: background.topAnchor, constant: 8),
-            grid.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -8),
-            grid.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
-            grid.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
+            grid.topAnchor.constraint(equalTo: background.topAnchor, constant: Style.Space.s),
+            grid.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -Style.Space.s),
+            grid.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: Style.Space.m),
+            grid.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -Style.Space.m),
             grid.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
         ])
 
@@ -82,13 +84,13 @@ final class HoverCard {
         panel.contentView = background
         background.frame = NSRect(origin: .zero, size: size)
 
-        // Below the row, aligned to its leading edge, kept on the row's screen.
-        let rowInWindow = view.convert(view.bounds, to: nil)
-        let rowOnScreen = window.convertToScreen(rowInWindow)
-        var origin = NSPoint(x: rowOnScreen.minX + 44, y: rowOnScreen.minY - size.height - 4)
+        // Below the row, left edge under the host name, kept on the row's screen.
+        let rowOnScreen = window.convertToScreen(view.convert(view.bounds, to: nil))
+        let nameOnScreen = window.convertToScreen(leading.convert(leading.bounds, to: nil))
+        var origin = NSPoint(x: nameOnScreen.minX - Style.Space.m, y: rowOnScreen.minY - size.height - Style.Space.xs)
         if let screen = window.screen?.visibleFrame {
-            origin.x = min(origin.x, screen.maxX - size.width - 8)
-            if origin.y < screen.minY { origin.y = rowOnScreen.maxY + 4 }
+            origin.x = min(origin.x, screen.maxX - size.width - Style.Space.s)
+            if origin.y < screen.minY { origin.y = rowOnScreen.maxY + Style.Space.xs }
         }
         panel.setFrameOrigin(origin)
         self.panel?.orderOut(nil)

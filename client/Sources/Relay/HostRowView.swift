@@ -11,14 +11,14 @@ final class SectionHeaderView: NSTableCellView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         identifier = Self.identifier
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.font = Style.Font.section
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Style.Space.xs),
         ])
     }
 
@@ -56,7 +56,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         pcIcon.image = Glyphs.tower(pointSize: 22)
         pcIcon.setAccessibilityElement(false)
 
-        nameLabel.font = .systemFont(ofSize: 13)
+        nameLabel.font = Style.Font.body
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.alignment = .left
         nameLabel.delegate = self
@@ -65,7 +65,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         nameLabel.isBordered = false
         nameLabel.drawsBackground = false
         nameLabel.focusRingType = .default
-        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.font = Style.Font.caption
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingTail
         detailLabel.alignment = .left
@@ -81,7 +81,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
             nameLabel.topAnchor.constraint(equalTo: text.topAnchor),
             nameLabel.leadingAnchor.constraint(equalTo: text.leadingAnchor),
             nameLabel.trailingAnchor.constraint(equalTo: text.trailingAnchor),
-            detailLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
+            detailLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: Style.Space.tight),
             detailLabel.leadingAnchor.constraint(equalTo: text.leadingAnchor),
             detailLabel.trailingAnchor.constraint(equalTo: text.trailingAnchor),
             detailLabel.bottomAnchor.constraint(equalTo: text.bottomAnchor),
@@ -93,7 +93,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         forgetButton.target = self
         let actions = NSStackView(views: [renameButton, forgetButton])
         actions.orientation = .horizontal
-        actions.spacing = 2
+        actions.spacing = Style.Space.tight
         actions.setHuggingPriority(.required, for: .horizontal)
 
         for v in [pcIcon, text, actions] {
@@ -101,13 +101,13 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            pcIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            pcIcon.leadingAnchor.constraint(equalTo: leadingAnchor),
             pcIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             pcIcon.widthAnchor.constraint(equalToConstant: 32),
-            text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: 10),
+            text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: Style.Space.s),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -10),
-            actions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            text.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -Style.Space.s),
+            actions.trailingAnchor.constraint(equalTo: trailingAnchor),
             actions.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -138,7 +138,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
 
     override func mouseEntered(with event: NSEvent) {
         guard !isEditingName else { return }
-        HoverCard.shared.schedule(rows: hoverRows, for: self)
+        HoverCard.shared.schedule(rows: hoverRows, for: self, alignedTo: nameLabel)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -163,7 +163,6 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         nameLabel.isSelectable = true
         nameLabel.drawsBackground = true
         nameLabel.backgroundColor = .textBackgroundColor
-        nameLabel.textColor = .labelColor
         nameLabel.placeholderString = hostName
         // Editing the nickname, not the PC's own name: start from an empty
         // field when no nickname is set so the placeholder shows the default.
