@@ -30,9 +30,9 @@ enum Glyphs {
                 vent.lineCapStyle = .round
                 vent.stroke()
             }
-            // Power button near the bottom.
+            // Power button, lower left (clear of the MacBook in the composite).
             let dot = stroke * 1.8
-            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
+            NSBezierPath(ovalIn: NSRect(x: body.minX + inset - dot / 2 + stroke / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
             return true
         }
         image.isTemplate = true
