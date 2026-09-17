@@ -228,7 +228,11 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         rows += host.facts.rows
         // One line per way the PC can be reached from here; the row's
         // subtitle already says which of these the connection takes.
-        for entry in host.reachableAddresses { rows.append(("IP:", "\(entry.address) (\(entry.link))")) }
+        let reachable = host.reachableAddresses
+        for entry in reachable {
+            // The link only needs naming when there is more than one to tell apart.
+            rows.append(("IP:", reachable.count > 1 ? "\(entry.address) (\(entry.link))" : entry.address))
+        }
         if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
         hoverRows = rows
         toolTip = nil
