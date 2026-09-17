@@ -191,15 +191,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         modeRow.setCustomSpacing(6, after: modeLabel)
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
-        optionsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Options")
-        optionsButton.symbolConfiguration = .init(pointSize: 13, weight: .medium)
-        optionsButton.imagePosition = .imageOnly
-        optionsButton.isBordered = false
-        optionsButton.contentTintColor = .secondaryLabelColor
+        optionsButton.title = "Options…"
+        optionsButton.bezelStyle = .rounded
+        optionsButton.controlSize = .small
+        optionsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
-        optionsButton.toolTip = "Options"
-        optionsButton.setAccessibilityLabel("Options")
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
 
         statusLabel.font = .systemFont(ofSize: 11)
@@ -254,10 +251,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
             // Gear at the end of the Stream line; the status line then reads
             // straight from the left edge.
-            optionsButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -18),
+            optionsButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
             optionsButton.centerYAnchor.constraint(equalTo: modeRow.centerYAnchor),
-            optionsButton.widthAnchor.constraint(equalToConstant: 24),
-            optionsButton.heightAnchor.constraint(equalToConstant: 24),
             statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
