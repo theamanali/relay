@@ -47,13 +47,20 @@ enum Glyphs {
         guard let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
             .withSymbolConfiguration(macConfig)
         else { return tower }
-        let halo = max(2.5, pointSize / 14)
-        let overlap = mac.size.width * 0.45
+        let halo = max(2.0, pointSize / 18)
+        let overlap = mac.size.width * 0.3
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
         let image = NSImage(size: size, flipped: false) { _ in
             tower.draw(in: NSRect(origin: .zero, size: tower.size))
             let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
-            mac.draw(in: macRect.insetBy(dx: -halo, dy: -halo), from: .zero, operation: .destinationOut, fraction: 1)
+            // The MacBook is solid from the tower's point of view: clear its
+            // whole silhouette (plus a small halo), not just its outline, so no
+            // tower lines show through the screen.
+            let mask = NSBezierPath(roundedRect: macRect.insetBy(dx: -halo, dy: -halo), xRadius: halo * 2, yRadius: halo * 2)
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            NSColor.black.setFill()
+            mask.fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
             mac.draw(in: macRect)
             return true
         }
