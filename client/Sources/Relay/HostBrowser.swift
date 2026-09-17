@@ -56,13 +56,6 @@ struct DiscoveredHost {
         return Self.label(top)
     }
 
-    /// Every link the announcement arrived on, loopback aside (for the tooltip).
-    var allLinks: String {
-        let kinds = interfaces.filter { $0.type != .loopback }.map(Self.label)
-        let unique = Array(NSOrderedSet(array: kinds)) as? [String] ?? kinds
-        return unique.isEmpty ? "This MacBook" : unique.joined(separator: ", ")
-    }
-
     private static func rank(_ type: NWInterface.InterfaceType) -> Int {
         switch type {
         case .wiredEthernet: return 0
