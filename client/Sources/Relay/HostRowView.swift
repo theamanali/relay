@@ -186,9 +186,8 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         hostName = host.name
         displayedName = nickname ?? host.name
         nameLabel.stringValue = displayedName
-        let linkOnly = host.preferredLink
-        // A renamed host keeps its real name in the detail line.
-        let link = nickname != nil && !host.name.isEmpty ? host.name + " · " + linkOnly : linkOnly
+        // A renamed host's real name lives in the tooltip, not the row.
+        let link = host.preferredLink
 
         // The section header carries the pairing state; the row only says
         // what differs per host.

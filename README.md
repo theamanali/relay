@@ -161,7 +161,7 @@ works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record); a host that advertises no key, or an unknown
 one, is listed as available. The pencil on a row **renames** the PC on this Mac (its
-own name stays in the detail line); the ⊗ on a paired PC (or Delete with it
+own name moves to the hover); the ⊗ on a paired PC (or Delete with it
 selected) **forgets** it: the Mac tells the PC to
 drop the pairing too, then removes it locally either way — if the PC was
 unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
