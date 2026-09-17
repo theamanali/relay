@@ -65,6 +65,33 @@ function Get-DeviceByHardwareId($HardwareId) {
     Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $HardwareId } | Select-Object -First 1
 }
 
+function Set-RelayAcl([string]$Path, [string[]]$Grants) {
+    # Repair installations made by an older installer that accidentally left
+    # this directory without a usable Administrators/user ACE.
+    & takeown.exe /F $Path /A /R /D Y | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "takeown failed for $Path (exit $LASTEXITCODE)" }
+    & icacls.exe $Path /reset /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls reset failed for $Path (exit $LASTEXITCODE)" }
+    # Apply inheritable ACEs to the directory itself. Passing /T here would
+    # apply the (OI)(CI) form directly to files, where it is inherit-only and
+    # leaves the script with no effective read/execute permission.
+    $arguments = @($Path, "/inheritance:r", "/grant:r") + $Grants
+    & icacls.exe @arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls grant failed for $Path (exit $LASTEXITCODE)" }
+}
+
+function Remove-LockedHelper([string]$Path, [string]$InstallingUser) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    & takeown.exe /F $Path /A | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "takeown failed for $Path (exit $LASTEXITCODE)" }
+    # A previous installer could leave this individual file with no effective
+    # Administrators ACE. Grant the known installing identity access long
+    # enough to replace it; the final directory ACL below removes write access.
+    & icacls.exe $Path /grant:r "${InstallingUser}:F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "temporary icacls grant failed for $Path (exit $LASTEXITCODE)" }
+    Remove-Item -LiteralPath $Path -Force
+}
+
 # The user that will run the host (not the elevated admin identity, if they differ).
 $hostUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
 
@@ -103,11 +130,12 @@ if ($Driver -eq "mtt") {
     $helperRequests = Join-Path $helperRoot "Requests"
     $helperState = Join-Path $helperRoot "State"
     New-Item -ItemType Directory -Force $helperInstallDir, $helperRequests, $helperState | Out-Null
+    Set-RelayAcl $helperInstallDir @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)RX")
+    Set-RelayAcl $helperRequests @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)M")
+    Set-RelayAcl $helperState @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)RX")
+    Remove-LockedHelper $helperScript $hostUser
     Copy-Item (Join-Path $root "tools\vdd-device.ps1") $helperScript -Force
     Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
-    & icacls $helperInstallDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-11:(OI)(CI)RX" /T | Out-Null
-    & icacls $helperRequests /grant "${hostUser}:(OI)(CI)M" /T | Out-Null
-    & icacls $helperState /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "${hostUser}:(OI)(CI)RX" /T | Out-Null
     New-ItemProperty -Path $regKey -Name HelperStatePath -PropertyType String -Value $helperRequests -Force | Out-Null
     New-ItemProperty -Path $regKey -Name HelperPrivateStatePath -PropertyType String -Value $helperState -Force | Out-Null
     $helperTask = "Relay display driver"
