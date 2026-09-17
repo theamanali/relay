@@ -187,7 +187,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         modeRow.setCustomSpacing(6, after: modeLabel)
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
-        optionsButton.title = "Options…"
+        optionsButton.title = "Advanced"
         optionsButton.bezelStyle = .rounded
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
@@ -247,6 +247,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             // straight from the left edge.
             optionsButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
             optionsButton.centerYAnchor.constraint(equalTo: modeRow.centerYAnchor),
+            optionsButton.widthAnchor.constraint(equalTo: connectButton.widthAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),

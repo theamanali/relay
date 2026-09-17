@@ -157,8 +157,8 @@ reads *Cancel* until then, and the full-screen kiosk window appears with the
 first decoded frame. When the session ends the list comes back with the
 same host selected. In the footer a popup chooses the resolution — native,
 75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
-control chooses 120 or 60 Hz (shown only where the panel supports both). The gear
-opens the options: keyboard mapping (⌘ as Ctrl, or physical positions), whether
+control chooses 120 or 60 Hz (shown only where the panel supports both). The **Advanced**
+button opens the options: keyboard mapping (⌘ as Ctrl, or physical positions), whether
 keyboard and mouse are sent to the PC, and the latency overlay. All of it is
 remembered; the matching command-line flags override it for one launch. This
 works on any Mac: the sizes and rates come from the screen at runtime.
