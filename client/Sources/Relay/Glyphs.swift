@@ -36,50 +36,23 @@ enum Glyphs {
         guard let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
             .withSymbolConfiguration(macConfig)
         else { return tower }
+        let halo = max(2.0, pointSize / 18)
         let overlap = mac.size.width * 0.3
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
-        let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
-        // The symbol image has transparent padding; occlude only where the
-        // laptop is actually drawn, so the tower's lines meet its outline.
-        let footprint = opaqueBounds(of: mac).offsetBy(dx: macRect.minX, dy: macRect.minY)
         let image = NSImage(size: size, flipped: false) { _ in
             tower.draw(in: NSRect(origin: .zero, size: tower.size))
+            let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
+            // Clear the MacBook's silhouette plus a small halo, the way Apple's
+            // combined symbols separate overlapping shapes.
+            let mask = NSBezierPath(roundedRect: macRect.insetBy(dx: -halo, dy: -halo), xRadius: halo * 2, yRadius: halo * 2)
             NSGraphicsContext.current?.compositingOperation = .destinationOut
             NSColor.black.setFill()
-            footprint.insetBy(dx: 0.5, dy: 0.5).fill()
+            mask.fill()
             NSGraphicsContext.current?.compositingOperation = .sourceOver
             mac.draw(in: macRect)
             return true
         }
         image.isTemplate = true
         return image
-    }
-
-    /// Bounding box of the non-transparent pixels, in the image's point space.
-    private static func opaqueBounds(of image: NSImage) -> NSRect {
-        let scale: CGFloat = 4
-        let w = Int(image.size.width * scale), h = Int(image.size.height * scale)
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8,
-                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let ctx = NSGraphicsContext(bitmapImageRep: rep)
-        else { return NSRect(origin: .zero, size: image.size) }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = ctx
-        image.draw(in: NSRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
-        NSGraphicsContext.restoreGraphicsState()
-        var minX = w, minY = h, maxX = -1, maxY = -1
-        for y in 0..<h {
-            for x in 0..<w where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1 {
-                minX = min(minX, x); maxX = max(maxX, x)
-                minY = min(minY, y); maxY = max(maxY, y)
-            }
-        }
-        guard maxX >= 0 else { return NSRect(origin: .zero, size: image.size) }
-        // Bitmap rows are top-down; flip to the image's bottom-up point space.
-        return NSRect(x: CGFloat(minX) / scale,
-                      y: CGFloat(h - 1 - maxY) / scale,
-                      width: CGFloat(maxX - minX + 1) / scale,
-                      height: CGFloat(maxY - minY + 1) / scale)
     }
 }
