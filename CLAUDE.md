@@ -56,8 +56,13 @@ drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
   Code 43. The device node is the switch: the host enables/disables it through the
-  scheduled task `Relay display driver` (runs `C:\VirtualDisplayDriver\vdd-device.ps1`
-  with the order in `action.txt`). There is no `Restart-PnpDevice`; use Disable/Enable.
+  scheduled task `Relay display driver`. The elevated script lives in
+  `%ProgramFiles%\Relay\vdd-device.ps1` (host user read-only — never in a host-writable
+  folder); the host writes its order to `%ProgramData%\Relay\Requests\action.txt` (plus
+  `guard-<pid>.txt` and the physical-monitor heartbeat), and the helper keeps its
+  privileged records and `vdd-device.log` in `%ProgramData%\Relay\State`. Both paths are
+  published in the driver's registry key (`HelperStatePath` = Requests,
+  `HelperPrivateStatePath` = State). There is no `Restart-PnpDevice`; use Disable/Enable.
 - The driver keeps one monitor whenever enabled (count 0 == 1), so "invisible when idle"
   means the device is **disabled** between sessions. Enabling takes ~2 s.
 - `SetDisplayConfig(SDC_TOPOLOGY_SUPPLIED)` fails with ERROR_GEN_FAILURE (31) for a layout

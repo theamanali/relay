@@ -711,6 +711,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "relay-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chacha20poly1305",
+ "clap",
+ "ctrlc",
+ "env_logger",
+ "hex",
+ "hkdf",
+ "hmac",
+ "log",
+ "mdns-sd",
+ "rand",
+ "regex",
+ "sha2",
+ "socket2",
+ "windows",
+ "winreg",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -843,29 +866,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
-]
-
-[[package]]
-name = "relay-host"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chacha20poly1305",
- "clap",
- "ctrlc",
- "env_logger",
- "hex",
- "hkdf",
- "hmac",
- "log",
- "mdns-sd",
- "rand",
- "regex",
- "sha2",
- "socket2",
- "windows",
- "winreg",
- "x25519-dalek",
 ]
 
 [[package]]
