@@ -26,18 +26,24 @@ struct DiscoveredHost {
             .sorted { Self.rank($0.type) < Self.rank($1.type) }
     }
 
-    /// The link the connection will use: the cable when the host is seen on
-    /// one (the dial is pinned to it), otherwise the best of the rest.
-    var preferredLink: String {
-        guard let best = rankedInterfaces.first else { return "This MacBook" }
-        return Self.label(best)
+    /// The link the connection will use and the address it will dial there,
+    /// chosen together so the row's link line and the card's IP line always
+    /// describe the same interface: the first preferred interface (cable, then
+    /// Wi-Fi, …) on whose subnet the PC advertises an address; failing that,
+    /// the top interface with no address to show.
+    var connectLink: (label: String, address: String?) {
+        connectLink(subnets: LocalNetworks.subnetsByInterface())
     }
 
-    /// The advertised address the connection will dial: the one on the subnet
-    /// of the preferred interface. A Tailscale or other-network address never
-    /// matches, which is the point.
-    var connectAddress: String? {
-        LocalNetworks.address(among: facts.ips, reachedVia: rankedInterfaces.map(\.name))
+    func connectLink(subnets: [String: [IPv4Subnet]]) -> (label: String, address: String?) {
+        let ranked = rankedInterfaces
+        guard let top = ranked.first else { return ("This MacBook", nil) }
+        for interface in ranked {
+            if let ip = LocalNetworks.address(among: facts.ips, reachedVia: [interface.name], subnets: subnets) {
+                return (Self.label(interface), ip)
+            }
+        }
+        return (Self.label(top), nil)
     }
 
     /// Every link the announcement arrived on, loopback aside (for the tooltip).

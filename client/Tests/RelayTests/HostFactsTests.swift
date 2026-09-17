@@ -23,6 +23,15 @@ final class HostFactsTests: XCTestCase {
         ])
     }
 
+    func testNoInterfacesMeansNoLinkOrAddress() {
+        var host = DiscoveredHost(name: "PC", endpoint: .service(name: "PC", type: Proto.serviceType, domain: "local.", interface: nil),
+                                  interfaces: [], publicKey: nil)
+        host.facts.ips = ["192.168.1.77"]
+        let link = host.connectLink(subnets: [:])
+        XCTAssertEqual(link.label, "This MacBook")
+        XCTAssertNil(link.address)
+    }
+
     func testConnectAddressIsTheOneOnTheDialedInterfaceSubnet() {
         let subnets: [String: [IPv4Subnet]] = [
             "en5": [IPv4Subnet(address: IPv4Subnet.parse("10.0.0.20")!, mask: 0xFFFF_FF00)],       // cable to the switch
