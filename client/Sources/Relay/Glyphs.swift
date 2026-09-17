@@ -19,23 +19,10 @@ enum Glyphs {
             case_.lineWidth = stroke
             case_.stroke()
 
-            let inset = width * 0.2
-            // Drive slot near the top.
-            let slotY = body.maxY - height * 0.2
-            let slot = NSBezierPath()
-            slot.move(to: NSPoint(x: body.minX + inset, y: slotY))
-            slot.line(to: NSPoint(x: body.maxX - inset, y: slotY))
-            slot.lineWidth = stroke
-            slot.lineCapStyle = .round
-            slot.stroke()
-
-            // Power button.
-            let dot = stroke * 1.6
-            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: slotY - height * 0.16 - dot / 2, width: dot, height: dot)).fill()
-
-            // Two vent lines low on the case.
-            for i in 0..<2 {
-                let y = body.minY + height * (0.2 + 0.1 * CGFloat(i))
+            let inset = width * 0.22
+            // Vents across the top of the case.
+            for i in 0..<3 {
+                let y = body.maxY - height * (0.16 + 0.1 * CGFloat(i))
                 let vent = NSBezierPath()
                 vent.move(to: NSPoint(x: body.minX + inset, y: y))
                 vent.line(to: NSPoint(x: body.maxX - inset, y: y))
@@ -43,6 +30,9 @@ enum Glyphs {
                 vent.lineCapStyle = .round
                 vent.stroke()
             }
+            // Power button near the bottom.
+            let dot = stroke * 1.8
+            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
             return true
         }
         image.isTemplate = true
@@ -57,12 +47,13 @@ enum Glyphs {
         guard let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
             .withSymbolConfiguration(macConfig)
         else { return tower }
-        let overlap = mac.size.width * 0.3
+        let halo = max(2.5, pointSize / 14)
+        let overlap = mac.size.width * 0.45
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
         let image = NSImage(size: size, flipped: false) { _ in
             tower.draw(in: NSRect(origin: .zero, size: tower.size))
             let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
-            mac.draw(in: macRect.insetBy(dx: -3, dy: -3), from: .zero, operation: .destinationOut, fraction: 1)
+            mac.draw(in: macRect.insetBy(dx: -halo, dy: -halo), from: .zero, operation: .destinationOut, fraction: 1)
             mac.draw(in: macRect)
             return true
         }
