@@ -283,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         guard let key = host.publicKey, let window = p.window else { return }
         let alert = NSAlert()
         alert.messageText = "Rename “\(host.name)”"
-        alert.informativeText = "The name is only changed on this Mac. Leave it empty to use the PC's own name again."
+        alert.informativeText = "The name is only changed on this Mac."
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
