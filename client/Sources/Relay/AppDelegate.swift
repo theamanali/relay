@@ -302,6 +302,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
     }
 
+    /// Nickname if the user gave one, else the PC's own name.
+    private var currentHostLabel: String {
+        guard let host = currentHost else { return "the PC" }
+        return host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name
+    }
+
     func pickerDidCancelConnect(_ p: HostPickerWindowController) {
         connection?.stop()
         connection = nil
@@ -452,8 +458,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             guard self.connection === c else { return }
             if self.kioskActive {
                 self.view.status = status
-            } else {
-                self.picker?.status = status
+            } else if let shown = SessionText.footerStatus(status, hostName: self.currentHostLabel) {
+                self.picker?.status = shown
             }
         }
     }
@@ -554,17 +560,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             self.view.status = "Disconnected: \(reason)"
             guard self.options.fixedHost == nil else { return }
             if self.kioskActive {
-                self.leaveKiosk(reason: "Disconnected: \(reason)")
+                self.leaveKiosk(reason: SessionText.ended(reason, streamed: true))
             } else if let p = self.picker {
                 self.pendingSession = nil
                 p.connecting = false
                 if c.pairingCompleted {
-                    let host = self.currentHost
-                    let shown = host?.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host?.name ?? "the PC"
-                    p.status = "Paired with \(shown)"
-                    if let host { p.preselect(key: host.publicKey, name: host.name) }
+                    p.status = "Paired with \(self.currentHostLabel)"
+                    if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }
                 } else {
-                    p.status = "Couldn't connect: \(reason)"
+                    p.status = SessionText.ended(reason, streamed: false)
                 }
                 // Pairing (or a host that re-paired us mid-connect) changes the split.
                 p.reloadPairing()
