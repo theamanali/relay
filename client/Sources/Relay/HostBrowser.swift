@@ -83,10 +83,24 @@ struct HostFacts: Equatable {
         if ramGB > 0 { out.append("RAM  \(ramGB) GB") }
         if !gpu.isEmpty { out.append("GPU  " + gpu) }
         for ip in ips {
-            // 169.254.x.x is the self-assigned address of a DHCP-less direct cable.
-            out.append("IP   " + ip + (ip.hasPrefix("169.254.") ? " (direct cable)" : ""))
+            out.append("IP   " + ip + Self.annotation(for: ip))
         }
         return out
+    }
+
+    /// Name the address ranges a user would otherwise puzzle over.
+    static func annotation(for ip: String) -> String {
+        let parts = ip.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return "" }
+        if parts[0] == 169, parts[1] == 254 {
+            // No DHCP on that link (e.g. a direct cable or an unmanaged switch).
+            return " (self-assigned, no DHCP)"
+        }
+        if parts[0] == 100, (64...127).contains(parts[1]) {
+            // 100.64.0.0/10: Tailscale (and other CGNAT overlays).
+            return " (Tailscale)"
+        }
+        return ""
     }
 }
 
