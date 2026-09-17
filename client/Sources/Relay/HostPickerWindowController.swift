@@ -498,6 +498,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             let view = tableView.makeView(withIdentifier: HostRowView.identifier, owner: nil) as? HostRowView
                 ?? HostRowView(frame: .zero)
             view.configure(host: host, state: state, nickname: nickname)
+            view.onRename = { [weak self] in
+                guard let self else { return }
+                self.pickerDelegate?.picker(self, rename: host, currentName: nickname ?? host.name)
+            }
+            view.onForget = { [weak self] in
+                guard let self else { return }
+                self.pickerDelegate?.picker(self, forget: host)
+            }
             return view
         }
     }
