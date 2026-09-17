@@ -17,6 +17,13 @@ bytes as 64 lowercase hex characters). Clients use `pk` to show whether a host
 is already paired before connecting; it is informational and never trusted in
 place of the handshake.
 
+The record may also carry facts about the PC for the client to show on hover,
+each omitted when unknown and truncated to fit a 255-byte TXT string:
+`cpu` (processor name), `ram` (installed memory in whole GB, decimal), `gpu`
+(render adapter name), `os` (e.g. `Windows 11 Pro 24H2 (build 26100)`), and
+`ip` (comma-separated IPv4 addresses, routable before link-local). Like `pk`
+they are public and purely informational.
+
 ## Framing
 
 Every message is an 8-byte header followed by `length` bytes of payload. On the

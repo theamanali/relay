@@ -12,6 +12,8 @@ struct DiscoveredHost {
     let interfaces: [NWInterface]
     /// From TXT `pk`, when the host advertises it.
     let publicKey: Data?
+    /// PC facts from the TXT record (`cpu`, `ram`, `gpu`, `os`, `ip`); informational.
+    var facts = HostFacts()
 
     /// Wired interface to pin the connection to, when the host was seen on one.
     var wiredInterface: NWInterface? { interfaces.first { $0.type == .wiredEthernet } }
@@ -52,6 +54,36 @@ struct DiscoveredHost {
         case .other: return i.name.hasPrefix("utun") ? "VPN" : i.name
         @unknown default: return i.name
         }
+    }
+}
+
+/// What the host says about itself in its TXT record. Anything missing is empty.
+struct HostFacts: Equatable {
+    var cpu = ""
+    var ramGB = 0
+    var gpu = ""
+    var os = ""
+    var ips: [String] = []
+
+    init() {}
+
+    init(txt: NWTXTRecord) {
+        cpu = txt["cpu"] ?? ""
+        ramGB = Int(txt["ram"] ?? "") ?? 0
+        gpu = txt["gpu"] ?? ""
+        os = txt["os"] ?? ""
+        ips = (txt["ip"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
+    }
+
+    /// One line per fact, for the row's tooltip.
+    var lines: [String] {
+        var out: [String] = []
+        if !os.isEmpty { out.append(os) }
+        let compute = [cpu, ramGB > 0 ? "\(ramGB) GB" : ""].filter { !$0.isEmpty }
+        if !compute.isEmpty { out.append(compute.joined(separator: " · ")) }
+        if !gpu.isEmpty { out.append(gpu) }
+        if !ips.isEmpty { out.append(ips.joined(separator: ", ")) }
+        return out
     }
 }
 
@@ -117,9 +149,13 @@ final class HostBrowser {
     static func host(from result: NWBrowser.Result) -> DiscoveredHost? {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
         var key: Data?
-        if case .bonjour(let txt) = result.metadata, let hex = txt["pk"], let data = Data(hex: hex), data.count == 32 {
-            key = data
+        var facts = HostFacts()
+        if case .bonjour(let txt) = result.metadata {
+            if let hex = txt["pk"], let data = Data(hex: hex), data.count == 32 { key = data }
+            facts = HostFacts(txt: txt)
         }
-        return DiscoveredHost(name: name, endpoint: result.endpoint, interfaces: result.interfaces, publicKey: key)
+        var host = DiscoveredHost(name: name, endpoint: result.endpoint, interfaces: result.interfaces, publicKey: key)
+        host.facts = facts
+        return host
     }
 }

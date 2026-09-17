@@ -51,7 +51,7 @@ enum PickerRow {
     /// What the row displays; a change here means the cell must be redrawn.
     fileprivate var appearance: Appearance? {
         guard case .host(let h, let state, let nickname) = self else { return nil }
-        return Appearance(state: state, key: h.publicKey, link: h.preferredLink, nickname: nickname)
+        return Appearance(state: state, key: h.publicKey, link: h.preferredLink, nickname: nickname, facts: h.facts)
     }
 
     fileprivate struct Appearance: Equatable {
@@ -59,6 +59,7 @@ enum PickerRow {
         let key: Data?
         let link: String
         let nickname: String?
+        let facts: HostFacts
     }
 }
 

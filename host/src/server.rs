@@ -73,7 +73,16 @@ pub struct ServerConfig {
 
 pub fn run(cfg: ServerConfig) -> Result<()> {
     let listener = bind_dual_stack(cfg.port)?;
-    let _ad = crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes())?;
+    let facts = crate::sysinfo::HostFacts::gather(&cfg.gpu.name);
+    log::info!(
+        "advertising facts: cpu '{}', {} GB, gpu '{}', os '{}', ip {:?}",
+        facts.cpu,
+        facts.ram_gb,
+        facts.gpu,
+        facts.os,
+        facts.ips
+    );
+    let _ad = crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
 
     loop {

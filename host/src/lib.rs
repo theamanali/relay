@@ -12,6 +12,7 @@ mod native_nvenc;
 mod nvenc_bindings;
 pub mod protocol;
 pub mod server;
+pub mod sysinfo;
 pub mod topology;
 
 /// `%LOCALAPPDATA%\Relay`: identity, PIN, paired clients, display snapshot.

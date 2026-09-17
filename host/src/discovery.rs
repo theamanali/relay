@@ -7,36 +7,58 @@ use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 use crate::protocol::{SERVICE_TYPE, VERSION};
+use crate::sysinfo::HostFacts;
 
 pub struct Advertisement {
     daemon: ServiceDaemon,
     fullname: String,
 }
 
-pub fn advertise(instance_name: &str, port: u16, public_key: &[u8; 32]) -> Result<Advertisement> {
+pub fn advertise(
+    instance_name: &str,
+    port: u16,
+    public_key: &[u8; 32],
+    facts: &HostFacts,
+) -> Result<Advertisement> {
     let daemon = ServiceDaemon::new().context("starting mDNS responder")?;
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "travelpc".into());
     let host = format!("{}.local.", hostname.to_lowercase());
-    let info = service_info(instance_name, &host, port, public_key)?.enable_addr_auto();
+    let info = service_info(instance_name, &host, port, public_key, facts)?.enable_addr_auto();
     let fullname = info.get_fullname().to_string();
     daemon.register(info).context("registering mDNS service")?;
     log::info!("advertising {fullname} on port {port}");
     Ok(Advertisement { daemon, fullname })
 }
 
-/// Build the advertised service record: the protocol version and the host's
-/// identity public key as 64 lowercase hex chars, so a client can show whether
-/// it is already paired before connecting. `pk` is public and never trusted in
-/// place of the handshake (see docs/PROTOCOL.md).
+/// Build the advertised service record: the protocol version, the host's
+/// identity public key as 64 lowercase hex chars (so a client can show whether
+/// it is already paired before connecting), and the PC facts the client shows
+/// on hover. All of it is public and none of it is trusted in place of the
+/// handshake (see docs/PROTOCOL.md).
 fn service_info(
     instance_name: &str,
     host: &str,
     port: u16,
     public_key: &[u8; 32],
+    facts: &HostFacts,
 ) -> Result<ServiceInfo> {
     let mut props = HashMap::new();
     props.insert("v".to_string(), VERSION.to_string());
     props.insert("pk".to_string(), hex::encode(public_key));
+    for (k, v) in facts.txt_entries() {
+        // A TXT string is at most 255 bytes including "key=".
+        let room = 255 - k.len() - 1;
+        let v = if v.len() > room {
+            let mut end = room;
+            while !v.is_char_boundary(end) {
+                end -= 1;
+            }
+            v[..end].to_string()
+        } else {
+            v
+        };
+        props.insert(k, v);
+    }
     ServiceInfo::new(SERVICE_TYPE, instance_name, host, "", port, Some(props))
         .context("building mDNS service info")
 }
@@ -61,11 +83,27 @@ mod tests {
             0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x0f, 0x1e, 0x2d, 0x3c,
             0x4b, 0x5a, 0x69, 0x78,
         ];
-        let info = service_info("Test PC", "test-pc.local.", 8468, &key).unwrap();
+        let info = service_info("Test PC", "test-pc.local.", 8468, &key, &HostFacts::default()).unwrap();
         assert_eq!(info.get_property_val_str("v").unwrap(), VERSION.to_string());
         let pk = info.get_property_val_str("pk").unwrap();
         assert_eq!(pk.len(), 64);
         assert_eq!(pk, hex::encode(key));
         assert_eq!(pk, pk.to_lowercase());
+        assert!(info.get_property_val_str("cpu").is_none());
+    }
+
+    #[test]
+    fn advertises_facts_within_txt_limits() {
+        let facts = HostFacts {
+            cpu: "AMD Ryzen 9 7950X 16-Core Processor".into(),
+            ram_gb: 64,
+            gpu: "x".repeat(300),
+            os: "Windows 11 Pro 24H2 (build 26100)".into(),
+            ips: vec!["192.168.1.5".into(), "169.254.10.20".into()],
+        };
+        let info = service_info("Test PC", "test-pc.local.", 8468, &[0u8; 32], &facts).unwrap();
+        assert_eq!(info.get_property_val_str("ram").unwrap(), "64");
+        assert_eq!(info.get_property_val_str("ip").unwrap(), "192.168.1.5,169.254.10.20");
+        assert_eq!(info.get_property_val_str("gpu").unwrap().len(), 255 - "gpu=".len());
     }
 }

@@ -197,9 +197,10 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         renameButton.isHidden = host.publicKey == nil
         forgetButton.isHidden = state != .paired
 
-        // Tooltip: facts about the device only.
+        // Tooltip: facts about the PC only — what it advertises, then how we see it.
         var facts: [String] = []
         if nickname != nil { facts.append(host.name) }
+        facts += host.facts.lines
         facts.append("Reachable over " + host.allLinks)
         if let key = host.publicKey { facts.append("Key fingerprint \(fingerprint(key))") }
         facts.append(state == .paired ? "Paired with this MacBook" : "Not paired yet")

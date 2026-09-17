@@ -34,6 +34,7 @@ hmac = "0.12"
 chacha20poly1305 = "0.10"
 rand = "0.8"
 hex = "0.4"
+if-addrs = "0.13"
 
 [dependencies.windows]
 version = "0.58"
@@ -57,6 +58,7 @@ features = [
     "Win32_Media",
     "Win32_System_Performance",
     "Win32_System_Power",
+    "Win32_System_SystemInformation",
     "Wdk_Graphics_Direct3D",
     "Win32_Devices_Display",
 ]
