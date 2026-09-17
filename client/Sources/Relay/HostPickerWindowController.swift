@@ -249,13 +249,15 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
             modeRow.topAnchor.constraint(equalTo: footer.topAnchor, constant: 14),
             modeRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
-            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: footer.trailingAnchor, constant: -20),
+            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: optionsButton.leadingAnchor, constant: -12),
 
-            optionsButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 18),
-            optionsButton.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
+            // Gear at the end of the Stream line; the status line then reads
+            // straight from the left edge.
+            optionsButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -18),
+            optionsButton.centerYAnchor.constraint(equalTo: modeRow.centerYAnchor),
             optionsButton.widthAnchor.constraint(equalToConstant: 24),
             optionsButton.heightAnchor.constraint(equalToConstant: 24),
-            statusLabel.leadingAnchor.constraint(equalTo: optionsButton.trailingAnchor, constant: 8),
+            statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
             connectButton.topAnchor.constraint(equalTo: modeRow.bottomAnchor, constant: 12),
