@@ -187,7 +187,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let modeRow = NSStackView(views: [modeLabel, resolutionPopup, refreshSegment])
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
-        modeRow.spacing = 8
+        modeRow.spacing = 10
+        modeRow.setCustomSpacing(6, after: modeLabel)
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
         optionsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Options")
@@ -290,7 +291,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         for (i, hz) in rates.enumerated() {
             refreshSegment.setLabel("\(hz) Hz", forSegment: i)
             refreshSegment.setTag(hz, forSegment: i)
-            refreshSegment.setWidth(64, forSegment: i)
         }
         refreshSegment.isHidden = rates.count < 2
 
