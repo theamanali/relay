@@ -155,10 +155,12 @@ asks for the PIN (a sheet on the list), exchanges keys and moves the PC to
 **Connect** starts the session: progress shows in the list's footer, the button
 reads *Cancel* until then, and the full-screen kiosk window appears with the
 first decoded frame. When the session ends the list comes back with the
-same host selected. Under the list a popup chooses the resolution — native,
+same host selected. In the footer a popup chooses the resolution — native,
 75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
-control chooses 120 or 60 Hz (shown only where the panel supports both); the last
-choice is remembered. This
+control chooses 120 or 60 Hz (shown only where the panel supports both). The gear
+opens the options: keyboard mapping (⌘ as Ctrl, or physical positions), whether
+keyboard and mouse are sent to the PC, and the latency overlay. All of it is
+remembered; the matching command-line flags override it for one launch. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record); a host that advertises no key, or an unknown

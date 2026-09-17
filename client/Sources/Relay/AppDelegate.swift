@@ -19,6 +19,7 @@ struct LaunchOptions {
     var maxFPSGiven = false
     var scaleGiven = false
     var modifiers: ModifierMapping = .mac
+    var modifiersGiven = false
     var noInput = false
     var pin: String? = nil
     var showLatency = false
@@ -41,7 +42,10 @@ struct LaunchOptions {
             case "--scale":
                 if let v = it.next(), let s = Double(v) { o.scale = s; o.scaleGiven = true }
             case "--modifiers":
-                if let v = it.next(), let m = ModifierMapping(rawValue: v) { o.modifiers = m }
+                if let v = it.next(), let m = ModifierMapping(rawValue: v) {
+                    o.modifiers = m
+                    o.modifiersGiven = true
+                }
             case "--no-input":
                 o.noInput = true
             case "--pin":
@@ -116,6 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// Session started from the picker that has not shown a frame yet: the
     /// kiosk window opens on the first decoded picture, not before.
     private var pendingSession: (screen: NSScreen, mode: StreamMode)?
+    /// Remembered options, with this launch's flags applied on top.
+    private var prefs = SessionPrefs()
 
     init(options: LaunchOptions) {
         self.options = options
@@ -127,10 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let screen = NSScreen.main ?? NSScreen.screens[0]
         view = StreamView(frame: screen.frame)
         view.delegate = self
-        view.keyMap = KeyMap(modifiers: options.modifiers)
-        view.forwardInput = !options.noInput
+        prefs = SessionPrefs.load().overridden(by: options)
+        applyPrefs()
         view.attach(videoLayer: renderer.layer)
-        view.latencyVisible = options.showLatency
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
         renderer.firstFrameHandler = { [weak self] in
             DispatchQueue.main.async {
@@ -236,6 +241,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
             configurePicker(for: screen, initial: initialMode(for: screen))
             p.onModeChange = { mode in mode.save() }
+            p.prefs = prefs
+            p.onPrefsChange = { [weak self] prefs in
+                guard let self else { return }
+                self.prefs = prefs
+                prefs.save()
+                self.applyPrefs()
+            }
             // Display plugged/unplugged or the window dragged to another
             // screen: offer that screen's sizes and rates.
             screenObserver = NotificationCenter.default.addObserver(
@@ -300,6 +312,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             guard response == .alertFirstButtonReturn else { return }
             self?.forget(host: host, key: key, picker: p)
         }
+    }
+
+    private func applyPrefs() {
+        view.keyMap = KeyMap(modifiers: prefs.modifiers)
+        view.forwardInput = prefs.forwardInput
+        view.latencyVisible = prefs.showLatency
+        refreshLatencyOverlay()
     }
 
     /// Nickname if the user gave one, else the PC's own name, clipped to fit a sentence.
@@ -411,7 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         opts.requestedWidth = w
         opts.requestedHeight = h
         opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
-        opts.wantsInput = !options.noInput
+        opts.wantsInput = prefs.forwardInput
         opts.clientName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         opts.pin = options.pin
         let c: HostConnection

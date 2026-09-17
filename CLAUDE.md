@@ -36,8 +36,10 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 PC: `host\target\release\relay-host.exe` (prints the pairing PIN; `pin`, `paired`,
 `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
-found over Bonjour under *Paired* / *Available* plus a resolution popup (native/75%/50% of
-the current screen) and a 120/60 Hz segmented control, remembered in UserDefaults; an available host gets a Pair button (PIN sheet,
+found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
+of the current screen), a 120/60 Hz segmented control and a gear popover (modifier
+mapping, send input, latency HUD — `SessionPrefs`), all remembered in UserDefaults and
+overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
 then it moves to Paired without streaming); a paired host connects from within the picker
 (footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. `--host` skips the picker and re-dials on
 drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,

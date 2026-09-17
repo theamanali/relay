@@ -36,7 +36,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     private let spinner = NSProgressIndicator()
     private let statusLabel = NSTextField(labelWithString: "")
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
-    private let helpButton = NSButton(title: "", target: nil, action: nil)
+    private let optionsButton = NSButton(title: "", target: nil, action: nil)
+    /// Session options shown in the gear popover; set by the app, saved by it.
+    var prefs = SessionPrefs()
+    var onPrefsChange: ((SessionPrefs) -> Void)?
     private let resolutionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let refreshSegment = NSSegmentedControl()
     private var nativePixelSize = CGSize(width: 2, height: 2)
@@ -153,28 +156,50 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         listContainer.addSubview(scroll)
         listContainer.addSubview(emptyState)
 
-        // Footer: mode controls, then help · status · Connect.
+        // Footer: a separated band with the stream mode on one line and
+        // gear · status · Connect on the next.
+        let footer = NSVisualEffectView()
+        footer.material = .headerView
+        footer.blendingMode = .withinWindow
+        footer.state = .active
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+
+        let modeLabel = NSTextField(labelWithString: "Stream")
+        modeLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        modeLabel.textColor = .secondaryLabelColor
         resolutionPopup.target = self
         resolutionPopup.action = #selector(modeChanged)
+        resolutionPopup.controlSize = .small
+        resolutionPopup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         resolutionPopup.setAccessibilityLabel("Resolution")
         resolutionPopup.toolTip = "Resolution to stream"
         refreshSegment.target = self
         refreshSegment.action = #selector(modeChanged)
         refreshSegment.trackingMode = .selectOne
         refreshSegment.segmentStyle = .rounded
+        refreshSegment.controlSize = .small
+        refreshSegment.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         refreshSegment.setAccessibilityLabel("Refresh rate")
         refreshSegment.toolTip = "Refresh rate"
-        let modeRow = NSStackView(views: [resolutionPopup, refreshSegment])
+        let modeRow = NSStackView(views: [modeLabel, resolutionPopup, refreshSegment])
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
-        modeRow.spacing = 12
+        modeRow.spacing = 8
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
-        helpButton.bezelStyle = .helpButton
-        helpButton.target = self
-        helpButton.action = #selector(showHelp)
-        helpButton.setAccessibilityLabel("Pairing help")
-        helpButton.translatesAutoresizingMaskIntoConstraints = false
+        optionsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Options")
+        optionsButton.symbolConfiguration = .init(pointSize: 13, weight: .medium)
+        optionsButton.imagePosition = .imageOnly
+        optionsButton.isBordered = false
+        optionsButton.contentTintColor = .secondaryLabelColor
+        optionsButton.target = self
+        optionsButton.action = #selector(showOptions)
+        optionsButton.toolTip = "Options"
+        optionsButton.setAccessibilityLabel("Options")
+        optionsButton.translatesAutoresizingMaskIntoConstraints = false
 
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
@@ -192,10 +217,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
         content.addSubview(header)
         content.addSubview(listContainer)
-        content.addSubview(modeRow)
-        content.addSubview(helpButton)
-        content.addSubview(statusLabel)
-        content.addSubview(connectButton)
+        content.addSubview(footer)
+        footer.addSubview(separator)
+        footer.addSubview(modeRow)
+        footer.addSubview(optionsButton)
+        footer.addSubview(statusLabel)
+        footer.addSubview(connectButton)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: content.topAnchor, constant: 44),
             header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
@@ -204,7 +231,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             listContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
             listContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             listContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
-            listContainer.bottomAnchor.constraint(equalTo: modeRow.topAnchor, constant: -16),
+            listContainer.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
             scroll.topAnchor.constraint(equalTo: listContainer.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor),
@@ -213,17 +240,27 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             emptyState.centerYAnchor.constraint(equalTo: listContainer.centerYAnchor),
             emptyState.widthAnchor.constraint(lessThanOrEqualTo: listContainer.widthAnchor, constant: -40),
 
-            modeRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
-            modeRow.bottomAnchor.constraint(equalTo: connectButton.topAnchor, constant: -14),
+            footer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            separator.topAnchor.constraint(equalTo: footer.topAnchor),
+            separator.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
 
-            helpButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            helpButton.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo: helpButton.trailingAnchor, constant: 10),
+            modeRow.topAnchor.constraint(equalTo: footer.topAnchor, constant: 14),
+            modeRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
+            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: footer.trailingAnchor, constant: -20),
+
+            optionsButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 18),
+            optionsButton.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
+            optionsButton.widthAnchor.constraint(equalToConstant: 24),
+            optionsButton.heightAnchor.constraint(equalToConstant: 24),
+            statusLabel.leadingAnchor.constraint(equalTo: optionsButton.trailingAnchor, constant: 8),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: connectButton.centerYAnchor),
-            connectButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            connectButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+            connectButton.topAnchor.constraint(equalTo: modeRow.bottomAnchor, constant: 12),
+            connectButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
+            connectButton.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -16),
             connectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
         window.initialFirstResponder = table
@@ -487,23 +524,52 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         }
     }
 
-    @objc private func showHelp() {
+    @objc private func showOptions() {
         let popover = NSPopover()
         popover.behavior = .transient
-        let title = NSTextField(labelWithString: "Pairing")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        let body = NSTextField(wrappingLabelWithString:
-            "The first time you connect to a PC, Relay asks for the PIN shown in the Relay window on that PC. " +
-            "Hover over a PC to see its key fingerprint if you want to check it against the PIN request. " +
-            "You only pair once per PC.")
-        body.font = .systemFont(ofSize: 11)
-        body.textColor = .secondaryLabelColor
-        body.preferredMaxLayoutWidth = 280
-        let stack = NSStackView(views: [title, body])
+
+        let modifiers = NSPopUpButton(frame: .zero, pullsDown: false)
+        modifiers.addItem(withTitle: "⌘ acts as Ctrl (Mac shortcuts work)")
+        modifiers.lastItem?.representedObject = ModifierMapping.mac.rawValue
+        modifiers.addItem(withTitle: "Keys by physical position")
+        modifiers.lastItem?.representedObject = ModifierMapping.physical.rawValue
+        modifiers.selectItem(at: prefs.modifiers == .mac ? 0 : 1)
+        modifiers.controlSize = .small
+        modifiers.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        modifiers.target = self
+        modifiers.action = #selector(optionChanged(_:))
+        modifiers.identifier = .init("modifiers")
+
+        let input = NSButton(checkboxWithTitle: "Send keyboard and mouse to the PC", target: self, action: #selector(optionChanged(_:)))
+        input.state = prefs.forwardInput ? .on : .off
+        input.identifier = .init("input")
+        let latency = NSButton(checkboxWithTitle: "Show latency stats (⌃⌥⌘L)", target: self, action: #selector(optionChanged(_:)))
+        latency.state = prefs.showLatency ? .on : .off
+        latency.identifier = .init("latency")
+        for c in [input, latency] {
+            c.controlSize = .small
+            c.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        }
+
+        let keyboardLabel = NSTextField(labelWithString: "Keyboard")
+        keyboardLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        let help = NSTextField(wrappingLabelWithString:
+            "Pairing: the first time you connect to a PC, Relay asks for the PIN shown in the Relay window on that PC. " +
+            "Hover over a PC for its details and key fingerprint. Leave a stream with ⌃⌥⌘Q.")
+        help.font = .systemFont(ofSize: 11)
+        help.textColor = .secondaryLabelColor
+        help.preferredMaxLayoutWidth = 280
+        let rule = NSBox()
+        rule.boxType = .separator
+
+        let stack = NSStackView(views: [keyboardLabel, modifiers, input, latency, rule, help])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        stack.spacing = 8
+        stack.setCustomSpacing(4, after: keyboardLabel)
+        stack.setCustomSpacing(12, after: latency)
+        stack.setCustomSpacing(12, after: rule)
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let vc = NSViewController()
         vc.view = NSView()
@@ -513,10 +579,25 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             stack.bottomAnchor.constraint(equalTo: vc.view.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: vc.view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: vc.view.trailingAnchor),
-            vc.view.widthAnchor.constraint(equalToConstant: 308),
+            rule.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            vc.view.widthAnchor.constraint(equalToConstant: 312),
         ])
         popover.contentViewController = vc
-        popover.show(relativeTo: helpButton.bounds, of: helpButton, preferredEdge: .maxY)
+        popover.show(relativeTo: optionsButton.bounds, of: optionsButton, preferredEdge: .maxY)
+    }
+
+    @objc private func optionChanged(_ sender: NSControl) {
+        switch sender.identifier?.rawValue {
+        case "modifiers":
+            if let raw = (sender as? NSPopUpButton)?.selectedItem?.representedObject as? String,
+               let m = ModifierMapping(rawValue: raw) {
+                prefs.modifiers = m
+            }
+        case "input": prefs.forwardInput = (sender as? NSButton)?.state == .on
+        case "latency": prefs.showLatency = (sender as? NSButton)?.state == .on
+        default: return
+        }
+        onPrefsChange?(prefs)
     }
 
     // MARK: table
