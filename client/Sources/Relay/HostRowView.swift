@@ -44,6 +44,8 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
     /// In-place rename finished: the new text (empty = use the PC's own name), or nil if cancelled.
     var onRenameEnded: ((String?) -> Void)?
     private var hostName = ""
+    private var hoverRows: [(label: String, value: String)] = []
+    private var tracking: NSTrackingArea?
     private var displayedName = ""
     private(set) var isEditingName = false
 
@@ -124,6 +126,30 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         button.heightAnchor.constraint(equalToConstant: 28).isActive = true
     }
 
+    // MARK: hover card
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard !isEditingName else { return }
+        HoverCard.shared.schedule(rows: hoverRows, for: self)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        HoverCard.shared.hide()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        HoverCard.shared.hide()
+        super.mouseDown(with: event)
+    }
+
     @objc private func renameTapped() { onRename?() }
     @objc private func forgetTapped() { onForget?() }
 
@@ -196,12 +222,13 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         renameButton.isHidden = host.publicKey == nil
         forgetButton.isHidden = state != .paired
 
-        // Tooltip: facts about the PC only — what it advertises, then how we see it.
-        var facts: [String] = []
-        if nickname != nil { facts.append(host.name) }
-        facts += host.facts.lines
-        facts.append("Reachable over " + host.allLinks)
-        if let key = host.publicKey { facts.append("Key fingerprint \(fingerprint(key))") }
-        toolTip = facts.joined(separator: "\n")
+        // Hover card: facts about the PC only — what it advertises, then how we see it.
+        var rows: [(label: String, value: String)] = []
+        if nickname != nil { rows.append(("Name:", host.name)) }
+        rows += host.facts.rows
+        rows.append(("Link:", host.allLinks))
+        if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
+        hoverRows = rows
+        toolTip = nil
     }
 }

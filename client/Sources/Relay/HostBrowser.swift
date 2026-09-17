@@ -75,15 +75,15 @@ struct HostFacts: Equatable {
         ips = (txt["ip"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
     }
 
-    /// One labelled line per fact, for the row's tooltip.
-    var lines: [String] {
-        var out: [String] = []
-        if !os.isEmpty { out.append(os) }
-        if !cpu.isEmpty { out.append("CPU  " + cpu) }
-        if ramGB > 0 { out.append("RAM  \(ramGB) GB") }
-        if !gpu.isEmpty { out.append("GPU  " + gpu) }
+    /// Label / value pairs for the hover card.
+    var rows: [(label: String, value: String)] {
+        var out: [(String, String)] = []
+        if !os.isEmpty { out.append(("Windows:", os)) }
+        if !cpu.isEmpty { out.append(("CPU:", cpu)) }
+        if ramGB > 0 { out.append(("RAM:", "\(ramGB) GB")) }
+        if !gpu.isEmpty { out.append(("GPU:", gpu)) }
         for ip in ips {
-            out.append("IP   " + ip + Self.annotation(for: ip))
+            out.append(("IP:", ip + Self.annotation(for: ip)))
         }
         return out
     }

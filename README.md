@@ -145,7 +145,7 @@ swift run Relay            # dev
 ```
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
-**Available**, each with the link the connection will use. Hovering a PC shows what it
+**Available**, each with the link the connection will use. Hovering a PC shows a card with what it
 advertises about itself — Windows edition and version, CPU and RAM, GPU, IP
 addresses — plus every link it was seen on and its key fingerprint. For an available PC the button reads **Pair**: it
 asks for the PIN (a sheet on the list), exchanges keys and moves the PC to
