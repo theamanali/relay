@@ -17,14 +17,13 @@ final class PickerRowsTests: XCTestCase {
         let onlyAvailable = PickerRows.build(hosts: [host("Desk PC", key: keyA)], known: [:])
         XCTAssertEqual(onlyAvailable.map(\.id), [.header(.available), .host("Desk PC")])
 
-        let both = PickerRows.build(hosts: [host("Desk PC", key: keyA), host("Laptop")], known: [keyA: "Desk PC"])
+        let both = PickerRows.build(hosts: [host("Desk PC", key: keyA), host("Laptop", key: keyB)], known: [keyA: "Desk PC"])
         XCTAssertEqual(both.map(\.id), [.header(.paired), .host("Desk PC"), .header(.available), .host("Laptop")])
     }
 
-    func testBuildDistinguishesNameOnlyPairing() {
+    func testBuildIgnoresNameMatchesWithoutAKey() {
         let rows = PickerRows.build(hosts: [host("Desk PC")], known: [keyA: "Desk PC"])
-        guard case .host(_, let state) = rows[1] else { return XCTFail("expected a host row") }
-        XCTAssertEqual(state, .pairedByName)
+        XCTAssertEqual(rows.map(\.id), [.header(.available), .host("Desk PC")])
     }
 
     func testDiffAddsAndRemoves() {

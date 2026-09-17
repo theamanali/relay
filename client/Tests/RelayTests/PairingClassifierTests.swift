@@ -14,35 +14,22 @@ final class PairingClassifierTests: XCTestCase {
     func testAdvertisedKeyDecides() {
         let known = [keyA: "Desk PC"]
         let r = PairingClassifier.classify([host("Desk PC", key: keyA), host("Desk PC", key: keyB), host("Other", key: keyB)], known: known)
-        XCTAssertEqual(r.paired.map(\.host.name), ["Desk PC"])
-        XCTAssertFalse(r.paired[0].byNameOnly)
+        XCTAssertEqual(r.paired.map(\.name), ["Desk PC"])
         // Same name but a different key is not paired, even though the name matches.
         XCTAssertEqual(r.unpaired.map(\.name), ["Desk PC", "Other"])
     }
 
-    func testNameFallbackWhenKeyNotAdvertised() {
+    func testNameAloneNeverPairs() {
         let known = [keyA: "Desk PC"]
         let r = PairingClassifier.classify([host("Desk PC"), host("Laptop")], known: known)
-        XCTAssertEqual(r.paired.map(\.host.name), ["Desk PC"])
-        XCTAssertTrue(r.paired[0].byNameOnly)
-        XCTAssertEqual(r.unpaired.map(\.name), ["Laptop"])
-    }
-
-    func testEmptyRememberedNameNeverMatches() {
-        let r = PairingClassifier.classify([host("")], known: [keyA: ""])
         XCTAssertTrue(r.paired.isEmpty)
+        XCTAssertEqual(r.unpaired.map(\.name), ["Desk PC", "Laptop"])
     }
 
-    func testExpectedIdentityUsesUniqueRememberedNameWhenAdvertisedKeyChanged() {
+    func testExpectedIdentityIsTheRememberedAdvertisedKey() {
         let known = [keyA: "Desk PC"]
-        XCTAssertEqual(
-            PairingClassifier.expectedKey(for: host("Desk PC", key: keyB), known: known),
-            keyA
-        )
-    }
-
-    func testExpectedIdentityDoesNotGuessBetweenDuplicateNames() {
-        let known = [keyA: "Desk PC", keyB: "Desk PC"]
+        XCTAssertEqual(PairingClassifier.expectedKey(for: host("Desk PC", key: keyA), known: known), keyA)
+        XCTAssertNil(PairingClassifier.expectedKey(for: host("Desk PC", key: keyB), known: known))
         XCTAssertNil(PairingClassifier.expectedKey(for: host("Desk PC"), known: known))
     }
 

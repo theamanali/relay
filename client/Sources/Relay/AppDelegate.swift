@@ -266,15 +266,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             p.status = "“\(host.name)” is not paired with this Mac"
             return
         }
+        let shown = ClientState.nicknames()[key] ?? host.name
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Forget “\(host.name)”?"
+        alert.messageText = "Forget “\(shown)”?"
         alert.informativeText = "This Mac and the PC will both forget each other. To connect again you'll enter the PIN shown on the PC."
         alert.addButton(withTitle: "Forget").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
             self?.forget(host: host, key: key, picker: p)
+        }
+    }
+
+    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, currentName: String) {
+        guard let key = host.publicKey, let window = p.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename “\(host.name)”"
+        alert.informativeText = "The name is only changed on this Mac. Leave it empty to use the PC's own name again."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = currentName == host.name ? "" : currentName
+        field.placeholderString = host.name
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            ClientState.setNickname(field.stringValue, for: key)
+            p.reloadPairing()
         }
     }
 
@@ -296,7 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             return
         }
         unpairTask = task
-        p.status = "Forgetting “\(host.name)”…"
+        let shown = ClientState.nicknames()[key] ?? host.name
+        p.status = "Forgetting “\(shown)”…"
         let myFingerprint = (try? ClientState.identity()).map { fingerprint($0.publicKey.rawRepresentation) } ?? "?"
         task.run(timeout: 6) { [weak self] confirmed in
             ClientState.forget(host: key)
@@ -305,8 +326,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 self.unpairTask = nil
                 p.reloadPairing()
                 p.status = confirmed
-                    ? "Forgot “\(host.name)” on this Mac and the PC"
-                    : "Forgot “\(host.name)” here; the PC didn't answer — on it run: relay-host paired --forget \(myFingerprint)"
+                    ? "Forgot “\(shown)” on this Mac and the PC"
+                    : "Forgot “\(shown)” here; the PC didn't answer — on it run: relay-host paired --forget \(myFingerprint)"
             }
         }
     }

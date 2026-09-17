@@ -8,6 +8,8 @@ protocol HostPickerDelegate: AnyObject {
     func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost)
     /// The user wants to drop the pairing with this host (context menu / Delete).
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost)
+    /// The user wants to give this host a local name; `currentName` is what the row shows now.
+    func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, currentName: String)
 }
 
 /// Lets Delete / Backspace on a selected row reach the controller.
@@ -283,7 +285,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     func update(hosts: [DiscoveredHost]) {
         if hosts.map(\.name) != self.hosts.map(\.name) { status = "" }
         self.hosts = hosts
-        apply(PickerRows.build(hosts: hosts, known: ClientState.knownHosts()))
+        apply(currentRows())
         refreshStatus()
     }
 
@@ -386,41 +388,50 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         pickerDelegate?.picker(self, didChoose: host)
     }
 
-    /// Re-run the paired / available split after hosts.txt changed.
+    /// Re-run the paired / available split after hosts.txt or nicknames changed.
     func reloadPairing() {
-        apply(PickerRows.build(hosts: hosts, known: ClientState.knownHosts()))
+        apply(currentRows())
     }
 
-    private func pairedHost(at row: Int) -> DiscoveredHost? {
-        guard row >= 0, row < rows.count, case .host(let h, let state) = rows[row], state != .unpaired else {
-            return nil
-        }
-        return h
+    private func currentRows() -> [PickerRow] {
+        PickerRows.build(hosts: hosts, known: ClientState.knownHosts(), nicknames: ClientState.nicknames())
+    }
+
+    private func hostRow(at row: Int) -> (host: DiscoveredHost, state: HostPairState, nickname: String?)? {
+        guard row >= 0, row < rows.count, case .host(let h, let state, let nickname) = rows[row] else { return nil }
+        return (h, state, nickname)
     }
 
     private func forgetSelected() {
-        guard let host = pairedHost(at: table.selectedRow) else { return }
-        pickerDelegate?.picker(self, forget: host)
+        guard let r = hostRow(at: table.selectedRow), r.state == .paired else { return }
+        pickerDelegate?.picker(self, forget: r.host)
     }
 
     @objc private func forgetClicked() {
-        guard let host = pairedHost(at: table.clickedRow) else { return }
-        pickerDelegate?.picker(self, forget: host)
+        guard let r = hostRow(at: table.clickedRow), r.state == .paired else { return }
+        pickerDelegate?.picker(self, forget: r.host)
+    }
+
+    @objc private func renameClicked() {
+        guard let r = hostRow(at: table.clickedRow), r.host.publicKey != nil else { return }
+        pickerDelegate?.picker(self, rename: r.host, currentName: r.nickname ?? r.host.name)
     }
 
     // MARK: context menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let row = table.clickedRow
-        guard row >= 0, row < rows.count, case .host(let host, let state) = rows[row] else { return }
-        if state == .unpaired {
+        guard let r = hostRow(at: table.clickedRow) else { return }
+        let shown = r.nickname ?? r.host.name
+        if r.host.publicKey != nil {
+            menu.addItem(withTitle: "Rename…", action: #selector(renameClicked), keyEquivalent: "").target = self
+        }
+        if r.state == .paired {
+            menu.addItem(withTitle: "Forget “\(shown)”…", action: #selector(forgetClicked), keyEquivalent: "").target = self
+        } else {
             let item = NSMenuItem(title: "Not paired — connect to pair with its PIN", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
-        } else {
-            menu.addItem(withTitle: "Forget “\(host.name)”…", action: #selector(forgetClicked), keyEquivalent: "")
-                .target = self
         }
     }
 
@@ -483,10 +494,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
                 ?? SectionHeaderView(frame: .zero)
             view.configure(section: section)
             return view
-        case .host(let host, let state):
+        case .host(let host, let state, let nickname):
             let view = tableView.makeView(withIdentifier: HostRowView.identifier, owner: nil) as? HostRowView
                 ?? HostRowView(frame: .zero)
-            view.configure(host: host, state: state)
+            view.configure(host: host, state: state, nickname: nickname)
             return view
         }
     }

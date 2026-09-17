@@ -42,7 +42,9 @@ and a dropped session returns to the picker. `--host` skips the picker and re-di
 drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
 `--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
 `--host` mode). Right-click / Delete on a paired host forgets it on both sides (UNPAIR
-message; `relay-host paired --forget <fp>` is the host-only fallback).
+message; `relay-host paired --forget <fp>` is the host-only fallback); right-click →
+Rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
+`hosts.txt` — there is no name-based fallback.
 
 ## Hard-won facts — do not relearn these
 

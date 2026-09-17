@@ -61,32 +61,52 @@ enum ClientState {
 
     /// Hosts paired with: public key (hex) -> name, one per line.
     static func knownHosts() -> [Data: String] {
-        let file = directory.appendingPathComponent("hosts.txt")
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return [:] }
-        var hosts: [Data: String] = [:]
-        for line in text.split(separator: "\n") {
-            let parts = line.split(separator: " ", maxSplits: 1)
-            guard let first = parts.first, let key = Data(hex: String(first)), key.count == 32 else { continue }
-            hosts[key] = parts.count > 1 ? String(parts[1]) : ""
-        }
-        return hosts
+        load("hosts.txt")
     }
 
     static func remember(host key: Data, name: String) {
         var hosts = knownHosts()
         hosts[key] = name.replacingOccurrences(of: "\n", with: " ")
-        save(hosts)
+        save(hosts, to: "hosts.txt")
     }
 
     static func forget(host key: Data) {
         var hosts = knownHosts()
-        guard hosts.removeValue(forKey: key) != nil else { return }
-        save(hosts)
+        if hosts.removeValue(forKey: key) != nil { save(hosts, to: "hosts.txt") }
+        setNickname(nil, for: key)
     }
 
-    private static func save(_ hosts: [Data: String]) {
-        let text = hosts.map { "\($0.key.hex) \($0.value)" }.joined(separator: "\n") + "\n"
-        try? text.write(to: directory.appendingPathComponent("hosts.txt"), atomically: true, encoding: .utf8)
+    /// Names the user gave hosts on this Mac (public key -> name). Kept apart
+    /// from hosts.txt, which the connection rewrites with the host's own name.
+    static func nicknames() -> [Data: String] {
+        load("nicknames.txt")
+    }
+
+    static func setNickname(_ name: String?, for key: Data) {
+        var names = nicknames()
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            guard names.removeValue(forKey: key) != nil else { return }
+        } else {
+            names[key] = trimmed.replacingOccurrences(of: "\n", with: " ")
+        }
+        save(names, to: "nicknames.txt")
+    }
+
+    private static func load(_ file: String) -> [Data: String] {
+        guard let text = try? String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8) else { return [:] }
+        var map: [Data: String] = [:]
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: " ", maxSplits: 1)
+            guard let first = parts.first, let key = Data(hex: String(first)), key.count == 32 else { continue }
+            map[key] = parts.count > 1 ? String(parts[1]) : ""
+        }
+        return map
+    }
+
+    private static func save(_ map: [Data: String], to file: String) {
+        let text = map.map { "\($0.key.hex) \($0.value)" }.joined(separator: "\n") + "\n"
+        try? text.write(to: directory.appendingPathComponent(file), atomically: true, encoding: .utf8)
     }
 }
 

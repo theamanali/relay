@@ -32,24 +32,15 @@ struct DiscoveredHost {
     }
 }
 
-/// Splits discovered hosts into paired and not, using the identity key when
-/// advertised and the remembered service name otherwise.
+/// Splits discovered hosts into paired and not. Only the advertised identity
+/// key counts: a host that does not advertise one is never assumed paired.
 enum PairingClassifier {
-    struct Entry {
-        let host: DiscoveredHost
-        /// True when pairing was inferred from the name alone.
-        let byNameOnly: Bool
-    }
-
-    static func classify(_ hosts: [DiscoveredHost], known: [Data: String]) -> (paired: [Entry], unpaired: [DiscoveredHost]) {
-        let names = Set(known.values.filter { !$0.isEmpty })
-        var paired: [Entry] = []
+    static func classify(_ hosts: [DiscoveredHost], known: [Data: String]) -> (paired: [DiscoveredHost], unpaired: [DiscoveredHost]) {
+        var paired: [DiscoveredHost] = []
         var unpaired: [DiscoveredHost] = []
         for host in hosts {
-            if let key = host.publicKey {
-                if known[key] != nil { paired.append(Entry(host: host, byNameOnly: false)) } else { unpaired.append(host) }
-            } else if names.contains(host.name) {
-                paired.append(Entry(host: host, byNameOnly: true))
+            if let key = host.publicKey, known[key] != nil {
+                paired.append(host)
             } else {
                 unpaired.append(host)
             }
@@ -58,15 +49,9 @@ enum PairingClassifier {
     }
 
     /// Identity the handshake must present for a host the user paired before.
-    /// A unique remembered service name covers older announcements without a
-    /// key and detects a changed advertised key instead of silently re-pairing.
     static func expectedKey(for host: DiscoveredHost, known: [Data: String]) -> Data? {
-        if let advertised = host.publicKey, known[advertised] != nil {
-            return advertised
-        }
-        guard !host.name.isEmpty else { return nil }
-        let matches = known.filter { $0.value == host.name }.map(\.key)
-        return matches.count == 1 ? matches[0] : nil
+        guard let advertised = host.publicKey, known[advertised] != nil else { return nil }
+        return advertised
     }
 }
 

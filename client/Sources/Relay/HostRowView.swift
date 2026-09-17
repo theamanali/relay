@@ -88,10 +88,12 @@ final class HostRowView: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(host: DiscoveredHost, state: HostPairState) {
-        nameLabel.stringValue = host.name
+    func configure(host: DiscoveredHost, state: HostPairState, nickname: String?) {
+        nameLabel.stringValue = nickname ?? host.name
         var link = host.linkDescription
         if link.hasPrefix("via ") { link.removeFirst(4) }
+        // A renamed host keeps its real name in the detail line.
+        if nickname != nil, !host.name.isEmpty { link = host.name + " · " + link }
 
         if let key = host.publicKey {
             let fp = fingerprint(key)
@@ -113,13 +115,7 @@ final class HostRowView: NSTableCellView {
             symbol = "checkmark.seal.fill"
             tint = .controlAccentColor
             label = "Paired"
-            tip = "Paired with this PC. Right-click or press Delete to forget it."
-        case .pairedByName:
-            detailLabel.stringValue = link + " · Paired by name"
-            symbol = "checkmark.seal"
-            tint = .secondaryLabelColor
-            label = "Paired by name"
-            tip = "This PC didn't advertise its key, so it's matched by name. The key is verified when you connect."
+            tip = "Paired with this PC. Right-click to rename or forget it."
         case .unpaired:
             detailLabel.stringValue = link + " · Not paired"
             symbol = "key"

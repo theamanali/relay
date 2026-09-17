@@ -17,16 +17,14 @@ enum PickerSection: Hashable {
 }
 
 enum HostPairState: Equatable {
-    /// Remembered by its advertised key.
+    /// The advertised identity key is one this Mac has paired with.
     case paired
-    /// Remembered by name only; the key is checked when connecting.
-    case pairedByName
     case unpaired
 }
 
 enum PickerRow {
     case header(PickerSection)
-    case host(DiscoveredHost, state: HostPairState)
+    case host(DiscoveredHost, state: HostPairState, nickname: String?)
 
     enum ID: Hashable {
         case header(PickerSection)
@@ -36,12 +34,12 @@ enum PickerRow {
     var id: ID {
         switch self {
         case .header(let s): return .header(s)
-        case .host(let h, _): return .host(h.name)
+        case .host(let h, _, _): return .host(h.name)
         }
     }
 
     var host: DiscoveredHost? {
-        if case .host(let h, _) = self { return h }
+        if case .host(let h, _, _) = self { return h }
         return nil
     }
 
@@ -52,14 +50,15 @@ enum PickerRow {
 
     /// What the row displays; a change here means the cell must be redrawn.
     fileprivate var appearance: Appearance? {
-        guard case .host(let h, let state) = self else { return nil }
-        return Appearance(state: state, key: h.publicKey, link: h.linkDescription)
+        guard case .host(let h, let state, let nickname) = self else { return nil }
+        return Appearance(state: state, key: h.publicKey, link: h.linkDescription, nickname: nickname)
     }
 
     fileprivate struct Appearance: Equatable {
         let state: HostPairState
         let key: Data?
         let link: String
+        let nickname: String?
     }
 }
 
@@ -77,16 +76,19 @@ struct PickerRowDiff: Equatable {
 
 enum PickerRows {
     /// Sections appear only when they have hosts.
-    static func build(hosts: [DiscoveredHost], known: [Data: String]) -> [PickerRow] {
+    static func build(hosts: [DiscoveredHost], known: [Data: String], nicknames: [Data: String] = [:]) -> [PickerRow] {
         let (paired, unpaired) = PairingClassifier.classify(hosts, known: known)
+        func row(_ host: DiscoveredHost, _ state: HostPairState) -> PickerRow {
+            .host(host, state: state, nickname: host.publicKey.flatMap { nicknames[$0] })
+        }
         var rows: [PickerRow] = []
         if !paired.isEmpty {
             rows.append(.header(.paired))
-            rows += paired.map { .host($0.host, state: $0.byNameOnly ? .pairedByName : .paired) }
+            rows += paired.map { row($0, .paired) }
         }
         if !unpaired.isEmpty {
             rows.append(.header(.available))
-            rows += unpaired.map { .host($0, state: .unpaired) }
+            rows += unpaired.map { row($0, .unpaired) }
         }
         return rows
     }

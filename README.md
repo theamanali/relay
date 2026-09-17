@@ -69,7 +69,7 @@ small encrypted protocol between them.
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
-| Mac host picker | implemented: Paired / Available sections with pairing state and fingerprint per host, return-to-list on disconnect, `--host` bypass. Uses the Bonjour TXT `pk` key when the host advertises it (pending on the host), name match until then |
+| Mac host picker | implemented: Paired / Available sections with pairing state and fingerprint per host, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; local rename and forget-on-both-sides from the row's context menu |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
@@ -154,9 +154,10 @@ control chooses 120 or 60 Hz (shown only where the panel supports both); the las
 choice is remembered. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
-(`pk` in its Bonjour TXT record) or, for hosts that don't advertise it yet, from
-a remembered name — the handshake still verifies the real key. Right-click a
-paired PC (or select it and press Delete) to **forget** it: the Mac tells the PC to
+(`pk` in its Bonjour TXT record); a host that advertises no key, or an unknown
+one, is listed as available. Right-click a PC to **rename** it on this Mac (the
+PC's own name stays in the detail line), or right-click a paired PC (or select it
+and press Delete) to **forget** it: the Mac tells the PC to
 drop the pairing too, then removes it locally either way — if the PC was
 unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
 to run on it.
