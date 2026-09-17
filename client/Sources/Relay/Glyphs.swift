@@ -30,9 +30,9 @@ enum Glyphs {
                 vent.lineCapStyle = .round
                 vent.stroke()
             }
-            // Power button, lower left (clear of the MacBook in the composite).
+            // Power button, centred near the bottom.
             let dot = stroke * 1.8
-            NSBezierPath(ovalIn: NSRect(x: body.minX + inset - dot / 2 + stroke / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
+            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
             return true
         }
         image.isTemplate = true
@@ -48,7 +48,8 @@ enum Glyphs {
             .withSymbolConfiguration(macConfig)
         else { return tower }
         let halo = max(2.0, pointSize / 18)
-        let overlap = mac.size.width * 0.3
+        // Overlap only the tower's right edge so its centred power button stays visible.
+        let overlap = mac.size.width * 0.15
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
         let image = NSImage(size: size, flipped: false) { _ in
             tower.draw(in: NSRect(origin: .zero, size: tower.size))
