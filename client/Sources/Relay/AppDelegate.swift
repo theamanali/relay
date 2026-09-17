@@ -113,6 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var latencyTimer: Timer?
     /// In-flight "forget this host" request from the picker.
     private var unpairTask: UnpairTask?
+    /// Session started from the picker that has not shown a frame yet: the
+    /// kiosk window opens on the first decoded picture, not before.
+    private var pendingSession: (screen: NSScreen, mode: StreamMode)?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -130,7 +133,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         view.latencyVisible = options.showLatency
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
         renderer.firstFrameHandler = { [weak self] in
-            DispatchQueue.main.async { self?.view.status = "" }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.view.status = ""
+                if let pending = self.pendingSession, !self.kioskActive {
+                    self.pendingSession = nil
+                    self.picker?.connecting = false
+                    self.picker?.status = ""
+                    self.picker?.window?.orderOut(nil)
+                    self.enterKiosk(on: pending.screen, mode: pending.mode)
+                }
+            }
         }
         renderer.frameSizeHandler = { [weak self] size in
             DispatchQueue.main.async { self?.view.streamSize = size }
@@ -248,8 +261,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
         let mode = p.mode
         mode.save()
-        p.window?.orderOut(nil)
-        enterKiosk(on: screen, mode: mode)
+        // Stay in the list while connecting; the footer shows progress and
+        // the kiosk window appears with the first frame.
+        pendingSession = (screen, mode)
+        p.connecting = true
+        p.status = "Connecting to \(host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name)…"
         var connectionOptions = HostConnection.Options(
             endpoint: host.endpoint,
             interface: host.wiredInterface,
@@ -277,6 +293,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             guard response == .alertFirstButtonReturn else { return }
             self?.forget(host: host, key: key, picker: p)
         }
+    }
+
+    func pickerDidCancelConnect(_ p: HostPickerWindowController) {
+        connection?.stop()
+        connection = nil
+        pendingSession = nil
+        renderer.reset()
+        p.connecting = false
+        p.status = ""
     }
 
     func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String) {
@@ -323,7 +348,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
         kioskActive = true
         window.setFrame(screen.frame, display: false)
-        view.status = "Starting \(mode.label(native: Self.nativePixelSize(of: screen)))…"
+        view.status = pendingSession == nil && options.fixedHost != nil
+            ? "Starting \(mode.label(native: Self.nativePixelSize(of: screen)))…"
+            : ""
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
@@ -415,7 +442,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func connection(_ c: HostConnection, didChangeStatus status: String) {
         DispatchQueue.main.async {
             guard self.connection === c else { return }
-            self.view.status = status
+            if self.kioskActive {
+                self.view.status = status
+            } else {
+                self.picker?.status = status
+            }
         }
     }
 
@@ -425,13 +456,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 completion(nil)
                 return
             }
-            // runModal() pins the alert to the modal-panel level, which is below
-            // our kiosk window, so step out of kiosk mode while it is up.
-            let kioskLevel = self.window.level
-            self.window.level = .normal
-            NSApp.presentationOptions = []
-            self.setCursorHidden(false)
-
             let alert = NSAlert()
             alert.messageText = "Pair with \(host)"
             alert.informativeText = "Enter the pairing PIN shown by Relay on the PC (host fingerprint \(fingerprint)). You only need to do this once per PC."
@@ -441,6 +465,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             field.placeholderString = "6-digit PIN"
             alert.accessoryView = field
             alert.window.initialFirstResponder = field
+
+            if !self.kioskActive, let pickerWindow = self.picker?.window, pickerWindow.isVisible {
+                // Connecting from the list: ask as a sheet on it.
+                alert.beginSheetModal(for: pickerWindow) { response in
+                    guard self.connection === c else { return completion(nil) }
+                    guard response == .alertFirstButtonReturn else { return completion(nil) }
+                    completion(field.stringValue.trimmingCharacters(in: .whitespaces))
+                }
+                return
+            }
+
+            // --host mode: runModal() pins the alert to the modal-panel level,
+            // which is below our kiosk window, so step out of kiosk while it is up.
+            let kioskLevel = self.window.level
+            self.window.level = .normal
+            NSApp.presentationOptions = []
+            self.setCursorHidden(false)
             NSApp.activate(ignoringOtherApps: true)
             let response = alert.runModal()
 
@@ -467,8 +508,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         renderer.streamDidStart(stream)
         DispatchQueue.main.async {
             guard self.connection === c else { return }
+            if let pending = self.pendingSession, !self.kioskActive {
+                self.window.setFrame(pending.screen.frame, display: false)
+                self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
+            } else {
+                self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
+            }
             self.view.streamSize = self.renderer.streamSize
-            self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
     }
 
@@ -498,8 +544,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             self.renderer.reset()
             self.view.releaseAllInput()
             self.view.status = "Disconnected: \(reason)"
-            if self.options.fixedHost == nil, self.kioskActive {
+            guard self.options.fixedHost == nil else { return }
+            if self.kioskActive {
                 self.leaveKiosk(reason: "Disconnected: \(reason)")
+            } else {
+                self.pendingSession = nil
+                self.picker?.connecting = false
+                self.picker?.status = "Couldn't connect: \(reason)"
             }
         }
     }

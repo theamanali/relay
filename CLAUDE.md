@@ -37,8 +37,9 @@ PC: `host\target\release\relay-host.exe` (prints the pairing PIN; `pin`, `paired
 `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a resolution popup (native/75%/50% of
-the current screen) and a 120/60 Hz segmented control, remembered in UserDefaults; choosing a host enters the kiosk window,
-and a dropped session returns to the picker. `--host` skips the picker and re-dials on
+the current screen) and a 120/60 Hz segmented control, remembered in UserDefaults; choosing a host connects from within the picker
+(footer status, Cancel button, PIN sheet) and the kiosk window opens on the first decoded
+frame; a dropped session returns to the picker. `--host` skips the picker and re-dials on
 drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
 `--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
 `--host` mode). Each row has a rename (pencil) and, when paired, a forget (⊗) button; forget removes

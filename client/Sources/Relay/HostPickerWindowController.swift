@@ -10,6 +10,8 @@ protocol HostPickerDelegate: AnyObject {
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost)
     /// The user renamed this host in place; empty means "use the PC's own name".
     func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String)
+    /// Cancel pressed while a connection started from this picker is still in progress.
+    func pickerDidCancelConnect(_ p: HostPickerWindowController)
 }
 
 /// Lets Delete / Backspace on a selected row reach the controller.
@@ -46,6 +48,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     /// Name (or key) to select when the list next changes, e.g. after a disconnect.
     private var wanted: (key: Data?, name: String)?
     private var listVisible = false
+    /// A session is being set up from this window: Connect reads Cancel and
+    /// the footer shows the connection's progress.
+    var connecting = false {
+        didSet {
+            connectButton.title = connecting ? "Cancel" : "Connect"
+            updateConnectEnabled()
+        }
+    }
     /// Row list that arrived while a name was being edited; applied afterwards.
     private var pendingRows: [PickerRow]?
     private var editingRow: Int?
@@ -107,7 +117,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         table.selectionHighlightStyle = .regular
         table.floatsGroupRows = false
         table.backgroundColor = .clear
-        table.doubleAction = #selector(connect)
+        table.doubleAction = #selector(rowDoubleClicked)
         table.target = self
         table.allowsEmptySelection = true
         table.setAccessibilityLabel("PCs")
@@ -363,7 +373,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     private func updateConnectEnabled() {
-        connectButton.isEnabled = selectedHost != nil
+        connectButton.isEnabled = connecting || selectedHost != nil
     }
 
     /// Crossfade between the list and the "looking" placeholder.
@@ -391,7 +401,16 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         })
     }
 
+    @objc private func rowDoubleClicked() {
+        guard !connecting else { return }
+        connect()
+    }
+
     @objc private func connect() {
+        if connecting {
+            pickerDelegate?.pickerDidCancelConnect(self)
+            return
+        }
         if let editingRow, let view = table.view(atColumn: 0, row: editingRow, makeIfNecessary: false) as? HostRowView {
             view.commitEditingName()
         }

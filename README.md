@@ -147,8 +147,10 @@ swift run Relay            # dev
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
 **Available**, each with its link type (hover for details such as the key
 fingerprint). Return, double-click or *Connect* starts the
-session in a full-screen kiosk window; when the session ends the list comes back
-with the same host selected. Under the list a popup chooses the resolution — native,
+session: progress (and the PIN prompt, first time) shows in the list's footer,
+*Connect* reads *Cancel* until then, and the full-screen kiosk window appears
+with the first decoded frame. When the session ends the list comes back with the
+same host selected. Under the list a popup chooses the resolution — native,
 75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
 control chooses 120 or 60 Hz (shown only where the panel supports both); the last
 choice is remembered. This
