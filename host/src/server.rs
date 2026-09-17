@@ -431,6 +431,17 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         tx.send(msg::PAIR_RESULT, 0, &[1])?;
         log::info!("paired client {client_fp}");
         (ty, flags, payload) = rx.recv().context("waiting for CLIENT_HELLO")?;
+    } else if ty == msg::UNPAIR {
+        // The client is forgetting us and asks us to forget it too, so the
+        // pairing disappears from both sides at once. Answer even when we
+        // never knew it: the outcome is the same either way.
+        let removed = cfg.paired.lock().unwrap().remove(&hs.peer)?;
+        tx.send(msg::STREAM_STOP, 0, &[stop_reason::UNPAIRED])?;
+        log::info!(
+            "client {client_fp} unpaired{}",
+            if removed { "" } else { " (was not paired)" }
+        );
+        return Ok(());
     } else if !hs.paired {
         tx.send(msg::STREAM_STOP, 0, &[stop_reason::NOT_PAIRED])?;
         bail!("unpaired client {client_fp} sent 0x{ty:02x} instead of pairing");

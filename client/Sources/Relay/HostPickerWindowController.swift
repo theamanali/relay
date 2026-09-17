@@ -6,12 +6,27 @@ import AppKit
 
 protocol HostPickerDelegate: AnyObject {
     func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost)
+    /// The user wants to drop the pairing with this host (context menu / Delete).
+    func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost)
 }
 
-final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
+/// Lets Delete / Backspace on a selected row reach the controller.
+private final class PickerTableView: NSTableView {
+    var onDelete: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 51 || event.keyCode == 117, selectedRow >= 0 { // Backspace, Forward Delete
+            onDelete?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
+final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     weak var pickerDelegate: HostPickerDelegate?
 
-    private let table = NSTableView()
+    private let table = PickerTableView()
     private let scroll = NSScrollView()
     private let emptyState = NSStackView()
     private let spinner = NSProgressIndicator()
@@ -91,6 +106,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         table.target = self
         table.allowsEmptySelection = true
         table.setAccessibilityLabel("PCs")
+        table.onDelete = { [weak self] in self?.forgetSelected() }
+        let menu = NSMenu()
+        menu.delegate = self
+        table.menu = menu
 
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -150,6 +169,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
+        // Long messages truncate (full text in the tooltip) rather than widen the window.
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
         connectButton.target = self
@@ -274,6 +295,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         } else {
             statusLabel.stringValue = hosts.count == 1 ? "1 PC found" : "\(hosts.count) PCs found"
         }
+        statusLabel.toolTip = status.isEmpty ? nil : status
     }
 
     /// Select this host when it (re)appears; used after a session ends.
@@ -362,6 +384,44 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     @objc private func connect() {
         guard let host = selectedHost else { return }
         pickerDelegate?.picker(self, didChoose: host)
+    }
+
+    /// Re-run the paired / available split after hosts.txt changed.
+    func reloadPairing() {
+        apply(PickerRows.build(hosts: hosts, known: ClientState.knownHosts()))
+    }
+
+    private func pairedHost(at row: Int) -> DiscoveredHost? {
+        guard row >= 0, row < rows.count, case .host(let h, let state) = rows[row], state != .unpaired else {
+            return nil
+        }
+        return h
+    }
+
+    private func forgetSelected() {
+        guard let host = pairedHost(at: table.selectedRow) else { return }
+        pickerDelegate?.picker(self, forget: host)
+    }
+
+    @objc private func forgetClicked() {
+        guard let host = pairedHost(at: table.clickedRow) else { return }
+        pickerDelegate?.picker(self, forget: host)
+    }
+
+    // MARK: context menu
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let row = table.clickedRow
+        guard row >= 0, row < rows.count, case .host(let host, let state) = rows[row] else { return }
+        if state == .unpaired {
+            let item = NSMenuItem(title: "Not paired — connect to pair with its PIN", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            menu.addItem(withTitle: "Forget “\(host.name)”…", action: #selector(forgetClicked), keyEquivalent: "")
+                .target = self
+        }
     }
 
     @objc private func showHelp() {

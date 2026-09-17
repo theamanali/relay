@@ -32,6 +32,9 @@ final class HostConnection {
         var reconnects = false
         /// Previously paired identity expected for this discovered host.
         var expectedHostKey: Data? = nil
+        /// Forget the pairing on the host instead of streaming: UNPAIR is the
+        /// first encrypted message and the connection ends with the reply.
+        var unpairOnly = false
         var requestedWidth = 0
         var requestedHeight = 0
         var requestedRefresh = 60
@@ -62,6 +65,8 @@ final class HostConnection {
     private var reader = FrameReader(maxFrame: Int(Proto.maxPayload) + Proto.headerSize + 16)
     /// Set while a receive is outstanding so drains never overlap.
     private var receiving = false
+    /// The host answered UNPAIR, so the pairing is gone on both sides.
+    private(set) var hostConfirmedUnpair = false
     private var stopped = true
     private var attempt: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
@@ -233,6 +238,12 @@ final class HostConnection {
                 self.receive = SecureChannel(key: result.keys.hostToClient)
                 self.hostKey = result.hostKey
                 let fp = fingerprint(result.hostKey)
+                if self.options.unpairOnly {
+                    self.status("Forgetting \(self.serviceName)…")
+                    self.sendRaw(Proto.message(.unpair))
+                    self.readMessage(c, attempt: attempt)
+                    return
+                }
                 // Pair when the host does not know us, or we do not know the host
                 // (lost hosts.txt); a host we both know needs nothing more.
                 let known = ClientState.knownHosts()[result.hostKey] != nil
@@ -365,6 +376,7 @@ final class HostConnection {
                 return finish("host speaks protocol v\(version), this client v\(Proto.version)")
             }
             if !name.isEmpty { serviceName = name }
+            if options.unpairOnly { return }
             if !pairing {
                 ClientState.remember(host: hostKey, name: name)
                 status("Connected to \(name)")
@@ -411,7 +423,13 @@ final class HostConnection {
 
         case .streamStop:
             let reason = payload.first.map { Int($0) } ?? -1
-            finish(reason == 4 ? "the host does not know this Mac (pair with its PIN)" : "host stopped the stream (reason \(reason))")
+            switch reason {
+            case 4: finish("the host does not know this Mac (pair with its PIN)")
+            case 5:
+                hostConfirmedUnpair = true
+                finish("the host forgot this Mac")
+            default: finish("host stopped the stream (reason \(reason))")
+            }
 
         case .cursor:
             break // cursor is composited into the video for now

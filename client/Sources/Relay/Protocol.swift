@@ -28,6 +28,7 @@ enum Proto {
         case mouseWheel = 0x92
         case key = 0x93
         case pair = 0xA0
+        case unpair = 0xA2
     }
 
     static let flagKeyframe: UInt8 = 0x01

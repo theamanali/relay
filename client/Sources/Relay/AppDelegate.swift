@@ -111,6 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
     private var latencyTimer: Timer?
+    /// In-flight "forget this host" request from the picker.
+    private var unpairTask: UnpairTask?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -164,14 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 return nil
             }
             guard StreamView.isExitHotkey(event) else { return event }
-            self.view.releaseAllInput()
-            if NSApp.modalWindow != nil {
-                // The pairing callback treats this as Cancel and terminates
-                // after runModal() has unwound.
-                NSApp.abortModal()
-            } else {
-                NSApp.terminate(nil)
-            }
+            self.requestExit()
             return nil
         }
         latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -265,6 +260,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         startSession(connectionOptions, screen: screen, mode: mode)
     }
 
+    func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
+        guard unpairTask == nil, let window = p.window else { return }
+        guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
+            p.status = "“\(host.name)” is not paired with this Mac"
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Forget “\(host.name)”?"
+        alert.informativeText = "This Mac and the PC will both forget each other. To connect again you'll enter the PIN shown on the PC."
+        alert.addButton(withTitle: "Forget").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.forget(host: host, key: key, picker: p)
+        }
+    }
+
+    /// Tell the host to drop us, then drop it locally whatever the host said:
+    /// the user asked for the pairing to go, and a PC that is off right now
+    /// can be cleaned up with `relay-host paired --forget`.
+    private func forget(host: DiscoveredHost, key: Data, picker p: HostPickerWindowController) {
+        var opts = HostConnection.Options(
+            endpoint: host.endpoint,
+            interface: host.wiredInterface,
+            serviceName: host.name
+        )
+        opts.expectedHostKey = key
+        let task: UnpairTask
+        do {
+            task = try UnpairTask(options: opts)
+        } catch {
+            p.status = "Cannot read this Mac's identity key: \(error.localizedDescription)"
+            return
+        }
+        unpairTask = task
+        p.status = "Forgetting “\(host.name)”…"
+        let myFingerprint = (try? ClientState.identity()).map { fingerprint($0.publicKey.rawRepresentation) } ?? "?"
+        task.run(timeout: 6) { [weak self] confirmed in
+            ClientState.forget(host: key)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.unpairTask = nil
+                p.reloadPairing()
+                p.status = confirmed
+                    ? "Forgot “\(host.name)” on this Mac and the PC"
+                    : "Forgot “\(host.name)” here; the PC didn't answer — on it run: relay-host paired --forget \(myFingerprint)"
+            }
+        }
+    }
+
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
         kioskActive = true
         window.setFrame(screen.frame, display: false)
@@ -283,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         kioskActive = false
         connection?.stop()
         connection = nil
+        renderer.reset()
         view.releaseAllInput()
         view.streamSize = .zero
         window.orderOut(nil)
@@ -455,7 +502,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func streamViewRequestedExit(_ v: StreamView) {
-        NSApp.terminate(nil)
+        requestExit()
+    }
+
+    /// ⌃⌥⌘Q: leave the stream and return to the picker. Quits only where
+    /// there is no picker to go back to (--host mode, or already in the picker).
+    private func requestExit() {
+        view.releaseAllInput()
+        if NSApp.modalWindow != nil {
+            // The pairing callback treats this as Cancel; the connection then
+            // ends and the usual disconnect path runs.
+            NSApp.abortModal()
+        } else if kioskActive, options.fixedHost == nil {
+            leaveKiosk(reason: "")
+        } else {
+            NSApp.terminate(nil)
+        }
     }
 
     private func refreshLatencyOverlay() {

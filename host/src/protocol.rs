@@ -30,6 +30,7 @@ pub mod msg {
     pub const KEY: u8 = 0x93;
     // pairing (client -> host proof, host -> client verdict)
     pub const PAIR: u8 = 0xA0;
+    pub const UNPAIR: u8 = 0xA2;
 }
 
 pub const FLAG_KEYFRAME: u8 = 0x01;
@@ -93,6 +94,7 @@ pub mod stop_reason {
     pub const DISPLAY_LOST: u8 = 2;
     pub const BAD_VERSION: u8 = 3;
     pub const NOT_PAIRED: u8 = 4;
+    pub const UNPAIRED: u8 = 5;
 }
 
 #[derive(Debug, Clone)]

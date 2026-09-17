@@ -90,11 +90,20 @@ the client sends PAIR before its CLIENT_HELLO:
 |------|-------------|-----------|---------|
 | 0xA0 | PAIR        | client -> host | `HMAC-SHA256(k_pair, "pin:" || PIN digits)` (32 bytes) |
 | 0xA1 | PAIR_RESULT | host -> client | `u8 ok` (1 = paired, 0 = rejected; the host then closes) |
+| 0xA2 | UNPAIR      | client -> host | empty. Sent instead of CLIENT_HELLO: the host forgets `S_c`, answers STREAM_STOP reason 5 (`UNPAIRED`) and closes. |
 
 The host rate-limits failures (5 per 10 minutes, then refuses all pairing) and
 accepts a PIN from an already-paired client too (a client that lost its copy of
 the host key). An unpaired client that sends anything but PAIR gets STREAM_STOP
 with reason 4 (`NOT_PAIRED`).
+
+**Forgetting.** A client that drops a pairing sends UNPAIR as its first
+encrypted message so both sides forget each other in one step; the host
+answers STREAM_STOP with reason 5 whether or not it knew the client, then
+closes. The client removes the host locally regardless of whether the host was
+reachable (the host side can then be cleaned up with `relay-host paired
+--forget <fingerprint>`). A client the host does not know that sends UNPAIR is
+answered the same way, not with `NOT_PAIRED`.
 
 This is not a PAKE: an attacker who sits in the middle of the *first* pairing
 can brute-force the 6-digit PIN offline. Pair on the cable or at home; after
@@ -151,7 +160,7 @@ If the client stops answering PINGs for 5 s the host closes the connection.
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
 | 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
-| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired) |
+| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request) |
 | 0x07 | PING           | `u64 host_time_us` |
 | 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
 

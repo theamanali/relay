@@ -57,28 +57,30 @@ final class HostRowView: NSTableCellView {
         text.alignment = .leading
         text.spacing = 2
         text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        text.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         fingerprintLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         fingerprintLabel.textColor = .secondaryLabelColor
         fingerprintLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        fingerprintLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         stateIcon.symbolConfiguration = .init(pointSize: 14, weight: .medium)
 
-        let row = NSStackView(views: [pcIcon, text, fingerprintLabel, stateIcon])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 10
-        row.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 8)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
+        // Explicit constraints rather than a horizontal stack: the text must
+        // absorb all slack so the fingerprint and seal sit at the trailing edge.
+        for v in [pcIcon, text, fingerprintLabel, stateIcon] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            pcIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            pcIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             pcIcon.widthAnchor.constraint(equalToConstant: 32),
+            text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: 10),
+            text.centerYAnchor.constraint(equalTo: centerYAnchor),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: fingerprintLabel.leadingAnchor, constant: -10),
+            fingerprintLabel.trailingAnchor.constraint(equalTo: stateIcon.leadingAnchor, constant: -10),
+            fingerprintLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stateIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stateIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             stateIcon.widthAnchor.constraint(equalToConstant: 20),
         ])
     }
@@ -97,6 +99,7 @@ final class HostRowView: NSTableCellView {
             fingerprintLabel.isHidden = false
             fingerprintLabel.setAccessibilityLabel("Fingerprint \(fp)")
         } else {
+            fingerprintLabel.stringValue = ""
             fingerprintLabel.isHidden = true
         }
 
@@ -110,6 +113,7 @@ final class HostRowView: NSTableCellView {
             symbol = "checkmark.seal.fill"
             tint = .controlAccentColor
             label = "Paired"
+            tip = "Paired with this PC. Right-click or press Delete to forget it."
         case .pairedByName:
             detailLabel.stringValue = link + " · Paired by name"
             symbol = "checkmark.seal"

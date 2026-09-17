@@ -45,6 +45,9 @@ struct Args {
     /// Use a fresh throwaway identity instead of the persisted probe identity
     #[arg(long)]
     fresh_identity: bool,
+    /// Ask the host to forget this probe's identity instead of streaming
+    #[arg(long)]
+    unpair: bool,
 }
 
 fn main() -> Result<()> {
@@ -80,6 +83,15 @@ fn main() -> Result<()> {
     let version = u16::from_be_bytes([p[0], p[1]]);
     let name = String::from_utf8_lossy(&p[3..3 + p[2] as usize]).into_owned();
     println!("host '{name}' protocol v{version}");
+    if args.unpair {
+        tx.send(msg::UNPAIR, 0, &[])?;
+        let (ty, _, p) = rx.recv()?;
+        if ty == msg::STREAM_STOP && p.first() == Some(&protocol::stop_reason::UNPAIRED) {
+            println!("host forgot this probe");
+            return Ok(());
+        }
+        bail!("expected STREAM_STOP(UNPAIRED), got 0x{ty:02x} {p:?}");
+    }
     if !hs.paired || args.pin.is_some() {
         let pin = args
             .pin

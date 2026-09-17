@@ -155,14 +155,19 @@ choice is remembered. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record) or, for hosts that don't advertise it yet, from
-a remembered name — the handshake still verifies the real key.
+a remembered name — the handshake still verifies the real key. Right-click a
+paired PC (or select it and press Delete) to **forget** it: the Mac tells the PC to
+drop the pairing too, then removes it locally either way — if the PC was
+unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
+to run on it.
 
 Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
 `--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`
 (override the remembered mode for one launch; ¾ or ½ the pixels is softer on
 the panel but much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
 and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
-**Exit with ⌃⌥⌘Q.** By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
+**⌃⌥⌘Q leaves the stream** and returns to the host list (it quits in `--host`
+mode, and from the list itself). By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
 Win so ⌘C/⌘V behave like Mac shortcuts.
 
 ## Testing without a Mac

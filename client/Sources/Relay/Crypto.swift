@@ -75,6 +75,16 @@ enum ClientState {
     static func remember(host key: Data, name: String) {
         var hosts = knownHosts()
         hosts[key] = name.replacingOccurrences(of: "\n", with: " ")
+        save(hosts)
+    }
+
+    static func forget(host key: Data) {
+        var hosts = knownHosts()
+        guard hosts.removeValue(forKey: key) != nil else { return }
+        save(hosts)
+    }
+
+    private static func save(_ hosts: [Data: String]) {
         let text = hosts.map { "\($0.key.hex) \($0.value)" }.joined(separator: "\n") + "\n"
         try? text.write(to: directory.appendingPathComponent("hosts.txt"), atomically: true, encoding: .utf8)
     }

@@ -40,7 +40,9 @@ found over Bonjour under *Paired* / *Available* plus a resolution popup (native/
 the current screen) and a 120/60 Hz segmented control, remembered in UserDefaults; choosing a host enters the kiosk window,
 and a dropped session returns to the picker. `--host` skips the picker and re-dials on
 drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
-`--latency-stats`, `--renderer`, `--metal-vsync`; exit with ⌃⌥⌘Q.
+`--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
+`--host` mode). Right-click / Delete on a paired host forgets it on both sides (UNPAIR
+message; `relay-host paired --forget <fp>` is the host-only fallback).
 
 ## Hard-won facts — do not relearn these
 
