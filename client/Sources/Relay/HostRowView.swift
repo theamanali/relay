@@ -37,7 +37,6 @@ final class HostRowView: NSTableCellView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let fingerprintLabel = NSTextField(labelWithString: "")
-    private let stateIcon = NSImageView()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -62,11 +61,9 @@ final class HostRowView: NSTableCellView {
         fingerprintLabel.textColor = .secondaryLabelColor
         fingerprintLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        stateIcon.symbolConfiguration = .init(pointSize: 14, weight: .medium)
-
         // Explicit constraints rather than a horizontal stack: the text must
-        // absorb all slack so the fingerprint and seal sit at the trailing edge.
-        for v in [pcIcon, text, fingerprintLabel, stateIcon] {
+        // absorb all slack so the fingerprint sits at the trailing edge.
+        for v in [pcIcon, text, fingerprintLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -77,11 +74,8 @@ final class HostRowView: NSTableCellView {
             text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
             text.trailingAnchor.constraint(lessThanOrEqualTo: fingerprintLabel.leadingAnchor, constant: -10),
-            fingerprintLabel.trailingAnchor.constraint(equalTo: stateIcon.leadingAnchor, constant: -10),
+            fingerprintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             fingerprintLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stateIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stateIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stateIcon.widthAnchor.constraint(equalToConstant: 20),
         ])
     }
 
@@ -105,28 +99,17 @@ final class HostRowView: NSTableCellView {
             fingerprintLabel.isHidden = true
         }
 
-        let symbol: String
-        let tint: NSColor
-        let label: String
-        var tip: String?
+        // The section header carries the pairing state; the row only says
+        // what differs per host.
         switch state {
         case .paired:
             detailLabel.stringValue = link
-            symbol = "checkmark.seal.fill"
-            tint = .controlAccentColor
-            label = "Paired"
-            tip = "Paired with this PC. Right-click to rename or forget it."
+            pcIcon.contentTintColor = .labelColor
+            toolTip = "Right-click to rename or forget this PC."
         case .unpaired:
-            detailLabel.stringValue = link + " · Not paired"
-            symbol = "key"
-            tint = .tertiaryLabelColor
-            label = "Not paired"
-            tip = "Pair with the PIN shown in the Relay window on this PC."
+            detailLabel.stringValue = link
+            pcIcon.contentTintColor = .secondaryLabelColor
+            toolTip = "Pair with the PIN shown in the Relay window on this PC."
         }
-        pcIcon.contentTintColor = state == .unpaired ? .secondaryLabelColor : .labelColor
-        stateIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        stateIcon.contentTintColor = tint
-        stateIcon.setAccessibilityLabel(label)
-        toolTip = tip
     }
 }

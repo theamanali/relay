@@ -69,7 +69,7 @@ small encrypted protocol between them.
 | 0. Toolchain, repo, protocol spec | done |
 | 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
-| Mac host picker | implemented: Paired / Available sections with pairing state and fingerprint per host, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; local rename and forget-on-both-sides from the row's context menu |
+| Mac host picker | implemented: Paired / Available sections with the key fingerprint per host, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; local rename and forget-on-both-sides from the row's context menu |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
 | 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
