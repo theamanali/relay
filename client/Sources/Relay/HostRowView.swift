@@ -57,6 +57,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
 
         nameLabel.font = .systemFont(ofSize: 13)
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.alignment = .left
         nameLabel.delegate = self
         nameLabel.isEditable = false
         nameLabel.isSelectable = false
@@ -66,11 +67,24 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         detailLabel.font = .systemFont(ofSize: 11)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingTail
-        let text = NSStackView(views: [nameLabel, detailLabel])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 2
-        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        detailLabel.alignment = .left
+        // Name over detail, both spanning the column so truncation and the
+        // in-place editor use the full width.
+        let text = NSView()
+        for label in [nameLabel, detailLabel] {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            text.addSubview(label)
+        }
+        NSLayoutConstraint.activate([
+            nameLabel.topAnchor.constraint(equalTo: text.topAnchor),
+            nameLabel.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            nameLabel.trailingAnchor.constraint(equalTo: text.trailingAnchor),
+            detailLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
+            detailLabel.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            detailLabel.trailingAnchor.constraint(equalTo: text.trailingAnchor),
+            detailLabel.bottomAnchor.constraint(equalTo: text.bottomAnchor),
+        ])
 
         Self.style(renameButton, symbol: "pencil", label: "Rename", action: #selector(renameTapped))
         Self.style(forgetButton, symbol: "xmark.circle", label: "Forget", action: #selector(forgetTapped))
@@ -79,6 +93,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         let actions = NSStackView(views: [renameButton, forgetButton])
         actions.orientation = .horizontal
         actions.spacing = 2
+        actions.setHuggingPriority(.required, for: .horizontal)
 
         for v in [pcIcon, text, actions] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -90,7 +105,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
             pcIcon.widthAnchor.constraint(equalToConstant: 32),
             text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: actions.leadingAnchor, constant: -10),
+            text.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -10),
             actions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             actions.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])

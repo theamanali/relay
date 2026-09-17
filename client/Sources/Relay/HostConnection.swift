@@ -35,6 +35,8 @@ final class HostConnection {
         /// Forget the pairing on the host instead of streaming: UNPAIR is the
         /// first encrypted message and the connection ends with the reply.
         var unpairOnly = false
+        /// Pair (PIN exchange) and then close without starting a stream.
+        var pairOnly = false
         var requestedWidth = 0
         var requestedHeight = 0
         var requestedRefresh = 60
@@ -67,6 +69,8 @@ final class HostConnection {
     private var receiving = false
     /// The host answered UNPAIR, so the pairing is gone on both sides.
     private(set) var hostConfirmedUnpair = false
+    /// Pair-only mode finished with both sides knowing each other.
+    private(set) var pairingCompleted = false
     private var stopped = true
     private var attempt: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
@@ -250,6 +254,10 @@ final class HostConnection {
                 if !result.paired || !known {
                     self.pairing = true
                     self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
+                } else if self.options.pairOnly {
+                    self.pairingCompleted = true
+                    self.finish("already paired", from: c, attempt: attempt)
+                    return
                 } else {
                     self.status("Secure channel to \(fp)")
                 }
@@ -389,7 +397,12 @@ final class HostConnection {
             if payload.first == 1 {
                 ClientState.remember(host: hostKey, name: serviceName)
                 status("Paired with \(serviceName)")
-                sendClientHello()
+                if options.pairOnly {
+                    pairingCompleted = true
+                    finish("paired")
+                } else {
+                    sendClientHello()
+                }
             } else {
                 finish("the host rejected the PIN")
             }

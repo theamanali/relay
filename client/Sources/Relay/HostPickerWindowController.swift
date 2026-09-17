@@ -51,10 +51,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     /// A session is being set up from this window: Connect reads Cancel and
     /// the footer shows the connection's progress.
     var connecting = false {
-        didSet {
-            connectButton.title = connecting ? "Cancel" : "Connect"
-            updateConnectEnabled()
-        }
+        didSet { updateConnectButton() }
     }
     /// Row list that arrived while a name was being edited; applied afterwards.
     private var pendingRows: [PickerRow]?
@@ -317,7 +314,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     func preselect(key: Data?, name: String) {
         wanted = (key, name)
         applyPreselection()
-        updateConnectEnabled()
+        updateConnectButton()
     }
 
     private var selectedHost: DiscoveredHost? {
@@ -356,7 +353,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         if table.selectedRow < 0, let first = rows.firstIndex(where: { $0.host != nil }) {
             table.selectRowIndexes([first], byExtendingSelection: false)
         }
-        updateConnectEnabled()
+        updateConnectButton()
     }
 
     private func applyPreselection() {
@@ -372,8 +369,11 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         }
     }
 
-    private func updateConnectEnabled() {
-        connectButton.isEnabled = connecting || selectedHost != nil
+    /// Connect for a paired host, Pair for an available one, Cancel while busy.
+    private func updateConnectButton() {
+        let selected = hostRow(at: table.selectedRow)
+        connectButton.title = connecting ? "Cancel" : (selected?.state == .unpaired ? "Pair" : "Connect")
+        connectButton.isEnabled = connecting || selected != nil
     }
 
     /// Crossfade between the list and the "looking" placeholder.
@@ -521,7 +521,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        updateConnectEnabled()
+        updateConnectButton()
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {

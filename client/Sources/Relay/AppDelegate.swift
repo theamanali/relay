@@ -261,18 +261,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
         let mode = p.mode
         mode.save()
-        // Stay in the list while connecting; the footer shows progress and
-        // the kiosk window appears with the first frame.
-        pendingSession = (screen, mode)
-        p.connecting = true
-        p.status = "Connecting to \(host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name)…"
+        let shown = host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name
         var connectionOptions = HostConnection.Options(
             endpoint: host.endpoint,
             interface: host.wiredInterface,
             serviceName: host.name
         )
-        let known = ClientState.knownHosts()
-        connectionOptions.expectedHostKey = PairingClassifier.expectedKey(for: host, known: known)
+        connectionOptions.expectedHostKey = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts())
+        p.connecting = true
+        if connectionOptions.expectedHostKey == nil {
+            // Available host: pair only. It moves to Paired; connecting is a
+            // separate, deliberate step.
+            connectionOptions.pairOnly = true
+            p.status = "Pairing with \(shown)…"
+        } else {
+            // Stay in the list while connecting; the footer shows progress and
+            // the kiosk window appears with the first frame.
+            pendingSession = (screen, mode)
+            p.status = "Connecting to \(shown)…"
+        }
         startSession(connectionOptions, screen: screen, mode: mode)
     }
 
@@ -373,6 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         setCursorHidden(false)
         showPicker()
         pickerScreenChanged()
+        picker?.reloadPairing()
         picker?.status = reason
         if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
     }
@@ -547,10 +555,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             guard self.options.fixedHost == nil else { return }
             if self.kioskActive {
                 self.leaveKiosk(reason: "Disconnected: \(reason)")
-            } else {
+            } else if let p = self.picker {
                 self.pendingSession = nil
-                self.picker?.connecting = false
-                self.picker?.status = "Couldn't connect: \(reason)"
+                p.connecting = false
+                if c.pairingCompleted {
+                    let host = self.currentHost
+                    let shown = host?.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host?.name ?? "the PC"
+                    p.status = "Paired with \(shown)"
+                    if let host { p.preselect(key: host.publicKey, name: host.name) }
+                } else {
+                    p.status = "Couldn't connect: \(reason)"
+                }
+                // Pairing (or a host that re-paired us mid-connect) changes the split.
+                p.reloadPairing()
             }
         }
     }
