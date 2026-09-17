@@ -5,7 +5,7 @@
 import AppKit
 
 enum Glyphs {
-    /// A desktop tower: rounded case, optical-drive slot, power button, vents.
+    /// A desktop tower: rounded case with a power button at the top.
     /// `pointSize` matches the SF Symbol point size it sits beside.
     static func tower(pointSize: CGFloat) -> NSImage {
         let height = pointSize * 1.15
@@ -19,20 +19,9 @@ enum Glyphs {
             case_.lineWidth = stroke
             case_.stroke()
 
-            let inset = width * 0.22
-            // Vents across the top of the case.
-            for i in 0..<3 {
-                let y = body.maxY - height * (0.16 + 0.1 * CGFloat(i))
-                let vent = NSBezierPath()
-                vent.move(to: NSPoint(x: body.minX + inset, y: y))
-                vent.line(to: NSPoint(x: body.maxX - inset, y: y))
-                vent.lineWidth = stroke
-                vent.lineCapStyle = .round
-                vent.stroke()
-            }
-            // Power button, centred near the bottom.
+            // Power button, top centre.
             let dot = stroke * 1.8
-            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.minY + height * 0.16 - dot / 2, width: dot, height: dot)).fill()
+            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.maxY - height * 0.16 - dot / 2, width: dot, height: dot)).fill()
             return true
         }
         image.isTemplate = true
@@ -47,7 +36,7 @@ enum Glyphs {
         guard let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
             .withSymbolConfiguration(macConfig)
         else { return tower }
-        let overlap = mac.size.width * 0.15
+        let overlap = mac.size.width * 0.3
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
         let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
         // The symbol image has transparent padding; occlude only where the
