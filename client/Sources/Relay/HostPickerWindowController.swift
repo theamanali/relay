@@ -299,13 +299,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     private func refreshStatus() {
         if !status.isEmpty {
-            statusLabel.stringValue = status
-        } else if hosts.isEmpty {
-            statusLabel.stringValue = ""
+            // One line, never wider than the space between ? and Connect;
+            // the full text is a hover away if it had to be clipped.
+            statusLabel.stringValue = SessionText.fit(status)
+            statusLabel.toolTip = statusLabel.stringValue == status ? nil : status
         } else {
-            statusLabel.stringValue = hosts.count == 1 ? "1 PC found" : "\(hosts.count) PCs found"
+            statusLabel.stringValue = hosts.isEmpty ? "" : (hosts.count == 1 ? "1 PC found" : "\(hosts.count) PCs found")
+            statusLabel.toolTip = nil
         }
-        statusLabel.toolTip = status.isEmpty ? nil : status
     }
 
     /// Select this host when it (re)appears; used after a session ends.

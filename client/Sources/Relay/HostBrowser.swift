@@ -198,7 +198,8 @@ final class HostBrowser {
         browser.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             if case .failed(let err) = state {
-                self.report("Bonjour browse failed: \(err.localizedDescription) — retrying")
+                NSLog("HostBrowser: browse failed: %@", err.localizedDescription)
+                self.report("Can't search for PCs — retrying")
                 self.queue.asyncAfter(deadline: .now() + 2) { self.start() }
             }
         }

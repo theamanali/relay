@@ -261,7 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
         let mode = p.mode
         mode.save()
-        let shown = host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name
+        let shown = SessionText.shortName(host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name)
         var connectionOptions = HostConnection.Options(
             endpoint: host.endpoint,
             interface: host.wiredInterface,
@@ -286,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
         guard unpairTask == nil, let window = p.window else { return }
         guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
-            p.status = "“\(host.name)” is not paired with this MacBook"
+            p.status = "\(SessionText.shortName(host.name)) isn't paired"
             return
         }
         let shown = ClientState.nicknames()[key] ?? host.name
@@ -302,10 +302,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
     }
 
-    /// Nickname if the user gave one, else the PC's own name.
+    /// Nickname if the user gave one, else the PC's own name, clipped to fit a sentence.
     private var currentHostLabel: String {
         guard let host = currentHost else { return "the PC" }
-        return host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name
+        return SessionText.shortName(host.publicKey.flatMap { ClientState.nicknames()[$0] } ?? host.name)
     }
 
     func pickerDidCancelConnect(_ p: HostPickerWindowController) {
@@ -338,12 +338,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         do {
             task = try UnpairTask(options: opts)
         } catch {
-            p.status = "Cannot read this MacBook's identity key: \(error.localizedDescription)"
+            p.status = "Can't read this MacBook's identity key"
             return
         }
         unpairTask = task
-        let shown = ClientState.nicknames()[key] ?? host.name
-        p.status = "Forgetting “\(shown)”…"
+        let shown = SessionText.shortName(ClientState.nicknames()[key] ?? host.name)
+        p.status = "Forgetting \(shown)…"
         let myFingerprint = (try? ClientState.identity()).map { fingerprint($0.publicKey.rawRepresentation) } ?? "?"
         task.run(timeout: 6) { [weak self] confirmed in
             ClientState.forget(host: key)
@@ -351,11 +351,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 guard let self else { return }
                 self.unpairTask = nil
                 p.reloadPairing()
-                p.status = confirmed
-                    ? "Forgot “\(shown)” on this MacBook and the PC"
-                    : "Forgot “\(shown)” here; the PC didn't answer — on it run: relay-host paired --forget \(myFingerprint)"
+                if confirmed {
+                    p.status = "Forgot \(shown)"
+                } else {
+                    p.status = "Forgot \(shown) on this MacBook only"
+                    self.explainHostSideForget(host: shown, fingerprint: myFingerprint, on: p)
+                }
             }
         }
+    }
+
+    /// The PC was unreachable, so its half of the pairing is still there;
+    /// give the user the one command that removes it.
+    private func explainHostSideForget(host: String, fingerprint: String, on p: HostPickerWindowController) {
+        guard let window = p.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "\(host) didn't answer"
+        alert.informativeText = "This MacBook has forgotten it, but the PC still remembers this MacBook. On the PC, run:\n\nrelay-host paired --forget \(fingerprint)"
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in }
     }
 
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
