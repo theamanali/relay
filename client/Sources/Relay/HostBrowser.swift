@@ -143,11 +143,48 @@ enum PairingClassifier {
     }
 }
 
+/// Keeps a host in the list for a grace period after Bonjour stops seeing
+/// it, so a host that re-registers (the PC re-advertising new addresses) or a
+/// brief Wi-Fi flap does not make its row vanish and slide back in. Pure, so
+/// it can be tested without a network.
+struct HostListDebouncer {
+    let grace: TimeInterval
+    private var lastSeen: [String: (host: DiscoveredHost, vanishedAt: Date?)] = [:]
+
+    init(grace: TimeInterval = 2.5) {
+        self.grace = grace
+    }
+
+    /// Feed the hosts Bonjour currently reports; returns what to show.
+    mutating func update(seen: [DiscoveredHost], now: Date) -> [DiscoveredHost] {
+        let seenNames = Set(seen.map(\.name))
+        for host in seen {
+            lastSeen[host.name] = (host, nil)
+        }
+        for (name, entry) in lastSeen where !seenNames.contains(name) {
+            if let since = entry.vanishedAt {
+                if now.timeIntervalSince(since) >= grace { lastSeen[name] = nil }
+            } else {
+                lastSeen[name] = (entry.host, now)
+            }
+        }
+        return lastSeen.values.map(\.host).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// True while some host is being held past its disappearance.
+    var hasPendingRemovals: Bool {
+        lastSeen.values.contains { $0.vanishedAt != nil }
+    }
+}
+
 final class HostBrowser {
     var onChange: (([DiscoveredHost]) -> Void)?
     var onStatus: ((String) -> Void)?
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "relay.browse")
+    private var debouncer = HostListDebouncer()
+    private var latest: [DiscoveredHost] = []
+    private var flush: DispatchWorkItem?
 
     func start() {
         let params = NWParameters()
@@ -163,8 +200,8 @@ final class HostBrowser {
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
-            let hosts = results.compactMap(Self.host(from:)).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            DispatchQueue.main.async { self.onChange?(hosts) }
+            self.latest = results.compactMap(Self.host(from:))
+            self.publish()
         }
         self.browser = browser
         browser.start(queue: queue)
@@ -173,6 +210,20 @@ final class HostBrowser {
     func stop() {
         browser?.cancel()
         browser = nil
+    }
+
+    /// Run the debouncer over the latest results and, while it is holding a
+    /// vanished host, come back after the grace period to let it go.
+    private func publish() {
+        let hosts = debouncer.update(seen: latest, now: Date())
+        DispatchQueue.main.async { self.onChange?(hosts) }
+        flush?.cancel()
+        flush = nil
+        if debouncer.hasPendingRemovals {
+            let work = DispatchWorkItem { [weak self] in self?.publish() }
+            flush = work
+            queue.asyncAfter(deadline: .now() + debouncer.grace + 0.1, execute: work)
+        }
     }
 
     private func report(_ s: String) {
