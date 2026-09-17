@@ -177,7 +177,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         refreshSegment.segmentStyle = .rounded
         refreshSegment.setAccessibilityLabel("Refresh rate")
         refreshSegment.toolTip = "Refresh rate"
-        let modeRow = NSStackView(views: [resolutionPopup, refreshSegment])
+        let modeRow = NSStackView(views: [resolutionPopup, refreshSegment, optionsButton])
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
         modeRow.spacing = 10
@@ -208,7 +208,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         content.addSubview(footer)
         footer.addSubview(separator)
         footer.addSubview(modeRow)
-        footer.addSubview(optionsButton)
         footer.addSubview(statusLabel)
         footer.addSubview(connectButton)
         NSLayoutConstraint.activate([
@@ -237,12 +236,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
             modeRow.topAnchor.constraint(equalTo: footer.topAnchor, constant: 14),
             modeRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
-            modeRow.trailingAnchor.constraint(lessThanOrEqualTo: optionsButton.leadingAnchor, constant: -12),
+            optionsButton.trailingAnchor.constraint(equalTo: connectButton.trailingAnchor),
 
             // Gear at the end of the Stream line; the status line then reads
             // straight from the left edge.
-            optionsButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
-            optionsButton.centerYAnchor.constraint(equalTo: modeRow.centerYAnchor),
             optionsButton.widthAnchor.constraint(equalTo: connectButton.widthAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: connectButton.leadingAnchor, constant: -12),
