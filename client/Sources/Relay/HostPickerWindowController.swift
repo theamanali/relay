@@ -442,7 +442,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         let body = NSTextField(wrappingLabelWithString:
             "The first time you connect to a PC, Relay asks for the PIN shown in the Relay window on that PC. " +
-            "Check that the fingerprint next to the PC's name matches the one in the PIN request. " +
+            "Hover over a PC to see its key fingerprint if you want to check it against the PIN request. " +
             "You only pair once per PC.")
         body.font = .systemFont(ofSize: 11)
         body.textColor = .secondaryLabelColor

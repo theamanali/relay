@@ -36,7 +36,6 @@ final class HostRowView: NSTableCellView {
     private let pcIcon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
-    private let fingerprintLabel = NSTextField(labelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -57,13 +56,7 @@ final class HostRowView: NSTableCellView {
         text.spacing = 2
         text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        fingerprintLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        fingerprintLabel.textColor = .secondaryLabelColor
-        fingerprintLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        // Explicit constraints rather than a horizontal stack: the text must
-        // absorb all slack so the fingerprint sits at the trailing edge.
-        for v in [pcIcon, text, fingerprintLabel] {
+        for v in [pcIcon, text] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -73,9 +66,7 @@ final class HostRowView: NSTableCellView {
             pcIcon.widthAnchor.constraint(equalToConstant: 32),
             text.leadingAnchor.constraint(equalTo: pcIcon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: fingerprintLabel.leadingAnchor, constant: -10),
-            fingerprintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            fingerprintLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
         ])
     }
 
@@ -89,27 +80,16 @@ final class HostRowView: NSTableCellView {
         // A renamed host keeps its real name in the detail line.
         if nickname != nil, !host.name.isEmpty { link = host.name + " · " + link }
 
-        if let key = host.publicKey {
-            let fp = fingerprint(key)
-            fingerprintLabel.stringValue = fp
-            fingerprintLabel.isHidden = false
-            fingerprintLabel.setAccessibilityLabel("Fingerprint \(fp)")
-        } else {
-            fingerprintLabel.stringValue = ""
-            fingerprintLabel.isHidden = true
-        }
-
         // The section header carries the pairing state; the row only says
         // what differs per host.
-        switch state {
-        case .paired:
-            detailLabel.stringValue = link
-            pcIcon.contentTintColor = .labelColor
-            toolTip = "Right-click to rename or forget this PC."
-        case .unpaired:
-            detailLabel.stringValue = link
-            pcIcon.contentTintColor = .secondaryLabelColor
-            toolTip = "Pair with the PIN shown in the Relay window on this PC."
-        }
+        detailLabel.stringValue = link
+        pcIcon.contentTintColor = state == .paired ? .labelColor : .secondaryLabelColor
+        // The key fingerprint is for cross-checking against the PIN prompt or
+        // the host's own output; a hover away rather than on every row.
+        var tip = state == .paired
+            ? "Right-click to rename or forget this PC."
+            : "Pair with the PIN shown in the Relay window on this PC."
+        if let key = host.publicKey { tip += "\nFingerprint \(fingerprint(key))" }
+        toolTip = tip
     }
 }
