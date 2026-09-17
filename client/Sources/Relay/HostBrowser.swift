@@ -26,24 +26,34 @@ struct DiscoveredHost {
             .sorted { Self.rank($0.type) < Self.rank($1.type) }
     }
 
-    /// The link the connection will use and the address it will dial there,
-    /// chosen together so the row's link line and the card's IP line always
-    /// describe the same interface: the first preferred interface (cable, then
-    /// Wi-Fi, …) on whose subnet the PC advertises an address; failing that,
-    /// the top interface with no address to show.
-    var connectLink: (label: String, address: String?) {
+    /// Every link the PC is reachable on from this Mac, in dial order (cable,
+    /// then Wi-Fi, …), each with the PC address on that interface's subnet.
+    /// Tailscale and other-network addresses never match and so never appear.
+    var reachableAddresses: [(link: String, address: String)] {
+        reachableAddresses(subnets: LocalNetworks.subnetsByInterface())
+    }
+
+    func reachableAddresses(subnets: [String: [IPv4Subnet]]) -> [(link: String, address: String)] {
+        var out: [(String, String)] = []
+        for interface in rankedInterfaces {
+            if let ip = LocalNetworks.address(among: facts.ips, reachedVia: [interface.name], subnets: subnets),
+               !out.contains(where: { $0.1 == ip }) {
+                out.append((Self.label(interface), ip))
+            }
+        }
+        return out
+    }
+
+    /// The link the connection will use — the first reachable one, or the top
+    /// interface when no address lines up — so the row and card agree.
+    var connectLink: String {
         connectLink(subnets: LocalNetworks.subnetsByInterface())
     }
 
-    func connectLink(subnets: [String: [IPv4Subnet]]) -> (label: String, address: String?) {
-        let ranked = rankedInterfaces
-        guard let top = ranked.first else { return ("This MacBook", nil) }
-        for interface in ranked {
-            if let ip = LocalNetworks.address(among: facts.ips, reachedVia: [interface.name], subnets: subnets) {
-                return (Self.label(interface), ip)
-            }
-        }
-        return (Self.label(top), nil)
+    func connectLink(subnets: [String: [IPv4Subnet]]) -> String {
+        if let first = reachableAddresses(subnets: subnets).first { return first.link }
+        guard let top = rankedInterfaces.first else { return "This MacBook" }
+        return Self.label(top)
     }
 
     /// Every link the announcement arrived on, loopback aside (for the tooltip).

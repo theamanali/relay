@@ -213,8 +213,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         displayedName = nickname ?? host.name
         nameLabel.stringValue = displayedName
         // A renamed host's real name lives in the hover card, not the row.
-        let connect = host.connectLink
-        let link = connect.label
+        let link = host.connectLink
 
         // The section header carries the pairing state; the row only says
         // what differs per host.
@@ -227,7 +226,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         var rows: [(label: String, value: String)] = []
         if nickname != nil { rows.append(("Name:", host.name)) }
         rows += host.facts.rows
-        if let ip = connect.address { rows.append(("IP:", ip)) }
+        for entry in host.reachableAddresses { rows.append(("IP:", "\(entry.address) (\(entry.link))")) }
         rows.append(("Link:", host.allLinks))
         if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
         hoverRows = rows

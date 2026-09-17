@@ -27,9 +27,8 @@ final class HostFactsTests: XCTestCase {
         var host = DiscoveredHost(name: "PC", endpoint: .service(name: "PC", type: Proto.serviceType, domain: "local.", interface: nil),
                                   interfaces: [], publicKey: nil)
         host.facts.ips = ["192.168.1.77"]
-        let link = host.connectLink(subnets: [:])
-        XCTAssertEqual(link.label, "This MacBook")
-        XCTAssertNil(link.address)
+        XCTAssertEqual(host.connectLink(subnets: [:]), "This MacBook")
+        XCTAssertTrue(host.reachableAddresses(subnets: [:]).isEmpty)
     }
 
     func testConnectAddressIsTheOneOnTheDialedInterfaceSubnet() {
