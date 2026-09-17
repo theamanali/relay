@@ -286,14 +286,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
         guard unpairTask == nil, let window = p.window else { return }
         guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
-            p.status = "“\(host.name)” is not paired with this Mac"
+            p.status = "“\(host.name)” is not paired with this MacBook"
             return
         }
         let shown = ClientState.nicknames()[key] ?? host.name
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Forget “\(shown)”?"
-        alert.informativeText = "This Mac and the PC will both forget each other. To connect again you'll enter the PIN shown on the PC."
+        alert.informativeText = "This MacBook and the PC will both forget each other. To connect again you'll enter the PIN shown on the PC."
         alert.addButton(withTitle: "Forget").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -332,7 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         do {
             task = try UnpairTask(options: opts)
         } catch {
-            p.status = "Cannot read this Mac's identity key: \(error.localizedDescription)"
+            p.status = "Cannot read this MacBook's identity key: \(error.localizedDescription)"
             return
         }
         unpairTask = task
@@ -346,7 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 self.unpairTask = nil
                 p.reloadPairing()
                 p.status = confirmed
-                    ? "Forgot “\(shown)” on this Mac and the PC"
+                    ? "Forgot “\(shown)” on this MacBook and the PC"
                     : "Forgot “\(shown)” here; the PC didn't answer — on it run: relay-host paired --forget \(myFingerprint)"
             }
         }
@@ -398,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         do {
             c = try HostConnection(options: opts)
         } catch {
-            view.status = "Cannot create this Mac's identity key: \(error.localizedDescription)"
+            view.status = "Cannot create this MacBook's identity key: \(error.localizedDescription)"
             return
         }
         c.delegate = self

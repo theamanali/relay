@@ -22,7 +22,7 @@ struct DiscoveredHost {
         let ranked = interfaces
             .filter { $0.type != .loopback }
             .sorted { Self.rank($0.type) < Self.rank($1.type) }
-        guard let best = ranked.first else { return "This Mac" }
+        guard let best = ranked.first else { return "This MacBook" }
         return Self.label(best)
     }
 
@@ -30,7 +30,7 @@ struct DiscoveredHost {
     var allLinks: String {
         let kinds = interfaces.filter { $0.type != .loopback }.map(Self.label)
         let unique = Array(NSOrderedSet(array: kinds)) as? [String] ?? kinds
-        return unique.isEmpty ? "This Mac" : unique.joined(separator: ", ")
+        return unique.isEmpty ? "This MacBook" : unique.joined(separator: ", ")
     }
 
     private static func rank(_ type: NWInterface.InterfaceType) -> Int {
@@ -48,7 +48,7 @@ struct DiscoveredHost {
         case .wiredEthernet: return "Ethernet"
         case .wifi: return "Wi-Fi"
         case .cellular: return "Cellular"
-        case .loopback: return "This Mac"
+        case .loopback: return "This MacBook"
         case .other: return i.name.hasPrefix("utun") ? "VPN" : i.name
         @unknown default: return i.name
         }

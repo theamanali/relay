@@ -437,10 +437,10 @@ final class HostConnection {
         case .streamStop:
             let reason = payload.first.map { Int($0) } ?? -1
             switch reason {
-            case 4: finish("the host does not know this Mac (pair with its PIN)")
+            case 4: finish("the host does not know this MacBook (pair with its PIN)")
             case 5:
                 hostConfirmedUnpair = true
-                finish("the host forgot this Mac")
+                finish("the host forgot this MacBook")
             default: finish("host stopped the stream (reason \(reason))")
             }
 

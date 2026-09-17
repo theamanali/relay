@@ -1,0 +1,72 @@
+// Symbols SF Symbols does not have: a plain PC tower, alone and next to a
+// MacBook. Drawn as template images in the SF outline style so they tint and
+// scale like the real ones.
+
+import AppKit
+
+enum Glyphs {
+    /// A desktop tower: rounded case, optical-drive slot, power button, vents.
+    /// `pointSize` matches the SF Symbol point size it sits beside.
+    static func tower(pointSize: CGFloat) -> NSImage {
+        let height = pointSize * 1.15
+        let width = height * 0.56
+        let stroke = max(1.5, pointSize / 16)
+        let size = NSSize(width: width + stroke, height: height + stroke)
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor.black.set()
+            let body = NSRect(x: stroke / 2, y: stroke / 2, width: width, height: height)
+            let case_ = NSBezierPath(roundedRect: body, xRadius: width * 0.16, yRadius: width * 0.16)
+            case_.lineWidth = stroke
+            case_.stroke()
+
+            let inset = width * 0.2
+            // Drive slot near the top.
+            let slotY = body.maxY - height * 0.2
+            let slot = NSBezierPath()
+            slot.move(to: NSPoint(x: body.minX + inset, y: slotY))
+            slot.line(to: NSPoint(x: body.maxX - inset, y: slotY))
+            slot.lineWidth = stroke
+            slot.lineCapStyle = .round
+            slot.stroke()
+
+            // Power button.
+            let dot = stroke * 1.6
+            NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: slotY - height * 0.16 - dot / 2, width: dot, height: dot)).fill()
+
+            // Two vent lines low on the case.
+            for i in 0..<2 {
+                let y = body.minY + height * (0.2 + 0.1 * CGFloat(i))
+                let vent = NSBezierPath()
+                vent.move(to: NSPoint(x: body.minX + inset, y: y))
+                vent.line(to: NSPoint(x: body.maxX - inset, y: y))
+                vent.lineWidth = stroke
+                vent.lineCapStyle = .round
+                vent.stroke()
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    /// The tower with a MacBook in front, a halo knocked out where they
+    /// overlap the way Apple's combined symbols do.
+    static func towerAndMacBook(pointSize: CGFloat) -> NSImage {
+        let tower = tower(pointSize: pointSize)
+        let macConfig = NSImage.SymbolConfiguration(pointSize: pointSize * 0.72, weight: .regular)
+        guard let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
+            .withSymbolConfiguration(macConfig)
+        else { return tower }
+        let overlap = mac.size.width * 0.3
+        let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            tower.draw(in: NSRect(origin: .zero, size: tower.size))
+            let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
+            mac.draw(in: macRect.insetBy(dx: -3, dy: -3), from: .zero, operation: .destinationOut, fraction: 1)
+            mac.draw(in: macRect)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}

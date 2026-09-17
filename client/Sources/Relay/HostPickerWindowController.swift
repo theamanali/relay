@@ -85,7 +85,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
         // Header: hero glyph, title, one-line purpose.
         let hero = NSImageView()
-        hero.image = Self.heroGlyph()
+        hero.image = Glyphs.towerAndMacBook(pointSize: 44)
         hero.contentTintColor = .controlAccentColor
         hero.setAccessibilityElement(false)
         let title = NSTextField(labelWithString: "Relay")
@@ -136,7 +136,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let looking = NSTextField(labelWithString: "Looking for your PC…")
         looking.font = .systemFont(ofSize: 13)
         looking.textColor = .secondaryLabelColor
-        let hint = NSTextField(wrappingLabelWithString: "Open Relay on the PC and connect it to this Mac or the same network.")
+        let hint = NSTextField(wrappingLabelWithString: "Open Relay on the PC and connect it to this MacBook or the same network.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .tertiaryLabelColor
         hint.alignment = .center
@@ -228,31 +228,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         ])
         window.initialFirstResponder = table
         spinner.startAnimation(nil)
-    }
-
-    /// A PC with a MacBook in front of it. SF Symbols has no such pair, so
-    /// compose `pc` and `laptopcomputer`, knocking a halo out of the PC where
-    /// the laptop overlaps the way Apple's own combined symbols do.
-    private static func heroGlyph() -> NSImage {
-        let pcConfig = NSImage.SymbolConfiguration(pointSize: 44, weight: .regular)
-        let macConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular)
-        guard let pc = NSImage(systemSymbolName: "pc", accessibilityDescription: nil)?.withSymbolConfiguration(pcConfig),
-              let mac = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?.withSymbolConfiguration(macConfig)
-        else {
-            return NSImage(systemSymbolName: "display.2", accessibilityDescription: nil) ?? NSImage()
-        }
-        let overlap: CGFloat = 14
-        let size = NSSize(width: pc.size.width + mac.size.width - overlap, height: pc.size.height + 4)
-        let image = NSImage(size: size, flipped: false) { _ in
-            let pcRect = NSRect(x: 0, y: 4, width: pc.size.width, height: pc.size.height)
-            let macRect = NSRect(x: size.width - mac.size.width, y: 0, width: mac.size.width, height: mac.size.height)
-            pc.draw(in: pcRect)
-            mac.draw(in: macRect.insetBy(dx: -3, dy: -3), from: .zero, operation: .destinationOut, fraction: 1)
-            mac.draw(in: macRect)
-            return true
-        }
-        image.isTemplate = true
-        return image
     }
 
     // MARK: stream mode

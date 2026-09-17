@@ -51,8 +51,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         super.init(frame: frame)
         identifier = Self.identifier
 
-        pcIcon.image = NSImage(systemSymbolName: "pc", accessibilityDescription: nil)
-        pcIcon.symbolConfiguration = .init(pointSize: 24, weight: .regular)
+        pcIcon.image = Glyphs.tower(pointSize: 22)
         pcIcon.setAccessibilityElement(false)
 
         nameLabel.font = .systemFont(ofSize: 13)
@@ -203,7 +202,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         if nickname != nil { facts.append(host.name) }
         facts.append("Reachable over " + host.allLinks)
         if let key = host.publicKey { facts.append("Key fingerprint \(fingerprint(key))") }
-        facts.append(state == .paired ? "Paired with this Mac" : "Not paired yet")
+        facts.append(state == .paired ? "Paired with this MacBook" : "Not paired yet")
         toolTip = facts.joined(separator: "\n")
     }
 }
