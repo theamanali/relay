@@ -4,7 +4,11 @@
 
 use std::net::IpAddr;
 
-use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::System::SystemInformation::{
+    GetSystemFirmwareTable, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
+};
+
+use crate::gpu::GpuInfo;
 use winreg::enums::HKEY_LOCAL_MACHINE;
 use winreg::RegKey;
 
@@ -14,8 +18,12 @@ pub struct HostFacts {
     pub cpu: String,
     /// Installed physical memory, whole GB, rounded to the nominal size.
     pub ram_gb: u32,
+    /// e.g. "DDR4-3600" from SMBIOS; empty when the table says nothing usable.
+    pub ram_type: String,
     /// The render GPU's DXGI name.
     pub gpu: String,
+    /// The render GPU's dedicated memory, whole GB.
+    pub vram_gb: u32,
     /// e.g. "Windows 11 Pro 24H2 (build 26100)"
     pub os: String,
     /// Unicast IPv4 addresses, most useful first (link-local last).
@@ -23,18 +31,21 @@ pub struct HostFacts {
 }
 
 impl HostFacts {
-    pub fn gather(gpu_name: &str) -> Self {
+    pub fn gather(gpu: &GpuInfo) -> Self {
         HostFacts {
             cpu: cpu_name().unwrap_or_default(),
             ram_gb: ram_gb().unwrap_or(0),
-            gpu: gpu_name.to_string(),
+            ram_type: smbios_table().map(|t| ram_type(&t)).unwrap_or_default(),
+            gpu: gpu.name.clone(),
+            vram_gb: (gpu.dedicated_vram as f64 / (1u64 << 30) as f64).round() as u32,
             os: os_edition().unwrap_or_default(),
             ips: ipv4_addresses(),
         }
     }
 
-    /// TXT record entries (`cpu`, `ram`, `gpu`, `os`, `ip`); empty values are
-    /// left out so an older client's parsing sees nothing unexpected.
+    /// TXT record entries (`cpu`, `ram`, `ramtype`, `gpu`, `vram`, `os`,
+    /// `ip`); empty values are left out so an older client's parsing sees
+    /// nothing unexpected.
     pub fn txt_entries(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         if !self.cpu.is_empty() {
@@ -43,8 +54,14 @@ impl HostFacts {
         if self.ram_gb > 0 {
             out.push(("ram".into(), self.ram_gb.to_string()));
         }
+        if !self.ram_type.is_empty() {
+            out.push(("ramtype".into(), self.ram_type.clone()));
+        }
         if !self.gpu.is_empty() {
             out.push(("gpu".into(), self.gpu.clone()));
+        }
+        if self.vram_gb > 0 {
+            out.push(("vram".into(), self.vram_gb.to_string()));
         }
         if !self.os.is_empty() {
             out.push(("os".into(), self.os.clone()));
@@ -75,6 +92,81 @@ fn ram_gb() -> Option<u32> {
     // round to the nearest GB so 31.9 reads as 32.
     let gb = (status.ullTotalPhys as f64 / (1u64 << 30) as f64).round() as u32;
     (gb > 0).then_some(gb)
+}
+
+/// The raw SMBIOS table (`RawSMBIOSData` header followed by structures).
+fn smbios_table() -> Option<Vec<u8>> {
+    let needed = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
+    if needed == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; needed as usize];
+    let written = unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut buf)) };
+    if written == 0 || written as usize > buf.len() {
+        return None;
+    }
+    buf.truncate(written as usize);
+    // Skip the 8-byte RawSMBIOSData header; the rest is the DMI table.
+    (buf.len() > 8).then(|| buf[8..].to_vec())
+}
+
+/// "DDR4-3600" from the populated Type 17 (Memory Device) structures: the
+/// module type, and the fastest configured speed when the modules agree.
+fn ram_type(table: &[u8]) -> String {
+    let mut kind: Option<&str> = None;
+    let mut speed: u16 = 0;
+    let mut i = 0;
+    while i + 4 <= table.len() {
+        let ty = table[i];
+        let len = table[i + 1] as usize;
+        if len < 4 || i + len > table.len() {
+            break;
+        }
+        let s = &table[i..i + len];
+        if ty == 127 {
+            break; // end-of-table
+        }
+        if ty == 17 && len > 0x15 {
+            let size = u16::from_le_bytes([s[0x0C], s[0x0D]]);
+            if size != 0 {
+                let name = match s[0x12] {
+                    0x18 => Some("DDR3"),
+                    0x1A => Some("DDR4"),
+                    0x1B => Some("LPDDR"),
+                    0x1C => Some("LPDDR2"),
+                    0x1D => Some("LPDDR3"),
+                    0x1E => Some("LPDDR4"),
+                    0x22 => Some("DDR5"),
+                    0x23 => Some("LPDDR5"),
+                    _ => None,
+                };
+                if kind.is_none() {
+                    kind = name;
+                }
+                // Configured speed (SMBIOS 3.0+, offset 0x20) is what the
+                // modules actually run at; fall back to the rated speed.
+                let configured = if len > 0x21 {
+                    u16::from_le_bytes([s[0x20], s[0x21]])
+                } else {
+                    0
+                };
+                let rated = u16::from_le_bytes([s[0x15], s[0x16]]);
+                let this = if configured != 0 { configured } else { rated };
+                speed = speed.max(this);
+            }
+        }
+        // Formatted area, then strings ending in a double NUL.
+        let mut j = i + len;
+        while j + 1 < table.len() && !(table[j] == 0 && table[j + 1] == 0) {
+            j += 1;
+        }
+        i = j + 2;
+    }
+    match (kind, speed) {
+        (Some(k), 0) => k.to_string(),
+        (Some(k), s) => format!("{k}-{s}"),
+        (None, _) => String::new(),
+    }
 }
 
 fn os_edition() -> Option<String> {
@@ -138,6 +230,31 @@ mod tests {
             format_os("Windows 10 Home", "22H2", "19045"),
             "Windows 10 Home 22H2 (build 19045)"
         );
+    }
+
+    #[test]
+    fn ram_type_from_smbios_memory_devices() {
+        // Two Type 17 structures (one empty slot), then end-of-table.
+        let mut dev = vec![0u8; 0x28];
+        dev[0] = 17;
+        dev[1] = 0x28;
+        dev[0x0C] = 0x00; // size 0x4000 MB
+        dev[0x0D] = 0x40;
+        dev[0x12] = 0x1A; // DDR4
+        dev[0x15] = 0x40; // rated 3200
+        dev[0x16] = 0x0C;
+        dev[0x20] = 0x10; // configured 3600
+        dev[0x21] = 0x0E;
+        let mut table = dev.clone();
+        table.extend_from_slice(b"BANK 0\0\0"); // strings + terminator
+        let mut empty = dev.clone();
+        empty[0x0C] = 0;
+        empty[0x0D] = 0;
+        table.extend_from_slice(&empty);
+        table.extend_from_slice(&[0, 0]);
+        table.extend_from_slice(&[127, 4, 0, 0, 0, 0]);
+        assert_eq!(ram_type(&table), "DDR4-3600");
+        assert_eq!(ram_type(&[]), "");
     }
 
     #[test]

@@ -100,9 +100,11 @@ mod tests {
             gpu: "x".repeat(300),
             os: "Windows 11 Pro 24H2 (build 26100)".into(),
             ips: vec!["192.168.1.5".into(), "169.254.10.20".into()],
+            ..Default::default()
         };
         let info = service_info("Test PC", "test-pc.local.", 8468, &[0u8; 32], &facts).unwrap();
         assert_eq!(info.get_property_val_str("ram").unwrap(), "64");
+        assert!(info.get_property_val_str("ramtype").is_none());
         assert_eq!(info.get_property_val_str("ip").unwrap(), "192.168.1.5,169.254.10.20");
         assert_eq!(info.get_property_val_str("gpu").unwrap().len(), 255 - "gpu=".len());
     }

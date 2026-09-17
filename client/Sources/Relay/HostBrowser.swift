@@ -95,7 +95,9 @@ struct DiscoveredHost {
 struct HostFacts: Equatable {
     var cpu = ""
     var ramGB = 0
+    var ramType = ""
     var gpu = ""
+    var vramGB = 0
     var os = ""
     var ips: [String] = []
 
@@ -104,7 +106,9 @@ struct HostFacts: Equatable {
     init(txt: NWTXTRecord) {
         cpu = txt["cpu"] ?? ""
         ramGB = Int(txt["ram"] ?? "") ?? 0
+        ramType = txt["ramtype"] ?? ""
         gpu = txt["gpu"] ?? ""
+        vramGB = Int(txt["vram"] ?? "") ?? 0
         os = txt["os"] ?? ""
         ips = (txt["ip"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
     }
@@ -114,8 +118,8 @@ struct HostFacts: Equatable {
         var out: [(String, String)] = []
         if !os.isEmpty { out.append(("Windows:", os)) }
         if !cpu.isEmpty { out.append(("CPU:", cpu)) }
-        if ramGB > 0 { out.append(("RAM:", "\(ramGB) GB")) }
-        if !gpu.isEmpty { out.append(("GPU:", gpu)) }
+        if ramGB > 0 { out.append(("RAM:", ramType.isEmpty ? "\(ramGB) GB" : "\(ramGB) GB \(ramType)")) }
+        if !gpu.isEmpty { out.append(("GPU:", vramGB > 0 ? "\(gpu) · \(vramGB) GB" : gpu)) }
         return out
     }
 }

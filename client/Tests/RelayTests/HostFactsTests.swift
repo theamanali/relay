@@ -7,7 +7,9 @@ final class HostFactsTests: XCTestCase {
         let txt = NWTXTRecord([
             "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
             "ram": "64",
+            "ramtype": "DDR5-6000",
             "gpu": "NVIDIA GeForce RTX 4080",
+            "vram": "16",
             "os": "Windows 11 Pro 24H2 (build 26100)",
             "ip": "192.168.1.5,100.101.102.103,169.254.10.20",
         ])
@@ -18,8 +20,8 @@ final class HostFactsTests: XCTestCase {
         XCTAssertEqual(facts.rows.map(\.value), [
             "Windows 11 Pro 24H2 (build 26100)",
             "AMD Ryzen 9 7950X 16-Core Processor",
-            "64 GB",
-            "NVIDIA GeForce RTX 4080",
+            "64 GB DDR5-6000",
+            "NVIDIA GeForce RTX 4080 · 16 GB",
         ])
     }
 

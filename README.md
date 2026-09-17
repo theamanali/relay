@@ -146,7 +146,7 @@ swift run Relay            # dev
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
 **Available**, each with the link the connection will use. Hovering a PC shows a card with what it
-advertises about itself — Windows edition and version, CPU, RAM, GPU — plus its address on each link this Mac
+advertises about itself — Windows edition and version, CPU, RAM (with DDR type and speed), GPU (with VRAM) — plus its address on each link this Mac
 shares with it, labelled Ethernet, Wi-Fi or — when the wire had no DHCP and the PC self-assigned
 a 169.254 address — Direct cable (a Tailscale address is never shown),
 and its key fingerprint. For an available PC the button reads **Pair**: it

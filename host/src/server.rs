@@ -73,12 +73,14 @@ pub struct ServerConfig {
 
 pub fn run(cfg: ServerConfig) -> Result<()> {
     let listener = bind_dual_stack(cfg.port)?;
-    let facts = crate::sysinfo::HostFacts::gather(&cfg.gpu.name);
+    let facts = crate::sysinfo::HostFacts::gather(&cfg.gpu);
     log::info!(
-        "advertising facts: cpu '{}', {} GB, gpu '{}', os '{}', ip {:?}",
+        "advertising facts: cpu '{}', {} GB {}, gpu '{}' {} GB, os '{}', ip {:?}",
         facts.cpu,
         facts.ram_gb,
+        facts.ram_type,
         facts.gpu,
+        facts.vram_gb,
         facts.os,
         facts.ips
     );
