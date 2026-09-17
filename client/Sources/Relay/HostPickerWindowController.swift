@@ -62,7 +62,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 450, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -167,9 +167,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
 
-        let modeLabel = NSTextField(labelWithString: "Stream")
-        modeLabel.font = .systemFont(ofSize: NSFont.systemFontSize)
-        modeLabel.textColor = .secondaryLabelColor
         resolutionPopup.target = self
         resolutionPopup.action = #selector(modeChanged)
         resolutionPopup.setAccessibilityLabel("Resolution")
@@ -180,11 +177,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         refreshSegment.segmentStyle = .rounded
         refreshSegment.setAccessibilityLabel("Refresh rate")
         refreshSegment.toolTip = "Refresh rate"
-        let modeRow = NSStackView(views: [modeLabel, resolutionPopup, refreshSegment])
+        let modeRow = NSStackView(views: [resolutionPopup, refreshSegment])
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
         modeRow.spacing = 10
-        modeRow.setCustomSpacing(6, after: modeLabel)
         modeRow.translatesAutoresizingMaskIntoConstraints = false
 
         optionsButton.title = "Advanced"
