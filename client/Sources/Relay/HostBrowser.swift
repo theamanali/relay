@@ -119,7 +119,7 @@ struct HostFacts: Equatable {
         if !os.isEmpty { out.append(("Windows:", os)) }
         if !cpu.isEmpty { out.append(("CPU:", cpu)) }
         if ramGB > 0 { out.append(("RAM:", ramType.isEmpty ? "\(ramGB) GB" : "\(ramGB) GB \(ramType)")) }
-        if !gpu.isEmpty { out.append(("GPU:", vramGB > 0 ? "\(gpu) · \(vramGB) GB" : gpu)) }
+        if !gpu.isEmpty { out.append(("GPU:", vramGB > 0 ? "\(gpu) \(vramGB) GB" : gpu)) }
         return out
     }
 }

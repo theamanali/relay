@@ -21,7 +21,7 @@ final class HostFactsTests: XCTestCase {
             "Windows 11 Pro 24H2 (build 26100)",
             "AMD Ryzen 9 7950X 16-Core Processor",
             "64 GB DDR5-6000",
-            "NVIDIA GeForce RTX 4080 · 16 GB",
+            "NVIDIA GeForce RTX 4080 16 GB",
         ])
     }
 
