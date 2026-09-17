@@ -40,39 +40,55 @@ enum Glyphs {
         return image
     }
 
-    /// A MacBook in the same outline style: rounded screen over a wider base
-    /// bar. Drawn here (rather than SF's `laptopcomputer`) so the image has no
-    /// padding and the knockout in the composite hugs the shape.
+    /// SF's `laptopcomputer`, cropped to its drawn pixels so the composite's
+    /// knockout hugs the shape instead of the symbol's padding.
     static func macBook(pointSize: CGFloat) -> NSImage {
-        let stroke = max(1.5, pointSize / 16)
-        let baseWidth = pointSize * 1.15
-        let screenWidth = baseWidth * 0.84
-        let screenHeight = screenWidth * 0.64
-        let size = NSSize(width: baseWidth + stroke, height: screenHeight + stroke * 2.5)
-        let image = NSImage(size: size, flipped: false) { _ in
-            NSColor.black.set()
-            let baseY = stroke / 2 + stroke * 0.5
-            let base = NSBezierPath()
-            base.move(to: NSPoint(x: stroke / 2 + stroke * 0.4, y: baseY))
-            base.line(to: NSPoint(x: size.width - stroke / 2 - stroke * 0.4, y: baseY))
-            base.lineWidth = stroke
-            base.lineCapStyle = .round
-            base.stroke()
-            let screen = NSRect(x: (size.width - screenWidth) / 2, y: baseY + stroke, width: screenWidth, height: screenHeight)
-            let path = NSBezierPath(roundedRect: screen, xRadius: stroke * 1.2, yRadius: stroke * 1.2)
-            path.lineWidth = stroke
-            path.stroke()
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        guard let symbol = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        else { return NSImage() }
+        let bounds = opaqueBounds(of: symbol)
+        let image = NSImage(size: bounds.size, flipped: false) { rect in
+            symbol.draw(in: rect, from: bounds, operation: .sourceOver, fraction: 1)
             return true
         }
         image.isTemplate = true
         return image
     }
 
+    /// Bounding box of the non-transparent pixels, in the image's point space.
+    private static func opaqueBounds(of image: NSImage) -> NSRect {
+        let scale: CGFloat = 4
+        let w = Int(image.size.width * scale), h = Int(image.size.height * scale)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let ctx = NSGraphicsContext(bitmapImageRep: rep)
+        else { return NSRect(origin: .zero, size: image.size) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        image.draw(in: NSRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        NSGraphicsContext.restoreGraphicsState()
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1 {
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= 0 else { return NSRect(origin: .zero, size: image.size) }
+        // Bitmap rows are top-down; flip to the image's bottom-up point space.
+        return NSRect(x: CGFloat(minX) / scale,
+                      y: CGFloat(h - 1 - maxY) / scale,
+                      width: CGFloat(maxX - minX + 1) / scale,
+                      height: CGFloat(maxY - minY + 1) / scale)
+    }
+
     /// The tower with a MacBook in front, a halo knocked out where they
     /// overlap the way Apple's combined symbols do.
     static func towerAndMacBook(pointSize: CGFloat) -> NSImage {
         let tower = tower(pointSize: pointSize)
-        let mac = macBook(pointSize: pointSize * 0.72)
+        let mac = macBook(pointSize: pointSize * 0.8)
         let halo = max(2.0, pointSize / 18)
         let overlap = mac.size.width * 0.3
         let size = NSSize(width: tower.size.width + mac.size.width - overlap, height: tower.size.height)
