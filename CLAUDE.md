@@ -86,6 +86,9 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
 - `attach-test`, `probe` sessions and anything that goes through `topology::exclusive`
   **black out the PC's monitors** (and the Claude app on it) for the duration. Use
   `--no-vdd` for pipeline tests; let the user run the exclusive ones.
+- The mDNS TXT record is static once registered: `server.rs` re-registers the service
+  when the host's IPv4 set changes (polled every 5 s) so the advertised `ip` facts follow
+  a late 169.254 self-assignment or a switch↔cable move.
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on

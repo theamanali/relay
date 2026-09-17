@@ -82,8 +82,9 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
         facts.os,
         facts.ips
     );
-    let _ad = crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
+    let ad = crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
+    let _readvertiser = readvertise_on_address_change(ad, facts, &cfg);
 
     loop {
         let (stream, peer) = match listener.accept() {
@@ -99,6 +100,41 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
             Err(e) => log::warn!("session with {peer} ended with error: {e:#}"),
         }
     }
+}
+
+/// Keep the advertised `ip` facts current: a cable plugged in after start
+/// (Windows takes a while to self-assign 169.254.x.x) or a move between
+/// switch and cable changes the addresses, and the TXT record is static
+/// once registered, so re-register when they differ. Polling every few
+/// seconds is plenty and avoids the IP Helper notification machinery.
+fn readvertise_on_address_change(
+    ad: crate::discovery::Advertisement,
+    mut facts: crate::sysinfo::HostFacts,
+    cfg: &ServerConfig,
+) -> thread::JoinHandle<()> {
+    let name = cfg.name.clone();
+    let port = cfg.port;
+    let public_key = *cfg.identity.public.as_bytes();
+    thread::Builder::new()
+        .name("readvertise".into())
+        .spawn(move || {
+            let mut ad = Some(ad);
+            loop {
+                thread::sleep(Duration::from_secs(5));
+                let ips = crate::sysinfo::ipv4_addresses();
+                if ips == facts.ips {
+                    continue;
+                }
+                log::info!("addresses changed {:?} -> {:?}; re-advertising", facts.ips, ips);
+                facts.ips = ips;
+                drop(ad.take()); // unregisters the old record first
+                match crate::discovery::advertise(&name, port, &public_key, &facts) {
+                    Ok(new_ad) => ad = Some(new_ad),
+                    Err(e) => log::warn!("re-advertising failed: {e:#}"),
+                }
+            }
+        })
+        .expect("spawn readvertise thread")
 }
 
 fn bind_dual_stack(port: u16) -> Result<TcpListener> {

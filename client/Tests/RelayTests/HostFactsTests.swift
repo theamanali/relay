@@ -23,6 +23,12 @@ final class HostFactsTests: XCTestCase {
         ])
     }
 
+    func testSelfAssignedWiredAddressMeansDirectCable() {
+        XCTAssertEqual(DiscoveredHost.linkLabel(.wiredEthernet, address: "169.254.7.9"), "Direct cable")
+        XCTAssertEqual(DiscoveredHost.linkLabel(.wiredEthernet, address: "10.0.0.46"), "Ethernet")
+        XCTAssertEqual(DiscoveredHost.linkLabel(.wifi, address: "169.254.7.9"), "Wi-Fi")
+    }
+
     func testNoInterfacesMeansNoLinkOrAddress() {
         var host = DiscoveredHost(name: "PC", endpoint: .service(name: "PC", type: Proto.serviceType, domain: "local.", interface: nil),
                                   interfaces: [], publicKey: nil)

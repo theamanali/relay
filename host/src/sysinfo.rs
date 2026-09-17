@@ -108,7 +108,7 @@ fn format_os(product: &str, version: &str, build: &str) -> String {
     s
 }
 
-fn ipv4_addresses() -> Vec<String> {
+pub fn ipv4_addresses() -> Vec<String> {
     let mut addrs: Vec<std::net::Ipv4Addr> = if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()

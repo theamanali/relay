@@ -38,10 +38,18 @@ struct DiscoveredHost {
         for interface in rankedInterfaces {
             if let ip = LocalNetworks.address(among: facts.ips, reachedVia: [interface.name], subnets: subnets),
                !out.contains(where: { $0.1 == ip }) {
-                out.append((Self.label(interface), ip))
+                out.append((Self.linkLabel(interface.type, address: ip), ip))
             }
         }
         return out
+    }
+
+    /// A wired link where the PC had to self-assign its address had no DHCP
+    /// server on it: the cable runs straight to this MacBook (or through a
+    /// bare switch, which amounts to the same thing).
+    static func linkLabel(_ type: NWInterface.InterfaceType, address: String) -> String {
+        if type == .wiredEthernet, address.hasPrefix("169.254.") { return "Direct cable" }
+        return label(type)
     }
 
     /// The link the connection will use — the first reachable one, or the top
@@ -67,13 +75,18 @@ struct DiscoveredHost {
     }
 
     private static func label(_ i: NWInterface) -> String {
-        switch i.type {
+        if i.type == .other { return i.name.hasPrefix("utun") ? "VPN" : i.name }
+        return label(i.type)
+    }
+
+    private static func label(_ type: NWInterface.InterfaceType) -> String {
+        switch type {
         case .wiredEthernet: return "Ethernet"
         case .wifi: return "Wi-Fi"
         case .cellular: return "Cellular"
         case .loopback: return "This MacBook"
-        case .other: return i.name.hasPrefix("utun") ? "VPN" : i.name
-        @unknown default: return i.name
+        case .other: return "VPN"
+        @unknown default: return "Other"
         }
     }
 }
