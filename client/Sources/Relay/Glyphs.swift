@@ -5,7 +5,7 @@
 import AppKit
 
 enum Glyphs {
-    /// A desktop tower: rounded case with a power button at the top.
+    /// A desktop tower: rounded case, power button at the top, vents at the bottom.
     /// `pointSize` matches the SF Symbol point size it sits beside.
     static func tower(pointSize: CGFloat) -> NSImage {
         let height = pointSize * 1.15
@@ -22,6 +22,18 @@ enum Glyphs {
             // Power button, top centre.
             let dot = stroke * 1.8
             NSBezierPath(ovalIn: NSRect(x: body.midX - dot / 2, y: body.maxY - height * 0.16 - dot / 2, width: dot, height: dot)).fill()
+
+            // Vents across the bottom of the case.
+            let inset = width * 0.22
+            for i in 0..<3 {
+                let y = body.minY + height * (0.16 + 0.1 * CGFloat(i))
+                let vent = NSBezierPath()
+                vent.move(to: NSPoint(x: body.minX + inset, y: y))
+                vent.line(to: NSPoint(x: body.maxX - inset, y: y))
+                vent.lineWidth = stroke
+                vent.lineCapStyle = .round
+                vent.stroke()
+            }
             return true
         }
         image.isTemplate = true
