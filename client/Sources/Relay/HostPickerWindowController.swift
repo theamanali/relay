@@ -287,7 +287,23 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     /// Footer text that overrides the host count until the list changes,
     /// e.g. the reason a session ended.
     var status: String = "" {
-        didSet { refreshStatus() }
+        didSet {
+            flashTimer?.invalidate()
+            flashTimer = nil
+            refreshStatus()
+        }
+    }
+    private var flashTimer: Timer?
+
+    /// A result ("Paired with…", "Forgot…", why a session ended): shown for a
+    /// while, then the footer returns to the host count. Anything that sets
+    /// `status` in the meantime cancels the fade.
+    func flash(_ message: String, for seconds: TimeInterval = 8) {
+        status = message
+        flashTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            guard let self, self.status == message else { return }
+            self.status = ""
+        }
     }
 
     func update(hosts: [DiscoveredHost]) {

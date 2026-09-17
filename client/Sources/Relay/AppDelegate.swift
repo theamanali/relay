@@ -286,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
         guard unpairTask == nil, let window = p.window else { return }
         guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
-            p.status = "\(SessionText.shortName(host.name)) isn't paired"
+            p.flash("\(SessionText.shortName(host.name)) isn't paired")
             return
         }
         let shown = ClientState.nicknames()[key] ?? host.name
@@ -338,7 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         do {
             task = try UnpairTask(options: opts)
         } catch {
-            p.status = "Can't read this MacBook's identity key"
+            p.flash("Can't read this MacBook's identity key")
             return
         }
         unpairTask = task
@@ -352,9 +352,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 self.unpairTask = nil
                 p.reloadPairing()
                 if confirmed {
-                    p.status = "Forgot \(shown)"
+                    p.flash("Forgot \(shown)")
                 } else {
-                    p.status = "Forgot \(shown) on this MacBook only"
+                    p.flash("Forgot \(shown) on this MacBook only")
                     self.explainHostSideForget(host: shown, fingerprint: myFingerprint, on: p)
                 }
             }
@@ -401,7 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         showPicker()
         pickerScreenChanged()
         picker?.reloadPairing()
-        picker?.status = reason
+        if reason.isEmpty { picker?.status = "" } else { picker?.flash(reason) }
         if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
     }
 
@@ -579,10 +579,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 self.pendingSession = nil
                 p.connecting = false
                 if c.pairingCompleted {
-                    p.status = "Paired with \(self.currentHostLabel)"
+                    p.flash("Paired with \(self.currentHostLabel)")
                     if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }
                 } else {
-                    p.status = SessionText.ended(reason, streamed: false)
+                    p.flash(SessionText.ended(reason, streamed: false))
                 }
                 // Pairing (or a host that re-paired us mid-connect) changes the split.
                 p.reloadPairing()
