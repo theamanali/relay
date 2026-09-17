@@ -142,11 +142,17 @@ impl Drop for DisplayLease {
                 log::warn!("could not re-enable physical monitor devices: {e:#}");
             }
         }
-        if let Some(snapshot) = self.snapshot.take() {
-            if let Err(e) = snapshot.restore() {
-                log::warn!("could not restore the display layout: {e:#}");
+        let restored = self.snapshot.take().is_none_or(|snapshot| {
+            match snapshot.restore() {
+                Ok(()) => true,
+                Err(e) => {
+                    // Keep the on-disk snapshot: the next host start or the
+                    // `restore` command must still be able to retry it.
+                    log::warn!("could not restore the display layout: {e:#}");
+                    false
+                }
             }
-        }
+        });
         if let Some((driver, attachment)) = self.driver.take() {
             if let Err(e) = driver.detach(attachment) {
                 log::warn!(
@@ -155,7 +161,7 @@ impl Drop for DisplayLease {
                 );
             }
         }
-        if self.snapshot.is_none() {
+        if restored {
             topology::Snapshot::clear_saved();
         }
     }
@@ -820,7 +826,7 @@ fn read_loop(
                 }
             }
             msg::MOUSE_BUTTON if p.len() >= 2 => {
-                if let Some(inj) = &injector {
+                if let Some(inj) = injector.as_mut() {
                     inj.mouse_button(p[0], p[1] != 0);
                 }
             }

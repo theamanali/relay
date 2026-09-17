@@ -403,9 +403,9 @@ pub fn recover_saved() -> Result<bool> {
     match Snapshot::load_saved() {
         Ok(Some(snap)) => {
             log::info!("restoring the display layout saved by an earlier session");
-            let r = snap.restore();
+            snap.restore()?;
             Snapshot::clear_saved();
-            r.map(|_| true)
+            Ok(true)
         }
         Ok(None) => Ok(false),
         Err(e) => {

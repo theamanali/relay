@@ -4,7 +4,8 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
@@ -278,10 +279,16 @@ pub fn build_command(cfg: &EncoderConfig) -> Command {
 
 struct FfmpegEncoder {
     child: Child,
-    stdout: ChildStdout,
+    stdout_thread: Option<thread::JoinHandle<()>>,
+    stdout_rx: Option<Receiver<FfmpegOutput>>,
     parser: AnnexBParser,
-    read_buf: Vec<u8>,
     ready: std::collections::VecDeque<AccessUnit>,
+}
+
+enum FfmpegOutput {
+    Data(Vec<u8>),
+    Eof,
+    Error(String),
 }
 
 impl FfmpegEncoder {
@@ -316,12 +323,49 @@ impl FfmpegEncoder {
                 }
             })
             .expect("spawn ffmpeg stderr thread");
+        // Keep the child under the same backpressure as a direct pipe read;
+        // the reader thread exists only to make a stalled read cancellable.
+        let (stdout_tx, stdout_rx) = mpsc::sync_channel(4);
+        let stdout_thread =
+            match thread::Builder::new()
+                .name("ffmpeg-stdout".into())
+                .spawn(move || {
+                    let mut stdout = stdout;
+                    let mut buffer = vec![0u8; 256 * 1024];
+                    loop {
+                        match stdout.read(&mut buffer) {
+                            Ok(0) => {
+                                let _ = stdout_tx.send(FfmpegOutput::Eof);
+                                break;
+                            }
+                            Ok(n) => {
+                                if stdout_tx
+                                    .send(FfmpegOutput::Data(buffer[..n].to_vec()))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                let _ = stdout_tx.send(FfmpegOutput::Error(error.to_string()));
+                                break;
+                            }
+                        }
+                    }
+                }) {
+                Ok(thread) => thread,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error).context("spawning ffmpeg stdout reader");
+                }
+            };
 
         Ok(FfmpegEncoder {
             child,
-            stdout,
+            stdout_thread: Some(stdout_thread),
+            stdout_rx: Some(stdout_rx),
             parser: AnnexBParser::new(cfg.codec),
-            read_buf: vec![0u8; 256 * 1024],
             ready: Default::default(),
         })
     }
@@ -333,16 +377,21 @@ impl FfmpegEncoder {
             if let Some(au) = self.ready.pop_front() {
                 return Ok(Some(au));
             }
-            let n = self
-                .stdout
-                .read(&mut self.read_buf)
-                .context("reading ffmpeg stdout")?;
-            if n == 0 {
-                // Flush whatever the parser still holds (the final AU has no successor).
-                self.parser.finish(&mut self.ready);
-                return Ok(self.ready.pop_front());
+            let stdout_rx = self.stdout_rx.as_ref().expect("stdout receiver present");
+            match stdout_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(FfmpegOutput::Data(data)) => self.parser.push(&data, &mut self.ready),
+                Ok(FfmpegOutput::Eof) | Err(RecvTimeoutError::Disconnected) => {
+                    // Flush whatever the parser still holds (the final AU has no successor).
+                    self.parser.finish(&mut self.ready);
+                    return Ok(self.ready.pop_front());
+                }
+                Ok(FfmpegOutput::Error(error)) => {
+                    anyhow::bail!("reading ffmpeg stdout: {error}")
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    anyhow::bail!("ffmpeg produced no output for 2 seconds")
+                }
             }
-            self.parser.push(&self.read_buf[..n], &mut self.ready);
         }
     }
 }
@@ -351,12 +400,17 @@ impl Drop for FfmpegEncoder {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // Wake a reader blocked on a full bounded channel before joining it.
+        self.stdout_rx.take();
+        if let Some(thread) = self.stdout_thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 enum EncoderInner {
     Native(Box<crate::native_nvenc::NativeNvenc>),
-    Ffmpeg(FfmpegEncoder),
+    Ffmpeg(Box<FfmpegEncoder>),
 }
 
 pub struct Encoder {
@@ -412,7 +466,7 @@ impl Encoder {
             }
         }
         Ok(Self {
-            inner: Some(EncoderInner::Ffmpeg(FfmpegEncoder::spawn(cfg)?)),
+            inner: Some(EncoderInner::Ffmpeg(Box::new(FfmpegEncoder::spawn(cfg)?))),
             fallback: None,
         })
     }
@@ -440,7 +494,7 @@ impl Encoder {
         if let Some(inner) = self.inner.take() {
             Self::retire(inner);
         }
-        self.inner = Some(EncoderInner::Ffmpeg(FfmpegEncoder::spawn(&cfg)?));
+        self.inner = Some(EncoderInner::Ffmpeg(Box::new(FfmpegEncoder::spawn(&cfg)?)));
         match self.inner.as_mut().expect("ffmpeg was just installed") {
             EncoderInner::Ffmpeg(ffmpeg) => ffmpeg.next_access_unit(),
             EncoderInner::Native(_) => unreachable!(),

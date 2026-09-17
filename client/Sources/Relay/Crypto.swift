@@ -134,7 +134,7 @@ enum Handshake {
         }
 
         /// Consume msg2 = "TDH2" | version | S_h | E_h | paired (71 bytes).
-        func complete(message2 raw: Data) throws -> (keys: SessionKeys, hostKey: Data, paired: Bool) {
+        func complete(message2 raw: Data, expectedHost: Data? = nil) throws -> (keys: SessionKeys, hostKey: Data, paired: Bool) {
             let message2 = Data(raw) // fresh indices, in case a slice was passed
             guard message2.count == 71, message2.prefix(4) == Handshake.magic else {
                 throw CryptoError.badHello("not a Relay v2 handshake")
@@ -144,6 +144,12 @@ enum Handshake {
                 throw CryptoError.badHello("host speaks handshake v\(version), this client v\(Handshake.version)")
             }
             let hostStatic = message2.subdata(in: 6..<38)
+            if let expectedHost, expectedHost != hostStatic {
+                throw CryptoError.hostChanged(
+                    expected: fingerprint(expectedHost),
+                    got: fingerprint(hostStatic)
+                )
+            }
             let hostEph = message2.subdata(in: 38..<70)
             let paired = message2[message2.startIndex + 70] != 0
 

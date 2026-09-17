@@ -30,6 +30,8 @@ final class HostConnection {
         /// Re-dial after a drop (fixed --host mode); the picker flow instead
         /// returns to the host list.
         var reconnects = false
+        /// Previously paired identity expected for this discovered host.
+        var expectedHostKey: Data? = nil
         var requestedWidth = 0
         var requestedHeight = 0
         var requestedRefresh = 60
@@ -51,7 +53,6 @@ final class HostConnection {
     private var pinnedInterface: NWInterface?
 
     // Per-connection security state.
-    private var pending: Handshake.Pending?
     private var send: SecureChannel?
     private var receive: SecureChannel?
     private var hostKey = Data()
@@ -61,6 +62,9 @@ final class HostConnection {
     private var reader = FrameReader(maxFrame: Int(Proto.maxPayload) + Proto.headerSize + 16)
     /// Set while a receive is outstanding so drains never overlap.
     private var receiving = false
+    private var stopped = true
+    private var attempt: UInt64 = 0
+    private var reconnectWorkItem: DispatchWorkItem?
 
     init(options: Options) throws {
         self.options = options
@@ -72,14 +76,22 @@ final class HostConnection {
 
     func start() {
         queue.async { [self] in
+            stopped = false
             connect(to: options.endpoint, via: options.interface)
         }
     }
 
     func stop() {
         queue.async { [self] in
+            stopped = true
+            attempt &+= 1
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            connection?.stateUpdateHandler = nil
             connection?.cancel()
             connection = nil
+            ready = false
+            receiving = false
         }
     }
 
@@ -103,6 +115,11 @@ final class HostConnection {
     // MARK: connection
 
     private func connect(to endpoint: NWEndpoint, via interface: NWInterface? = nil) {
+        guard !stopped else { return }
+        attempt &+= 1
+        let thisAttempt = attempt
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         pinnedInterface = interface
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -128,7 +145,7 @@ final class HostConnection {
         reader.reset()
         receiving = false
         c.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+            guard let self, self.isCurrent(c, attempt: thisAttempt) else { return }
             switch state {
             case .ready:
                 if let path = c.currentPath {
@@ -138,15 +155,15 @@ final class HostConnection {
                     NSLog("HostConnection: connected via %@ [%@]", kind, names)
                 }
                 self.status("Connected, securing…")
-                self.startHandshake()
+                self.startHandshake(c, attempt: thisAttempt)
             case .waiting(let err):
-                if self.retryUnpinned(endpoint, c, reason: err.localizedDescription) { return }
+                if self.retryUnpinned(endpoint, c, attempt: thisAttempt, reason: err.localizedDescription) { return }
                 self.status("Waiting for host: \(err.localizedDescription)")
             case .failed(let err):
-                if self.retryUnpinned(endpoint, c, reason: err.localizedDescription) { return }
-                self.finish("connection failed: \(err.localizedDescription)")
+                if self.retryUnpinned(endpoint, c, attempt: thisAttempt, reason: err.localizedDescription) { return }
+                self.finish("connection failed: \(err.localizedDescription)", from: c, attempt: thisAttempt)
             case .cancelled:
-                self.finish("connection closed")
+                self.finish("connection closed", from: c, attempt: thisAttempt)
             default:
                 break
             }
@@ -156,8 +173,8 @@ final class HostConnection {
 
     /// A pinned attempt that cannot get through (cable unplugged mid-browse,
     /// host bound elsewhere) is retried once on any interface.
-    private func retryUnpinned(_ endpoint: NWEndpoint, _ c: NWConnection, reason: String) -> Bool {
-        guard pinnedInterface != nil, connection === c else { return false }
+    private func retryUnpinned(_ endpoint: NWEndpoint, _ c: NWConnection, attempt: UInt64, reason: String) -> Bool {
+        guard pinnedInterface != nil, isCurrent(c, attempt: attempt) else { return false }
         NSLog("HostConnection: pinned attempt failed (%@); retrying on any interface", reason)
         c.stateUpdateHandler = nil
         c.cancel()
@@ -166,18 +183,30 @@ final class HostConnection {
         return true
     }
 
-    private func finish(_ reason: String) {
-        guard connection != nil else { return }
-        connection?.cancel()
+    private func isCurrent(_ c: NWConnection, attempt: UInt64) -> Bool {
+        !stopped && self.attempt == attempt && connection === c
+    }
+
+    private func finish(_ reason: String, from expected: NWConnection? = nil, attempt expectedAttempt: UInt64? = nil) {
+        guard !stopped, let current = connection else { return }
+        if let expected, current !== expected { return }
+        if let expectedAttempt, attempt != expectedAttempt { return }
+        current.stateUpdateHandler = nil
+        current.cancel()
         connection = nil
         ready = false
+        receiving = false
         delegate?.connectionDidEnd(self, reason: reason)
         guard options.reconnects else { return }
         // Fixed-host mode: the host is probably just restarting, re-dial.
-        queue.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, self.connection == nil else { return }
+        let finishedAttempt = attempt
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped, self.attempt == finishedAttempt,
+                  self.connection == nil else { return }
             self.connect(to: self.options.endpoint, via: self.options.interface)
         }
+        reconnectWorkItem = work
+        queue.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
     private func status(_ s: String) {
@@ -186,21 +215,20 @@ final class HostConnection {
 
     // MARK: handshake + pairing
 
-    private func startHandshake() {
-        guard let c = connection else { return }
+    private func startHandshake(_ c: NWConnection, attempt: UInt64) {
+        guard isCurrent(c, attempt: attempt) else { return }
         let pending = Handshake.Pending(identity: identity)
-        self.pending = pending
         var frame = Data()
         frame.appendBE32(UInt32(pending.message1.count))
         frame.append(pending.message1)
         c.send(content: frame, completion: .contentProcessed { [weak self] err in
-            if let err { self?.finish("send failed: \(err.localizedDescription)") }
+            guard let self, self.isCurrent(c, attempt: attempt) else { return }
+            if let err { self.finish("send failed: \(err.localizedDescription)", from: c, attempt: attempt) }
         })
-        readFrame { [weak self] body in
-            guard let self else { return }
+        readFrame(c, attempt: attempt) { [weak self] body in
+            guard let self, self.isCurrent(c, attempt: attempt) else { return }
             do {
-                let result = try pending.complete(message2: body)
-                self.pending = nil
+                let result = try pending.complete(message2: body, expectedHost: self.options.expectedHostKey)
                 self.send = SecureChannel(key: result.keys.clientToHost)
                 self.receive = SecureChannel(key: result.keys.hostToClient)
                 self.hostKey = result.hostKey
@@ -210,23 +238,23 @@ final class HostConnection {
                 let known = ClientState.knownHosts()[result.hostKey] != nil
                 if !result.paired || !known {
                     self.pairing = true
-                    self.askForPIN(fingerprint: fp, keys: result.keys)
+                    self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
                 } else {
                     self.status("Secure channel to \(fp)")
                 }
                 // The host greets first; everything after this is encrypted.
-                self.readMessage()
+                self.readMessage(c, attempt: attempt)
             } catch {
-                self.finish("handshake failed: \(error.localizedDescription)")
+                self.finish("handshake failed: \(error.localizedDescription)", from: c, attempt: attempt)
             }
         }
     }
 
-    private func askForPIN(fingerprint fp: String, keys: SessionKeys) {
+    private func askForPIN(fingerprint fp: String, keys: SessionKeys, connection c: NWConnection, attempt: UInt64) {
         let host = serviceName.isEmpty ? fp : serviceName
         let deliver: (String?) -> Void = { [weak self] pin in
             self?.queue.async {
-                guard let self, self.connection != nil else { return }
+                guard let self, self.isCurrent(c, attempt: attempt) else { return }
                 guard let pin, !pin.isEmpty else {
                     self.finish("pairing cancelled")
                     return
@@ -260,7 +288,8 @@ final class HostConnection {
 
     /// Deliver one frame body: from the buffer if it is already there,
     /// otherwise after the next read. Used for the unencrypted handshake reply.
-    private func readFrame(_ handler: @escaping (Data) -> Void) {
+    private func readFrame(_ c: NWConnection, attempt: UInt64, _ handler: @escaping (Data) -> Void) {
+        guard isCurrent(c, attempt: attempt) else { return }
         do {
             if let body = try reader.next() {
                 handler(body)
@@ -270,18 +299,20 @@ final class HostConnection {
             finish("protocol error: \(error)")
             return
         }
-        receiveMore { [weak self] in self?.readFrame(handler) }
+        receiveMore(c, attempt: attempt) { [weak self] in
+            self?.readFrame(c, attempt: attempt, handler)
+        }
     }
 
     /// One read sized to complete the current frame (header or body), so a
     /// small message lands in a single callback and a large keyframe waits in
     /// the framework instead of arriving as many small pieces.
-    private func receiveMore(_ then: @escaping () -> Void) {
-        guard let c = connection, !receiving else { return }
+    private func receiveMore(_ c: NWConnection, attempt: UInt64, _ then: @escaping () -> Void) {
+        guard isCurrent(c, attempt: attempt), !receiving else { return }
         receiving = true
         let needed = reader.needed
         c.receive(minimumIncompleteLength: needed, maximumLength: max(needed, 256 * 1024)) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
+            guard let self, self.isCurrent(c, attempt: attempt) else { return }
             self.receiving = false
             if let error {
                 self.finish("read error: \(error.localizedDescription)")
@@ -299,8 +330,8 @@ final class HostConnection {
     }
 
     /// Handle every complete encrypted message already buffered, then read.
-    private func readMessage() {
-        while connection != nil {
+    private func readMessage(_ c: NWConnection, attempt: UInt64) {
+        while isCurrent(c, attempt: attempt) {
             guard let receive else { return }
             do {
                 guard let body = try reader.next() else { break }
@@ -314,8 +345,10 @@ final class HostConnection {
                 return
             }
         }
-        guard connection != nil else { return }
-        receiveMore { [weak self] in self?.readMessage() }
+        guard isCurrent(c, attempt: attempt) else { return }
+        receiveMore(c, attempt: attempt) { [weak self] in
+            self?.readMessage(c, attempt: attempt)
+        }
     }
 
     private func handle(type: UInt8, flags: UInt8, payload: Data) {

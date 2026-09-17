@@ -21,11 +21,11 @@
 //! host dies mid-session it disables the device, and Windows brings the
 //! physical monitors back on its own.
 
-use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -53,13 +53,20 @@ const PHYSICAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct MttVdd {
     settings: PathBuf,
-    /// True once this process enabled the device (and so has a watcher on it).
-    enabled_by_us: Cell<bool>,
-    physical_locked_by_us: Cell<bool>,
+    helper_dir: PathBuf,
+    helper_state_dir: PathBuf,
+    /// Serializes the file-based helper protocol and the state derived from it.
+    /// Ctrl-C cleanup shares this object with the session thread, so all driver
+    /// transitions must remain under this lock.
+    state: Mutex<State>,
 }
 
-// `Cell` is fine: the host drives the driver from one thread at a time.
-unsafe impl Sync for MttVdd {}
+#[derive(Default)]
+struct State {
+    /// True once this process enabled the device (and so has a watcher on it).
+    enabled_by_us: bool,
+    physical_locked_by_us: bool,
+}
 
 impl MttVdd {
     /// Succeeds if the driver is installed (registry key + settings file). The
@@ -71,6 +78,12 @@ impl MttVdd {
         let dir: String = key
             .get_value("VDDPATH")
             .context("VDDPATH missing under the MTT VDD registry key")?;
+        let helper_dir = key
+            .get_value::<String, _>("HelperStatePath")
+            .unwrap_or_else(|_| dir.clone());
+        let helper_state_dir = key
+            .get_value::<String, _>("HelperPrivateStatePath")
+            .unwrap_or_else(|_| helper_dir.clone());
         let settings = Path::new(&dir).join(SETTINGS_FILE);
         if !settings.exists() {
             bail!(
@@ -84,8 +97,9 @@ impl MttVdd {
         );
         Ok(MttVdd {
             settings,
-            enabled_by_us: Cell::new(false),
-            physical_locked_by_us: Cell::new(false),
+            helper_dir: PathBuf::from(helper_dir),
+            helper_state_dir: PathBuf::from(helper_state_dir),
+            state: Mutex::new(State::default()),
         })
     }
 
@@ -93,15 +107,20 @@ impl MttVdd {
         &self.settings
     }
 
-    fn dir(&self) -> &Path {
-        self.settings
-            .parent()
-            .expect("settings file has a parent directory")
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Merge `mode` (and the render GPU) into vdd_settings.xml. Returns true if
     /// the file changed, meaning the device must be (re)started to notice.
     pub fn write_settings(&self, mode: Mode, gpu_name: &str) -> Result<bool> {
+        let _state = self.state();
+        self.write_settings_locked(mode, gpu_name)
+    }
+
+    fn write_settings_locked(&self, mode: Mode, gpu_name: &str) -> Result<bool> {
         let original = fs::read_to_string(&self.settings)
             .with_context(|| format!("reading {}", self.settings.display()))?;
         let backup = self.settings.with_extension("xml.bak");
@@ -121,7 +140,7 @@ impl MttVdd {
 
     /// Hand an order to the elevated helper and start it.
     fn run_helper(&self, action: &str) -> Result<()> {
-        write_action(self.dir(), action)?;
+        write_action(&self.helper_dir, action)?;
         let output = Command::new("schtasks")
             .args(["/run", "/tn", HELPER_TASK])
             .output()
@@ -138,21 +157,22 @@ impl MttVdd {
     }
 
     fn guard_file(&self) -> PathBuf {
-        self.dir().join(format!("guard-{}.txt", std::process::id()))
+        self.helper_dir
+            .join(format!("guard-{}.txt", std::process::id()))
     }
 
     fn physical_state_file(&self) -> PathBuf {
-        self.dir()
+        self.helper_state_dir
             .join(format!("physical-{}.txt", std::process::id()))
     }
 
     fn physical_ready_file(&self) -> PathBuf {
-        self.dir()
+        self.helper_state_dir
             .join(format!("physical-{}.ready", std::process::id()))
     }
 
     fn physical_heartbeat_file(&self) -> PathBuf {
-        self.dir()
+        self.helper_dir
             .join(format!("physical-{}.heartbeat", std::process::id()))
     }
 
@@ -176,7 +196,7 @@ impl MttVdd {
 
     /// Enable the device (the monitor appears) and leave the helper watching
     /// this process so a crash still ends with the device disabled.
-    fn enable(&self) -> Result<()> {
+    fn enable(&self, state: &mut State) -> Result<()> {
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         let started = Instant::now();
         fs::write(self.guard_file(), b"")?;
@@ -190,7 +210,7 @@ impl MttVdd {
         }
         // Let Windows finish applying whatever it remembers for this monitor.
         thread::sleep(Duration::from_millis(750));
-        self.enabled_by_us.set(true);
+        state.enabled_by_us = true;
         log::info!(
             "MTT VDD: device enabled, monitor present after {:.1}s",
             started.elapsed().as_secs_f64()
@@ -199,11 +219,11 @@ impl MttVdd {
     }
 
     /// Disable the device: the monitor disappears completely.
-    fn disable(&self) -> Result<()> {
+    fn disable(&self, state: &mut State) -> Result<()> {
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         // Release the watcher first so it does not race us.
         let _ = fs::remove_file(self.guard_file());
-        self.enabled_by_us.set(false);
+        state.enabled_by_us = false;
         let started = Instant::now();
         self.run_helper("disable")?;
         let deadline = started + GONE_TIMEOUT;
@@ -247,14 +267,15 @@ impl VirtualDisplay for MttVdd {
     /// rendered on the wanted GPU. Whether it is on the desktop is up to the
     /// session (`topology::exclusive`).
     fn attach(&self, mode: Mode, gpu: &GpuInfo) -> Result<(Attachment, Monitor)> {
+        let mut state = self.state();
         let is_virtual = |m: &Monitor| self.is_virtual(m);
-        let changed = self.write_settings(mode, &gpu.name)?;
+        let changed = self.write_settings_locked(mode, &gpu.name)?;
         let present = display::present_matching(&is_virtual);
         let stale = present
             .iter()
             .find(|m| m.attached)
             .is_some_and(|m| !display::list_modes(&m.device_name).contains(&mode));
-        if !present.is_empty() && (changed || stale || !self.enabled_by_us.get()) {
+        if !present.is_empty() && (changed || stale || !state.enabled_by_us) {
             // Cycle it: the driver re-reads settings on start, and we want the
             // helper watching this process for the rest of the session.
             let why = if changed {
@@ -265,7 +286,7 @@ impl VirtualDisplay for MttVdd {
                 "not started by this host"
             };
             log::info!("MTT VDD: restarting the device ({why})");
-            self.disable()?;
+            self.disable(&mut state)?;
         }
         if display::present_matching(&is_virtual).is_empty() {
             log::info!(
@@ -275,7 +296,7 @@ impl VirtualDisplay for MttVdd {
                 mode.hz,
                 gpu.name
             );
-            self.enable()?;
+            self.enable(&mut state)?;
         }
         let monitor = display::present_matching(&is_virtual)
             .into_iter()
@@ -290,18 +311,20 @@ impl VirtualDisplay for MttVdd {
     }
 
     fn lock_physical_outputs(&self) -> Result<()> {
-        if self.physical_locked_by_us.get() {
+        let mut state = self.state();
+        if state.physical_locked_by_us {
             return Ok(());
         }
         self.run_helper(&format!("lock-physical {}", std::process::id()))?;
         self.wait_for_physical_helper(true)?;
-        self.physical_locked_by_us.set(true);
+        state.physical_locked_by_us = true;
         log::info!("MTT VDD: physical monitor devices disabled for the session");
         Ok(())
     }
 
     fn heartbeat_physical_outputs(&self) -> Result<()> {
-        if self.physical_locked_by_us.get() {
+        let state = self.state();
+        if state.physical_locked_by_us {
             fs::write(self.physical_heartbeat_file(), b"alive").with_context(|| {
                 format!(
                     "updating physical-monitor heartbeat {}",
@@ -313,7 +336,31 @@ impl VirtualDisplay for MttVdd {
     }
 
     fn unlock_physical_outputs(&self) -> Result<()> {
-        if !self.physical_locked_by_us.get()
+        let mut state = self.state();
+        self.unlock_physical_outputs_locked(&mut state)
+    }
+
+    fn detach(&self, attachment: Attachment) -> Result<()> {
+        let mut state = self.state();
+        self.unlock_physical_outputs_locked(&mut state)?;
+        match attachment {
+            Attachment::Mtt { device_name } => {
+                log::debug!("MTT VDD: releasing {device_name}");
+                self.disable(&mut state)
+            }
+            other => bail!("MTT VDD cannot detach {other:?}"),
+        }
+    }
+
+    fn cleanup(&self) -> Result<()> {
+        let mut state = self.state();
+        self.cleanup_locked(&mut state)
+    }
+}
+
+impl MttVdd {
+    fn unlock_physical_outputs_locked(&self, state: &mut State) -> Result<()> {
+        if !state.physical_locked_by_us
             && !self.physical_state_file().exists()
             && !self.physical_ready_file().exists()
         {
@@ -321,29 +368,18 @@ impl VirtualDisplay for MttVdd {
         }
         self.run_helper(&format!("unlock-physical {}", std::process::id()))?;
         self.wait_for_physical_helper(false)?;
-        self.physical_locked_by_us.set(false);
+        state.physical_locked_by_us = false;
         log::info!("MTT VDD: physical monitor devices restored");
         Ok(())
     }
 
-    fn detach(&self, attachment: Attachment) -> Result<()> {
-        self.unlock_physical_outputs()?;
-        match attachment {
-            Attachment::Mtt { device_name } => {
-                log::debug!("MTT VDD: releasing {device_name}");
-                self.disable()
-            }
-            other => bail!("MTT VDD cannot detach {other:?}"),
-        }
-    }
-
-    fn cleanup(&self) -> Result<()> {
+    fn cleanup_locked(&self, state: &mut State) -> Result<()> {
         // Recover monitor devices left disabled if a previous helper watcher
         // was interrupted before it could observe the host exit.
         self.run_helper("unlock-stale")?;
         let deadline = Instant::now() + PHYSICAL_TIMEOUT;
         loop {
-            let pending = fs::read_dir(self.dir())?
+            let pending = fs::read_dir(&self.helper_state_dir)?
                 .filter_map(Result::ok)
                 .filter_map(|entry| entry.file_name().into_string().ok())
                 .any(|name| {
@@ -358,13 +394,13 @@ impl VirtualDisplay for MttVdd {
             }
             thread::sleep(Duration::from_millis(100));
         }
-        self.physical_locked_by_us.set(false);
+        state.physical_locked_by_us = false;
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         if display::present_matching(&is_virtual).is_empty() {
             return Ok(());
         }
         log::info!("MTT VDD: disabling a device left enabled by an earlier session");
-        self.disable()
+        self.disable(state)
     }
 }
 

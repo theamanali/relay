@@ -38,6 +38,8 @@ pub struct Injector {
     desktop: DesktopBounds,
     /// Keys currently held, so we can release them if the client vanishes.
     held: Vec<u16>,
+    /// Mouse buttons currently held, for disconnect cleanup.
+    held_buttons: Vec<u8>,
 }
 
 /// Keep display placement, virtual-desktop metrics and SendInput in physical
@@ -73,6 +75,7 @@ impl Injector {
             target,
             desktop,
             held: Vec::new(),
+            held_buttons: Vec::new(),
         }
     }
 
@@ -111,7 +114,7 @@ impl Injector {
         );
     }
 
-    pub fn mouse_button(&self, button: u8, down: bool) {
+    pub fn mouse_button(&mut self, button: u8, down: bool) {
         let (flags, data) = match (button, down) {
             (0, true) => (MOUSEEVENTF_LEFTDOWN, 0),
             (0, false) => (MOUSEEVENTF_LEFTUP, 0),
@@ -126,6 +129,13 @@ impl Injector {
             _ => return,
         };
         Self::mouse(0, 0, data, flags);
+        if down {
+            if !self.held_buttons.contains(&button) {
+                self.held_buttons.push(button);
+            }
+        } else {
+            self.held_buttons.retain(|&held| held != button);
+        }
     }
 
     /// Wheel deltas in Windows units (120 per notch).
@@ -171,12 +181,15 @@ impl Injector {
         }
     }
 
-    /// Release everything still held (called when the session ends so a stuck
-    /// modifier can't survive a dropped connection).
+    /// Release every key and mouse button still held when the session ends.
     pub fn release_all(&mut self) {
         let held = std::mem::take(&mut self.held);
         for k in held {
             self.key(k, false);
+        }
+        let held_buttons = std::mem::take(&mut self.held_buttons);
+        for button in held_buttons {
+            self.mouse_button(button, false);
         }
     }
 }

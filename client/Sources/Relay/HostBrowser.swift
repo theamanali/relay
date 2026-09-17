@@ -56,6 +56,18 @@ enum PairingClassifier {
         }
         return (paired, unpaired)
     }
+
+    /// Identity the handshake must present for a host the user paired before.
+    /// A unique remembered service name covers older announcements without a
+    /// key and detects a changed advertised key instead of silently re-pairing.
+    static func expectedKey(for host: DiscoveredHost, known: [Data: String]) -> Data? {
+        if let advertised = host.publicKey, known[advertised] != nil {
+            return advertised
+        }
+        guard !host.name.isEmpty else { return nil }
+        let matches = known.filter { $0.value == host.name }.map(\.key)
+        return matches.count == 1 ? matches[0] : nil
+    }
 }
 
 final class HostBrowser {

@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 return nil
             }
             guard StreamView.isExitHotkey(event) else { return event }
-            self.view.releaseAllKeys()
+            self.view.releaseAllInput()
             if NSApp.modalWindow != nil {
                 // The pairing callback treats this as Cancel and terminates
                 // after runModal() has unwound.
@@ -255,11 +255,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         mode.save()
         p.window?.orderOut(nil)
         enterKiosk(on: screen, mode: mode)
-        startSession(.init(
+        var connectionOptions = HostConnection.Options(
             endpoint: host.endpoint,
             interface: host.wiredInterface,
             serviceName: host.name
-        ), screen: screen, mode: mode)
+        )
+        let known = ClientState.knownHosts()
+        connectionOptions.expectedHostKey = PairingClassifier.expectedKey(for: host, known: known)
+        startSession(connectionOptions, screen: screen, mode: mode)
     }
 
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
@@ -280,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         kioskActive = false
         connection?.stop()
         connection = nil
-        view.releaseAllKeys()
+        view.releaseAllInput()
         view.streamSize = .zero
         window.orderOut(nil)
         NSApp.presentationOptions = []
@@ -319,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
         latencyTimer?.invalidate()
         latencyTimer = nil
-        view.releaseAllKeys()
+        view.releaseAllInput()
         connection?.stop()
         setCursorHidden(false)
     }
@@ -337,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     func windowDidResignKey(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
         setCursorHidden(false)
-        view.releaseAllKeys()
+        view.releaseAllInput()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -354,11 +357,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     // MARK: HostConnectionDelegate (called on the connection queue)
 
     func connection(_ c: HostConnection, didChangeStatus status: String) {
-        DispatchQueue.main.async { self.view.status = status }
+        DispatchQueue.main.async {
+            guard self.connection === c else { return }
+            self.view.status = status
+        }
     }
 
     func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
         DispatchQueue.main.async {
+            guard self.connection === c else {
+                completion(nil)
+                return
+            }
             // runModal() pins the alert to the modal-panel level, which is below
             // our kiosk window, so step out of kiosk mode while it is up.
             let kioskLevel = self.window.level
@@ -396,19 +406,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
+        guard connection === c else { return }
         latencyStats.reset()
         renderer.streamDidStart(stream)
         DispatchQueue.main.async {
+            guard self.connection === c else { return }
             self.view.streamSize = self.renderer.streamSize
             self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
     }
 
     func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data]) {
+        guard connection === c else { return }
         renderer.setParameterSets(parameterSets)
     }
 
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {
+        guard connection === c else { return }
         renderer.enqueue(
             frame: nalUnits,
             keyframe: keyframe,
@@ -418,14 +432,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {
+        guard connection === c else { return }
         latencyStats.record(timing)
     }
 
     func connectionDidEnd(_ c: HostConnection, reason: String) {
-        renderer.reset()
         DispatchQueue.main.async {
             guard self.connection === c else { return }
-            self.view.releaseAllKeys()
+            self.renderer.reset()
+            self.view.releaseAllInput()
             self.view.status = "Disconnected: \(reason)"
             if self.options.fixedHost == nil, self.kioskActive {
                 self.leaveKiosk(reason: "Disconnected: \(reason)")

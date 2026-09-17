@@ -22,6 +22,7 @@ final class StreamView: NSView {
     }
 
     private var heldKeys = Set<UInt16>()
+    private var heldButtons = Set<UInt8>()
     private var wheelRemainderX = 0.0
     private var wheelRemainderY = 0.0
     private var trackingArea: NSTrackingArea?
@@ -117,11 +118,15 @@ final class StreamView: NSView {
 
     /// Release every key we told the host is down (connection dropped, app
     /// resigned, etc.) so nothing stays stuck on the Windows side.
-    func releaseAllKeys() {
+    func releaseAllInput() {
         for usage in heldKeys {
             delegate?.streamView(self, send: Proto.key(hidUsage: usage, down: false))
         }
         heldKeys.removeAll()
+        for button in heldButtons {
+            delegate?.streamView(self, send: Proto.mouseButton(button, down: false))
+        }
+        heldButtons.removeAll()
     }
 
     // MARK: mouse
@@ -157,6 +162,7 @@ final class StreamView: NSView {
         // NSEvent: 0 left, 1 right, 2 middle, 3/4 extra. Same order as the protocol.
         let button = UInt8(clamping: event.buttonNumber)
         guard button <= 4 else { return }
+        if down { heldButtons.insert(button) } else { heldButtons.remove(button) }
         delegate?.streamView(self, send: Proto.mouseButton(button, down: down))
     }
 
@@ -216,7 +222,7 @@ final class StreamView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if Self.isExitHotkey(event) {
-            releaseAllKeys()
+            releaseAllInput()
             delegate?.streamViewRequestedExit(self)
             return
         }

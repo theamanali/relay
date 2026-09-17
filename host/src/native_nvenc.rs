@@ -306,10 +306,46 @@ impl NativeNvenc {
             codec: cfg.codec,
         };
         let worker_events = events_tx.clone();
-        let worker = thread::Builder::new()
+        let worker = match thread::Builder::new()
             .name("nvenc-output".into())
             .spawn(move || output_worker(worker_context, pending_rx, worker_events, free_tx))
-            .context("starting NVENC output worker")?;
+        {
+            Ok(worker) => worker,
+            Err(error) => {
+                drop(pending_tx);
+                if timer_period_raised {
+                    unsafe {
+                        let _ = timeEndPeriod(1);
+                    }
+                }
+                session.destroy();
+                return Err(error).context("starting NVENC output worker");
+            }
+        };
+
+        // Start the thread before handing it GPU/NVENC resources. If thread
+        // creation fails, every resource still belongs to `session` and can be
+        // released synchronously here.
+        let (capture_start_tx, capture_start_rx) = mpsc::sync_channel::<CaptureLoop>(0);
+        let capture = match thread::Builder::new()
+            .name("nvenc-capture".into())
+            .spawn(move || match capture_start_rx.recv() {
+                Ok(capture_loop) => capture_loop.run(),
+                Err(_) => unreachable!("capture startup sender dropped"),
+            }) {
+            Ok(capture) => capture,
+            Err(error) => {
+                drop(pending_tx);
+                let _ = worker.join();
+                if timer_period_raised {
+                    unsafe {
+                        let _ = timeEndPeriod(1);
+                    }
+                }
+                session.destroy();
+                return Err(error).context("starting native capture thread");
+            }
+        };
 
         let capture_loop = CaptureLoop {
             functions: session.api.functions,
@@ -337,10 +373,21 @@ impl NativeNvenc {
             events_tx,
             stop: Arc::clone(&stop),
         };
-        let capture = thread::Builder::new()
-            .name("nvenc-capture".into())
-            .spawn(move || capture_loop.run())
-            .context("starting native capture thread")?;
+        if let Err(error) = capture_start_tx.send(capture_loop) {
+            let mut capture_loop = error.0;
+            capture_loop.worker_tx.take();
+            let _ = worker.join();
+            release_slots(&session.api, session.encoder, &mut capture_loop.slots);
+            drop(capture_loop);
+            let _ = capture.join();
+            if timer_period_raised {
+                unsafe {
+                    let _ = timeEndPeriod(1);
+                }
+            }
+            session.destroy();
+            bail!("native capture thread stopped during startup");
+        }
 
         Ok(NativeNvenc {
             api: session.api,

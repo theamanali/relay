@@ -95,10 +95,24 @@ if ($Driver -eq "mtt") {
     # command crashes it, so the host enables/disables the device node instead
     # (which also makes the virtual monitor vanish completely between sessions).
     # A task that runs with highest privileges can be started by its owner
-    # without a UAC prompt; the host passes its order via action.txt.
-    Copy-Item (Join-Path $root "tools\vdd-device.ps1") (Join-Path $vddDir "vdd-device.ps1") -Force
+    # without a UAC prompt. Keep its executable script and device-state records
+    # outside the host-writable request directory.
+    $helperInstallDir = Join-Path $env:ProgramFiles "Relay"
+    $helperScript = Join-Path $helperInstallDir "vdd-device.ps1"
+    $helperRoot = Join-Path $env:ProgramData "Relay"
+    $helperRequests = Join-Path $helperRoot "Requests"
+    $helperState = Join-Path $helperRoot "State"
+    New-Item -ItemType Directory -Force $helperInstallDir, $helperRequests, $helperState | Out-Null
+    Copy-Item (Join-Path $root "tools\vdd-device.ps1") $helperScript -Force
+    Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
+    & icacls $helperInstallDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-11:(OI)(CI)RX" /T | Out-Null
+    & icacls $helperRequests /grant "${hostUser}:(OI)(CI)M" /T | Out-Null
+    & icacls $helperState /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "${hostUser}:(OI)(CI)RX" /T | Out-Null
+    New-ItemProperty -Path $regKey -Name HelperStatePath -PropertyType String -Value $helperRequests -Force | Out-Null
+    New-ItemProperty -Path $regKey -Name HelperPrivateStatePath -PropertyType String -Value $helperState -Force | Out-Null
     $helperTask = "Relay display driver"
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$vddDir\vdd-device.ps1`""
+    $helperArgs = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$helperScript`" -RequestDir `"$helperRequests`" -StateDir `"$helperState`""
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $helperArgs
     $principal = New-ScheduledTaskPrincipal -UserId $hostUser -LogonType Interactive -RunLevel Highest
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $helperTask -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null

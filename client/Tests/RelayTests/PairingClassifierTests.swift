@@ -33,6 +33,19 @@ final class PairingClassifierTests: XCTestCase {
         XCTAssertTrue(r.paired.isEmpty)
     }
 
+    func testExpectedIdentityUsesUniqueRememberedNameWhenAdvertisedKeyChanged() {
+        let known = [keyA: "Desk PC"]
+        XCTAssertEqual(
+            PairingClassifier.expectedKey(for: host("Desk PC", key: keyB), known: known),
+            keyA
+        )
+    }
+
+    func testExpectedIdentityDoesNotGuessBetweenDuplicateNames() {
+        let known = [keyA: "Desk PC", keyB: "Desk PC"]
+        XCTAssertNil(PairingClassifier.expectedKey(for: host("Desk PC"), known: known))
+    }
+
     func testFixedHostFlagStillParses() {
         let o = LaunchOptions.parse(["Relay", "--host", "192.168.1.5:8468"])
         XCTAssertNotNil(o.fixedHost)

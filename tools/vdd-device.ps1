@@ -3,7 +3,7 @@
 # Started through the scheduled task "Relay display driver", which runs with
 # highest privileges and is owned by the user, so the unprivileged host can start it
 # without a UAC prompt. schtasks cannot pass arguments, so the host writes its order
-# into action.txt next to this script first:
+# into the configured request directory first:
 #
 #   enable <pid>   enable the driver's device node, then keep watching: while the host
 #                  process <pid> is alive and guard-<pid>.txt exists, wait; if the host
@@ -21,12 +21,19 @@
 #                  re-enable exactly the devices recorded for that session.
 #   unlock-stale   restore devices recorded by any abandoned session.
 #
-# Everything is logged to vdd-device.log in the same folder.
+# Logs and privileged device records live in the protected state directory.
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$RequestDir,
+    [Parameter(Mandatory = $true)]
+    [string]$StateDir
+)
 
 $ErrorActionPreference = "Stop"
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$actionFile = Join-Path $dir "action.txt"
-$logFile = Join-Path $dir "vdd-device.log"
+$actionFile = Join-Path $RequestDir "action.txt"
+$logFile = Join-Path $StateDir "vdd-device.log"
 
 function Log($msg) {
     Add-Content -Path $logFile -Value ("{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
@@ -53,32 +60,40 @@ function Disable-Vdd($device) {
 }
 
 function Physical-StateFile($hostPid) {
-    Join-Path $dir "physical-$hostPid.txt"
+    Join-Path $StateDir "physical-$hostPid.txt"
 }
 
 function Physical-ReadyFile($hostPid) {
-    Join-Path $dir "physical-$hostPid.ready"
+    Join-Path $StateDir "physical-$hostPid.ready"
 }
 
 function Physical-HeartbeatFile($hostPid) {
-    Join-Path $dir "physical-$hostPid.heartbeat"
+    Join-Path $RequestDir "physical-$hostPid.heartbeat"
 }
 
 function Restore-Physical($hostPid) {
     $state = Physical-StateFile $hostPid
     $ready = Physical-ReadyFile $hostPid
     $heartbeat = Physical-HeartbeatFile $hostPid
-    if (Test-Path $state) {
-        foreach ($instanceId in (Get-Content -LiteralPath $state -ErrorAction SilentlyContinue)) {
-            if ($instanceId) {
-                Enable-PnpDevice -InstanceId $instanceId -Confirm:$false -ErrorAction Continue
-            }
+    $remaining = @()
+    foreach ($instanceId in @(Get-Content -LiteralPath $state -ErrorAction SilentlyContinue)) {
+        if (-not $instanceId) { continue }
+        try {
+            Enable-PnpDevice -InstanceId $instanceId -Confirm:$false -ErrorAction Stop | Out-Null
+        } catch {
+            $remaining += $instanceId
+            Log "failed to restore physical monitor '$instanceId' for host ${hostPid}: $($_.Exception.Message)"
         }
     }
-    Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $ready -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $heartbeat -Force -ErrorAction SilentlyContinue
+    if ($remaining.Count -gt 0) {
+        $remaining | Set-Content -LiteralPath $state
+        return $false
+    }
+    Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
     Log "physical monitor devices restored for host $hostPid"
+    return $true
 }
 
 function Lock-Physical($hostPid) {
@@ -105,16 +120,16 @@ function Lock-Physical($hostPid) {
 if (-not (Test-Path $actionFile)) { Log "no action file"; exit 1 }
 $parts = ((Get-Content $actionFile -Raw).Trim() -split '\s+')
 $action = $parts[0]
-$device = Get-VddDevice
-if (-not $device) { Log "device Root\MttVDD not found"; exit 2 }
 
 switch ($action) {
     "enable" {
+        $device = Get-VddDevice
+        if (-not $device) { Log "device Root\MttVDD not found"; exit 2 }
         Log "enable (status $($device.Status), problem $($device.Problem))"
         Enable-Vdd $device
         if ($parts.Count -ge 2) {
             $hostPid = [int]$parts[1]
-            $guard = Join-Path $dir "guard-$hostPid.txt"
+            $guard = Join-Path $RequestDir "guard-$hostPid.txt"
             Log "watching host pid $hostPid"
             while ((Get-Process -Id $hostPid -ErrorAction SilentlyContinue) -and (Test-Path $guard)) {
                 $physicalReady = Physical-ReadyFile $hostPid
@@ -128,10 +143,10 @@ switch ($action) {
                     if ($heartbeatAge -gt 10) {
                         Log "host $hostPid display heartbeat stale ($([math]::Round($heartbeatAge, 1))s): restoring physical monitors and disabling device"
                         Remove-Item $guard -Force -ErrorAction SilentlyContinue
-                        Restore-Physical $hostPid
+                        $restored = Restore-Physical $hostPid
                         $device = Get-VddDevice
                         if ($device) { Disable-Vdd $device }
-                        exit 0
+                        if ($restored) { exit 0 } else { exit 5 }
                     }
                 }
                 Start-Sleep -Seconds 1
@@ -139,19 +154,24 @@ switch ($action) {
             if (Test-Path $guard) {
                 Log "host $hostPid died: restoring physical monitors and disabling device"
                 Remove-Item $guard -Force -ErrorAction SilentlyContinue
-                Restore-Physical $hostPid
+                $restored = Restore-Physical $hostPid
                 $device = Get-VddDevice
                 if ($device) { Disable-Vdd $device }
+                if (-not $restored) { exit 5 }
             } else {
                 Log "host $hostPid released the device normally"
             }
         }
     }
     "disable" {
+        $device = Get-VddDevice
+        if (-not $device) { Log "device Root\MttVDD not found"; exit 2 }
         Log "disable (status $($device.Status), problem $($device.Problem))"
         Disable-Vdd $device
     }
     "restart" {
+        $device = Get-VddDevice
+        if (-not $device) { Log "device Root\MttVDD not found"; exit 2 }
         Log "restart"
         $device | Disable-PnpDevice -Confirm:$false
         Start-Sleep -Seconds 1
@@ -163,15 +183,16 @@ switch ($action) {
     }
     "unlock-physical" {
         if ($parts.Count -lt 2) { Log "unlock-physical missing pid"; exit 4 }
-        Restore-Physical ([int]$parts[1])
+        if (-not (Restore-Physical ([int]$parts[1]))) { exit 5 }
     }
     "unlock-stale" {
-        Get-ChildItem -LiteralPath $dir -Filter 'physical-*.txt' -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                if ($_.BaseName -match '^physical-(\d+)$') {
-                    Restore-Physical ([int]$Matches[1])
-                }
+        $failed = $false
+        foreach ($stateFile in @(Get-ChildItem -LiteralPath $StateDir -Filter 'physical-*.txt' -ErrorAction SilentlyContinue)) {
+            if ($stateFile.BaseName -match '^physical-(\d+)$') {
+                if (-not (Restore-Physical ([int]$Matches[1]))) { $failed = $true }
             }
+        }
+        if ($failed) { exit 5 }
     }
     default {
         Log "unknown action '$action'"
