@@ -204,6 +204,7 @@ fn main() -> Result<()> {
         }
     }
     logger.init();
+    relay_host::migrate_user_state();
     let result = run(cli);
     if let Err(error) = &result {
         // The `?` from main prints to stderr, which does not exist here.

@@ -61,13 +61,6 @@ pub trait VirtualDisplay: Send + Sync {
         Ok(())
     }
 
-    /// Tell the elevated fail-safe that the display session is still making
-    /// progress. The MTT helper restores the physical monitors when this
-    /// heartbeat stops, even if a wedged host process is still alive.
-    fn heartbeat_physical_outputs(&self) -> Result<()> {
-        Ok(())
-    }
-
     /// Re-enable the physical monitor devices before restoring their layout.
     fn unlock_physical_outputs(&self) -> Result<()> {
         Ok(())

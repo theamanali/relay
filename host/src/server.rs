@@ -693,18 +693,11 @@ fn pump(
     let mut recovery_started: Option<Instant> = None;
     let mut restart_attempts = 0u32;
     let mut last_reassert: Option<Instant> = None;
-    let mut next_display_heartbeat = Instant::now();
     let mut frame_sequence = 0u64;
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
-        }
-        if Instant::now() >= next_display_heartbeat {
-            if let Some(driver) = recovery.driver {
-                driver.heartbeat_physical_outputs()?;
-            }
-            next_display_heartbeat = Instant::now() + Duration::from_secs(1);
         }
         let read_at = Instant::now();
         let au = match encoder.next_access_unit() {

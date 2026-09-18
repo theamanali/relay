@@ -14,17 +14,15 @@
 //!   changes) and the session then activates the monitor exclusively through
 //!   `topology::exclusive`.
 //!
-//! Enabling/disabling needs elevation, which the host never has. The installer
-//! registers a scheduled task that runs `vdd-device.ps1` with highest
-//! privileges; the host writes its order to `action.txt` and starts the task.
-//! The `enable` order also leaves that script watching the host process: if the
-//! host dies mid-session it disables the device, and Windows brings the
-//! physical monitors back on its own.
+//! Enabling/disabling needs administrator rights: the host has them as the
+//! Relay service (SYSTEM in the interactive session) or from an elevated
+//! prompt, and does it in-process through `devnode`. If the worker dies
+//! mid-session the service runs `restore`, which re-enables the physical
+//! monitors it recorded in `physical-locked.txt` and disables the device.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,28 +32,29 @@ use regex::Regex;
 use winreg::enums::HKEY_LOCAL_MACHINE;
 use winreg::RegKey;
 
+use crate::devnode;
 use crate::display::{self, Mode, Monitor};
 use crate::driver::{Attachment, VirtualDisplay};
 use crate::gpu::GpuInfo;
 
 const REG_KEY: &str = r"SOFTWARE\MikeTheTech\VirtualDisplayDriver";
 const SETTINGS_FILE: &str = "vdd_settings.xml";
-const ACTION_FILE: &str = "action.txt";
 /// PnP id the driver's monitors carry (`MONITOR\MTT1337\...`).
 pub const MONITOR_PNP_ID: &str = "MTT1337";
-/// Scheduled task (registered by tools/install-host.ps1, "run with highest
-/// privileges") that runs vdd-device.ps1 with the order in action.txt.
-pub const HELPER_TASK: &str = "Relay display driver";
+/// Hardware id of the driver's device node (created by the installer).
+pub const DEVICE_HARDWARE_ID: &str = r"Root\MttVDD";
+/// Instance ids of the physical monitors a session disabled, one per line,
+/// in the state dir; `restore` re-enables them after a crash.
+pub const PHYSICAL_LOCK_FILE: &str = "physical-locked.txt";
 
 const APPEAR_TIMEOUT: Duration = Duration::from_secs(30);
 const GONE_TIMEOUT: Duration = Duration::from_secs(15);
-const PHYSICAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct MttVdd {
     settings: PathBuf,
-    helper_dir: PathBuf,
-    helper_state_dir: PathBuf,
-    /// Serializes the file-based helper protocol and the state derived from it.
+    /// Where `physical-locked.txt` lives.
+    state_dir: PathBuf,
+    /// Serializes device transitions and the state derived from them.
     /// Ctrl-C cleanup shares this object with the session thread, so all driver
     /// transitions must remain under this lock.
     state: Mutex<State>,
@@ -63,7 +62,7 @@ pub struct MttVdd {
 
 #[derive(Default)]
 struct State {
-    /// True once this process enabled the device (and so has a watcher on it).
+    /// True once this process enabled the device.
     enabled_by_us: bool,
     physical_locked_by_us: bool,
 }
@@ -78,12 +77,6 @@ impl MttVdd {
         let dir: String = key
             .get_value("VDDPATH")
             .context("VDDPATH missing under the MTT VDD registry key")?;
-        let helper_dir = key
-            .get_value::<String, _>("HelperStatePath")
-            .unwrap_or_else(|_| dir.clone());
-        let helper_state_dir = key
-            .get_value::<String, _>("HelperPrivateStatePath")
-            .unwrap_or_else(|_| helper_dir.clone());
         let settings = Path::new(&dir).join(SETTINGS_FILE);
         if !settings.exists() {
             bail!(
@@ -97,8 +90,7 @@ impl MttVdd {
         );
         Ok(MttVdd {
             settings,
-            helper_dir: PathBuf::from(helper_dir),
-            helper_state_dir: PathBuf::from(helper_state_dir),
+            state_dir: crate::state_dir()?,
             state: Mutex::new(State::default()),
         })
     }
@@ -138,69 +130,29 @@ impl MttVdd {
         Ok(true)
     }
 
-    /// Hand an order to the elevated helper and start it.
-    fn run_helper(&self, action: &str) -> Result<()> {
-        write_action(&self.helper_dir, action)?;
-        let output = Command::new("schtasks")
-            .args(["/run", "/tn", HELPER_TASK])
-            .output()
-            .context("running schtasks")?;
-        if !output.status.success() {
-            bail!(
-                "could not start the '{HELPER_TASK}' task ({}). Run tools/install-host.ps1 \
-                 again (elevated) to register it.",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        log::debug!("MTT VDD helper: {action}");
-        Ok(())
+    fn physical_lock_file(&self) -> PathBuf {
+        self.state_dir.join(PHYSICAL_LOCK_FILE)
     }
 
-    fn guard_file(&self) -> PathBuf {
-        self.helper_dir
-            .join(format!("guard-{}.txt", std::process::id()))
+    /// The driver's device node, wherever the installer created it.
+    fn device_node(&self) -> Result<devnode::DevNode> {
+        devnode::find_by_hardware_id(DEVICE_HARDWARE_ID)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow!(
+                    "no device with hardware id {DEVICE_HARDWARE_ID}: run tools/install-host.ps1 \
+                     (elevated) to create it"
+                )
+            })
     }
 
-    fn physical_state_file(&self) -> PathBuf {
-        self.helper_state_dir
-            .join(format!("physical-{}.txt", std::process::id()))
-    }
-
-    fn physical_ready_file(&self) -> PathBuf {
-        self.helper_state_dir
-            .join(format!("physical-{}.ready", std::process::id()))
-    }
-
-    fn physical_heartbeat_file(&self) -> PathBuf {
-        self.helper_dir
-            .join(format!("physical-{}.heartbeat", std::process::id()))
-    }
-
-    fn wait_for_physical_helper(&self, locked: bool) -> Result<()> {
-        let deadline = Instant::now() + PHYSICAL_TIMEOUT;
-        loop {
-            let ready = self.physical_ready_file().exists();
-            let state = self.physical_state_file().exists();
-            if (locked && ready) || (!locked && !ready && !state) {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "elevated helper did not {} physical monitors within {PHYSICAL_TIMEOUT:?}",
-                    if locked { "lock" } else { "restore" }
-                );
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    /// Enable the device (the monitor appears) and leave the helper watching
-    /// this process so a crash still ends with the device disabled.
+    /// Enable the device: the monitor appears.
     fn enable(&self, state: &mut State) -> Result<()> {
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         let started = Instant::now();
-        fs::write(self.guard_file(), b"")?;
-        self.run_helper(&format!("enable {}", std::process::id()))?;
+        let node = self.device_node()?;
+        devnode::enable(&node.instance_id)?;
         let deadline = started + APPEAR_TIMEOUT;
         while display::present_matching(&is_virtual).is_empty() {
             if Instant::now() >= deadline {
@@ -221,11 +173,10 @@ impl MttVdd {
     /// Disable the device: the monitor disappears completely.
     fn disable(&self, state: &mut State) -> Result<()> {
         let is_virtual = |m: &Monitor| self.is_virtual(m);
-        // Release the watcher first so it does not race us.
-        let _ = fs::remove_file(self.guard_file());
         state.enabled_by_us = false;
         let started = Instant::now();
-        self.run_helper("disable")?;
+        let node = self.device_node()?;
+        devnode::disable(&node.instance_id)?;
         let deadline = started + GONE_TIMEOUT;
         while !display::present_matching(&is_virtual).is_empty() {
             if Instant::now() >= deadline {
@@ -242,12 +193,6 @@ impl MttVdd {
         );
         Ok(())
     }
-}
-
-/// Write the helper's order file (separate so it can be unit-tested).
-fn write_action(dir: &Path, action: &str) -> Result<()> {
-    let path = dir.join(ACTION_FILE);
-    fs::write(&path, action).with_context(|| format!("writing {}", path.display()))
 }
 
 impl VirtualDisplay for MttVdd {
@@ -315,23 +260,19 @@ impl VirtualDisplay for MttVdd {
         if state.physical_locked_by_us {
             return Ok(());
         }
-        self.run_helper(&format!("lock-physical {}", std::process::id()))?;
-        self.wait_for_physical_helper(true)?;
-        state.physical_locked_by_us = true;
-        log::info!("MTT VDD: physical monitor devices disabled for the session");
-        Ok(())
-    }
-
-    fn heartbeat_physical_outputs(&self) -> Result<()> {
-        let state = self.state();
-        if state.physical_locked_by_us {
-            fs::write(self.physical_heartbeat_file(), b"alive").with_context(|| {
-                format!(
-                    "updating physical-monitor heartbeat {}",
-                    self.physical_heartbeat_file().display()
-                )
-            })?;
+        let monitors = devnode::physical_monitors(MONITOR_PNP_ID)?;
+        let ids: Vec<String> = monitors.iter().map(|m| m.instance_id.clone()).collect();
+        // Record first, disable second: a crash between the two leaves a list
+        // that `restore` can act on, never a disabled monitor nobody knows about.
+        devnode::write_id_list(&self.physical_lock_file(), &ids)?;
+        for id in &ids {
+            devnode::disable(id).with_context(|| format!("disabling physical monitor {id}"))?;
         }
+        state.physical_locked_by_us = true;
+        log::info!(
+            "MTT VDD: {} physical monitor device(s) disabled for the session",
+            ids.len()
+        );
         Ok(())
     }
 
@@ -359,42 +300,40 @@ impl VirtualDisplay for MttVdd {
 }
 
 impl MttVdd {
+    /// Re-enable every physical monitor in `physical-locked.txt` — ours from
+    /// this session, or a crashed session's. Nodes that refuse stay listed
+    /// for the next attempt.
     fn unlock_physical_outputs_locked(&self, state: &mut State) -> Result<()> {
-        if !state.physical_locked_by_us
-            && !self.physical_state_file().exists()
-            && !self.physical_ready_file().exists()
-        {
+        let file = self.physical_lock_file();
+        let ids = devnode::read_id_list(&file);
+        if ids.is_empty() && !state.physical_locked_by_us {
             return Ok(());
         }
-        self.run_helper(&format!("unlock-physical {}", std::process::id()))?;
-        self.wait_for_physical_helper(false)?;
+        let mut remaining = Vec::new();
+        for id in &ids {
+            if let Err(e) = devnode::enable(id) {
+                log::warn!("could not restore physical monitor {id}: {e:#}");
+                remaining.push(id.clone());
+            }
+        }
+        devnode::write_id_list(&file, &remaining)?;
         state.physical_locked_by_us = false;
-        log::info!("MTT VDD: physical monitor devices restored");
-        Ok(())
+        if remaining.is_empty() {
+            log::info!("MTT VDD: physical monitor devices restored");
+            Ok(())
+        } else {
+            bail!(
+                "{} physical monitor device(s) could not be re-enabled (kept in {})",
+                remaining.len(),
+                file.display()
+            )
+        }
     }
 
     fn cleanup_locked(&self, state: &mut State) -> Result<()> {
-        // Recover monitor devices left disabled if a previous helper watcher
-        // was interrupted before it could observe the host exit.
-        self.run_helper("unlock-stale")?;
-        let deadline = Instant::now() + PHYSICAL_TIMEOUT;
-        loop {
-            let pending = fs::read_dir(&self.helper_state_dir)?
-                .filter_map(Result::ok)
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .any(|name| {
-                    name.starts_with("physical-")
-                        && (name.ends_with(".txt") || name.ends_with(".ready"))
-                });
-            if !pending {
-                break;
-            }
-            if Instant::now() >= deadline {
-                bail!("elevated helper did not restore stale physical monitors within {PHYSICAL_TIMEOUT:?}");
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-        state.physical_locked_by_us = false;
+        // A crashed session may have left physical monitors off; bring them
+        // back before anything else so a topology restore can find them.
+        self.unlock_physical_outputs_locked(state)?;
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         if display::present_matching(&is_virtual).is_empty() {
             return Ok(());
@@ -687,27 +626,5 @@ mod tests {
         let out = render_settings(SAMPLE, mode(), "Weird & <GPU>").unwrap();
         assert!(out.contains("<friendlyname>Weird &amp; &lt;GPU&gt;</friendlyname>"));
         assert_eq!(parse_settings(&out).gpu, "Weird & <GPU>");
-    }
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use super::*;
-
-    #[test]
-    fn action_file_holds_the_order() {
-        let dir = std::env::temp_dir().join(format!("td-action-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        write_action(&dir, "enable 4242").unwrap();
-        assert_eq!(
-            fs::read_to_string(dir.join(ACTION_FILE)).unwrap(),
-            "enable 4242"
-        );
-        write_action(&dir, "disable").unwrap();
-        assert_eq!(
-            fs::read_to_string(dir.join(ACTION_FILE)).unwrap(),
-            "disable"
-        );
-        let _ = fs::remove_dir_all(dir);
     }
 }
