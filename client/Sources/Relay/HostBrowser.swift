@@ -11,10 +11,14 @@ struct DiscoveredHost {
     let endpoint: NWEndpoint
     let interfaces: [NWInterface]
     /// From TXT `pk`, when the host advertises it.
-    let publicKey: Data?
+    var publicKey: Data?
     /// False when Bonjour reported the service with no TXT record at all —
-    /// the shape of a goodbye (the TXT is flushed a beat before the PTR).
+    /// the shape of a goodbye (the TXT is flushed a beat before the PTR), and
+    /// also of a link going away (see `HostListDebouncer`).
     var hasTXT = true
+    /// Names of `interfaces` (en0, en7, …). `NWInterface` cannot be built by
+    /// hand, so the debouncer compares these; `host(from:)` fills them in.
+    var links: Set<String> = []
     /// PC facts from the TXT record (`cpu`, `ram`, `gpu`, `os`, `ip`); informational.
     var facts = HostFacts()
 
@@ -55,13 +59,20 @@ struct DiscoveredHost {
         return label(type)
     }
 
-    /// The link the connection will use — the first reachable one, or the top
-    /// interface when no address lines up — so the row and card agree.
+    /// The link the connection will use, so the row and card agree: the
+    /// cable whenever the host was seen on one (the dial is pinned to it and
+    /// resolves over IPv6 link-local, so it needs no IPv4 to line up — right
+    /// after a plug-in there is none yet), else the first reachable link,
+    /// else the top interface.
     var connectLink: String {
         connectLink(subnets: LocalNetworks.subnetsByInterface())
     }
 
     func connectLink(subnets: [String: [IPv4Subnet]]) -> String {
+        if let wired = wiredInterface {
+            let ip = LocalNetworks.address(among: facts.ips, reachedVia: [wired.name], subnets: subnets)
+            return Self.linkLabel(.wiredEthernet, address: ip ?? "")
+        }
         if let first = reachableAddresses(subnets: subnets).first { return first.link }
         guard let top = rankedInterfaces.first else { return "This MacBook" }
         return Self.label(top)
@@ -161,6 +172,14 @@ enum PairingClassifier {
 /// `pk` and now has no TXT at all is only ever that stale cache entry — never
 /// a real unpaired PC — so it is dropped at once rather than re-filed under
 /// Available for the length of the hold.
+///
+/// A TXT-less report has a second cause, told apart by the interfaces the
+/// host is seen on changing in the same update: a link went away. When the
+/// cable is unplugged, mDNSResponder purges everything it learned on that
+/// interface; the PTR usually survives on Wi-Fi but the TXT was cached on the
+/// cable alone, and it is not re-fetched until its TTL runs out (measured:
+/// 53 s on Wi-Fi with no TXT, until the cable came back). The host is still
+/// there, so its last-known key and facts are carried forward instead.
 struct HostListDebouncer {
     let grace: TimeInterval
     private var lastSeen: [String: (host: DiscoveredHost, vanishedAt: Date?)] = [:]
@@ -176,13 +195,19 @@ struct HostListDebouncer {
     mutating func update(seen: [DiscoveredHost], now: Date) -> [DiscoveredHost] {
         let seenNames = Set(seen.map(\.name))
         saidGoodbye = saidGoodbye.intersection(seenNames)
-        for host in seen {
-            if Self.isGoodbye(host, previous: lastSeen[host.name]?.host) {
+        for var host in seen {
+            let previous = lastSeen[host.name]?.host
+            if Self.isGoodbye(host, previous: previous) {
                 lastSeen[host.name] = nil
                 saidGoodbye.insert(host.name)
                 continue
             }
             if !host.hasTXT, saidGoodbye.contains(host.name) { continue }
+            if !host.hasTXT, let previous, previous.publicKey != nil {
+                // A link change (or a report after one): keep what the TXT said.
+                host.publicKey = previous.publicKey
+                host.facts = previous.facts
+            }
             saidGoodbye.remove(host.name)
             lastSeen[host.name] = (host, nil)
         }
@@ -196,9 +221,13 @@ struct HostListDebouncer {
         return lastSeen.values.map(\.host).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    /// A host that had a `pk` and now comes with no TXT record at all.
+    /// A host that had a TXT with a `pk` and now comes with no TXT record at
+    /// all, still on the same links. The TXT going away together with a link
+    /// is that link's purge, not a goodbye; so is a TXT-less report of a host
+    /// already carried past one.
     private static func isGoodbye(_ host: DiscoveredHost, previous: DiscoveredHost?) -> Bool {
-        !host.hasTXT && host.publicKey == nil && previous?.publicKey != nil
+        guard !host.hasTXT, host.publicKey == nil, let previous, previous.publicKey != nil else { return false }
+        return previous.hasTXT && host.links == previous.links
     }
 
     /// True while some host is being held past its disappearance.
@@ -211,6 +240,10 @@ final class HostBrowser {
     var onChange: (([DiscoveredHost]) -> Void)?
     var onStatus: ((String) -> Void)?
     private var browser: NWBrowser?
+    /// The Mac's own links: an address arriving on one (DHCP finishing on a
+    /// freshly plugged cable) changes which link a row says it will use, and
+    /// Bonjour has no event for that.
+    private var paths: NWPathMonitor?
     private let queue = DispatchQueue(label: "relay.browse")
     private var debouncer = HostListDebouncer()
     private var latest: [DiscoveredHost] = []
@@ -236,11 +269,19 @@ final class HostBrowser {
         }
         self.browser = browser
         browser.start(queue: queue)
+        if paths == nil {
+            let paths = NWPathMonitor()
+            paths.pathUpdateHandler = { [weak self] _ in self?.publish() }
+            self.paths = paths
+            paths.start(queue: queue)
+        }
     }
 
     func stop() {
         browser?.cancel()
         browser = nil
+        paths?.cancel()
+        paths = nil
     }
 
     /// Run the debouncer over the latest results and, while it is holding a
@@ -273,6 +314,7 @@ final class HostBrowser {
         }
         var host = DiscoveredHost(name: name, endpoint: result.endpoint, interfaces: result.interfaces, publicKey: key)
         host.hasTXT = hasTXT
+        host.links = Set(result.interfaces.map(\.name))
         host.facts = facts
         return host
     }

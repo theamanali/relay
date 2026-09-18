@@ -3,9 +3,9 @@ import XCTest
 @testable import Relay
 
 final class HostListDebouncerTests: XCTestCase {
-    private func host(_ name: String, pk: Data? = nil, hasTXT: Bool = true) -> DiscoveredHost {
+    private func host(_ name: String, pk: Data? = nil, hasTXT: Bool = true, links: Set<String> = []) -> DiscoveredHost {
         DiscoveredHost(name: name, endpoint: .service(name: name, type: Proto.serviceType, domain: "local.", interface: nil),
-                       interfaces: [], publicKey: pk, hasTXT: hasTXT)
+                       interfaces: [], publicKey: pk, hasTXT: hasTXT, links: links)
     }
 
     private let key = Data(repeating: 0xAB, count: 32)
@@ -24,6 +24,48 @@ final class HostListDebouncerTests: XCTestCase {
         XCTAssertFalse(d.hasPendingRemovals)
         // The host starting again is a fresh appearance.
         XCTAssertEqual(d.update(seen: [host("PC", pk: key)], now: t0.addingTimeInterval(5)).map(\.name), ["PC"])
+    }
+
+    func testLosingTheCableKeepsTheKeyWhileTheTXTIsGone() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        var facts = HostFacts()
+        facts.ips = ["10.0.0.46"]
+        var both = host("PC", pk: key, links: ["en7", "en0"])
+        both.facts = facts
+        XCTAssertEqual(d.update(seen: [both], now: t0).map(\.publicKey), [key])
+        // Cable unplugged: mDNSResponder purged the TXT with the cable, the
+        // PTR survives on Wi-Fi. Same shape as a goodbye, but the links changed.
+        let onWiFi = d.update(seen: [host("PC", hasTXT: false, links: ["en0"])], now: t0.addingTimeInterval(0.1))
+        XCTAssertEqual(onWiFi.map(\.name), ["PC"])
+        XCTAssertEqual(onWiFi[0].publicKey, key)
+        XCTAssertEqual(onWiFi[0].facts.ips, ["10.0.0.46"])
+        XCTAssertFalse(onWiFi[0].hasTXT)
+        XCTAssertFalse(d.hasPendingRemovals)
+        // Bonjour keeps reporting it TXT-less for as long as the TTL: still there, still paired.
+        XCTAssertEqual(d.update(seen: [host("PC", hasTXT: false, links: ["en0"])], now: t0.addingTimeInterval(50)).map(\.publicKey), [key])
+        // Cable back: the links grow first, the TXT follows a beat later.
+        XCTAssertEqual(d.update(seen: [host("PC", hasTXT: false, links: ["en0", "en7"])], now: t0.addingTimeInterval(60)).map(\.publicKey), [key])
+        XCTAssertEqual(d.update(seen: [host("PC", pk: key, links: ["en0", "en7"])], now: t0.addingTimeInterval(60.1)).map(\.hasTXT), [true])
+    }
+
+    func testGoodbyeWhileCarriedPastACableLossGetsTheNormalHold() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        _ = d.update(seen: [host("PC", pk: key, links: ["en7", "en0"])], now: t0)
+        _ = d.update(seen: [host("PC", hasTXT: false, links: ["en0"])], now: t0.addingTimeInterval(0.1))
+        // The PC quits: nothing left to flush but the PTR.
+        XCTAssertEqual(d.update(seen: [], now: t0.addingTimeInterval(5)).map(\.name), ["PC"])
+        XCTAssertTrue(d.hasPendingRemovals)
+        XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(7.5)).isEmpty)
+    }
+
+    func testGoodbyeOnUnchangedLinksStillDropsAtOnce() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        _ = d.update(seen: [host("PC", pk: key, links: ["en7", "en0"])], now: t0)
+        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false, links: ["en7", "en0"])], now: t0.addingTimeInterval(0.1)).isEmpty)
+        XCTAssertFalse(d.hasPendingRemovals)
     }
 
     func testPairedHostThatVanishesWithTXTIntactIsHeld() {
