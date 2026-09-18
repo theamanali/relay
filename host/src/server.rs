@@ -85,7 +85,8 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
         facts.os,
         facts.ips
     );
-    let ad = crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
+    let ad =
+        crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
     let _readvertiser = readvertise_on_address_change(ad, facts, &cfg);
 
@@ -131,7 +132,11 @@ fn readvertise_on_address_change(
                 if ips == facts.ips {
                     continue;
                 }
-                log::info!("addresses changed {:?} -> {:?}; re-advertising", facts.ips, ips);
+                log::info!(
+                    "addresses changed {:?} -> {:?}; re-advertising",
+                    facts.ips,
+                    ips
+                );
                 facts.ips = ips;
                 drop(ad.take()); // unregisters the old record first
                 match crate::discovery::advertise(&name, port, &public_key, &facts) {

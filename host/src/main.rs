@@ -173,7 +173,8 @@ fn main() -> Result<()> {
         1 => "debug",
         _ => "trace",
     };
-    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
+    let mut logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
     logger.format_timestamp_millis();
     if !has_console {
         // No console and no file either: nothing to say it to. Keep going anyway.
@@ -479,7 +480,9 @@ fn serve(args: ServeArgs) -> Result<()> {
         crypto::fingerprint(identity.public.as_bytes()),
         paired.lock().unwrap().len()
     );
-    let status = Arc::new(Mutex::new(status::HostStatus::new(pin, pin_fixed, pin_path)));
+    let status = Arc::new(Mutex::new(status::HostStatus::new(
+        pin, pin_fixed, pin_path,
+    )));
 
     let cfg = server::ServerConfig {
         port: args.port,

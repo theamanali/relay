@@ -29,7 +29,11 @@ pub fn state_dir() -> anyhow::Result<std::path::PathBuf> {
     let old = base.join("TravelDisplay");
     if !dir.exists() && old.exists() {
         if let Err(error) = std::fs::rename(&old, &dir) {
-            log::warn!("could not move {} to {}: {error}", old.display(), dir.display());
+            log::warn!(
+                "could not move {} to {}: {error}",
+                old.display(),
+                dir.display()
+            );
         }
     }
     Ok(dir)

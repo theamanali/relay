@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -18,19 +18,18 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIM_SETVERSION, NINF_KEY, NIN_SELECT, NOTIFYICONDATAW,
-    NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NINF_KEY, NIN_SELECT, NOTIFYICONDATAW,
+    NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
     TrackPopupMenuEx, TranslateMessage, HICON, HMENU, LR_DEFAULTCOLOR, MF_CHECKED, MF_DISABLED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
-    WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_LBUTTONUP, WM_NULL, WM_SETTINGCHANGE,
-    WNDCLASSW, WS_OVERLAPPED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CONTEXTMENU, WM_DESTROY,
+    WM_ENDSESSION, WM_NULL, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
 };
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
@@ -63,6 +62,8 @@ struct Tray {
     on_quit: Box<dyn Fn()>,
     /// Explorer broadcasts this when it (re)starts: the icon must be re-added.
     taskbar_created: u32,
+    /// A popup menu's modal loop is running on this thread.
+    menu_open: bool,
 }
 
 /// Show the icon and run the message loop on the calling thread until the
@@ -82,7 +83,10 @@ pub fn run(
             ..Default::default()
         };
         if RegisterClassW(&class) == 0 {
-            return Err(anyhow!("RegisterClassW failed: {}", windows::core::Error::from_win32()));
+            return Err(anyhow!(
+                "RegisterClassW failed: {}",
+                windows::core::Error::from_win32()
+            ));
         }
         // A real (hidden) top-level window, not HWND_MESSAGE: message-only
         // windows never receive the broadcasts this relies on (TaskbarCreated,
@@ -110,6 +114,7 @@ pub fn run(
             paired,
             on_quit: Box::new(on_quit),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+            menu_open: false,
         });
         let tray = Box::into_raw(tray);
         set_user_data(hwnd, tray as isize);
@@ -182,32 +187,61 @@ impl Tray {
         }
     }
 
-    fn show_menu(&self) {
+    fn show_menu(&mut self) {
+        // `TrackPopupMenuEx` runs a modal loop on this thread, and the shell
+        // can queue a second activation for the same click; without this the
+        // menu would pop straight back up after being dismissed.
+        if self.menu_open {
+            return;
+        }
+        self.menu_open = true;
         unsafe {
             let menu = match self.build_menu() {
                 Ok(m) => m,
                 Err(e) => {
                     log::warn!("tray menu failed: {e:#}");
+                    self.menu_open = false;
                     return;
                 }
             };
-            let mut pt = Default::default();
-            let _ = GetCursorPos(&mut pt);
+            // Anchor above the icon itself, not at the cursor: bottom-aligned
+            // at the cursor puts the last item (Quit) under the pointer, and a
+            // double-click or a click-to-dismiss then quits the host.
+            let (x, y) = match self.icon_rect() {
+                Some(r) => (r.left, r.top),
+                None => {
+                    let mut pt = Default::default();
+                    let _ = GetCursorPos(&mut pt);
+                    (pt.x, pt.y)
+                }
+            };
             // Without focus the menu would not close when the user clicks
             // elsewhere; the WM_NULL afterwards is the documented companion.
             let _ = SetForegroundWindow(self.hwnd);
             let cmd = TrackPopupMenuEx(
                 menu,
                 (TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_BOTTOMALIGN).0,
-                pt.x,
-                pt.y,
+                x,
+                y,
                 self.hwnd,
                 None,
             );
             let _ = PostMessageW(self.hwnd, WM_NULL, WPARAM(0), LPARAM(0));
             let _ = DestroyMenu(menu);
+            self.menu_open = false;
             self.command(cmd.0 as u32);
         }
+    }
+
+    /// Where the shell draws our icon (taskbar or overflow flyout).
+    fn icon_rect(&self) -> Option<RECT> {
+        let id = NOTIFYICONIDENTIFIER {
+            cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+            hWnd: self.hwnd,
+            uID: ICON_ID,
+            ..Default::default()
+        };
+        unsafe { Shell_NotifyIconGetRect(&id).ok() }
     }
 
     unsafe fn build_menu(&self) -> Result<HMENU> {
@@ -235,7 +269,12 @@ impl Tray {
         let paired = CreatePopupMenu().context("CreatePopupMenu")?;
         let list = self.paired.lock().unwrap();
         if list.is_empty() {
-            append(paired, MF_STRING | MF_DISABLED | MF_GRAYED, CMD_PAIRED, "No paired Macs")?;
+            append(
+                paired,
+                MF_STRING | MF_DISABLED | MF_GRAYED,
+                CMD_PAIRED,
+                "No paired Macs",
+            )?;
         } else {
             let active = status.session.as_ref().map(|s| s.client_key);
             let mut entries: Vec<(String, String, bool)> = list
@@ -247,7 +286,11 @@ impl Tray {
                 .collect();
             entries.sort();
             for (name, fp, streaming) in entries {
-                let flags = if streaming { MF_STRING | MF_CHECKED } else { MF_STRING };
+                let flags = if streaming {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                };
                 append(paired, flags, CMD_PAIRED, &format!("{name}  ({fp})"))?;
             }
         }
@@ -277,7 +320,12 @@ impl Tray {
     }
 }
 
-unsafe fn append(menu: HMENU, flags: windows::Win32::UI::WindowsAndMessaging::MENU_ITEM_FLAGS, id: u32, text: &str) -> Result<()> {
+unsafe fn append(
+    menu: HMENU,
+    flags: windows::Win32::UI::WindowsAndMessaging::MENU_ITEM_FLAGS,
+    id: u32,
+    text: &str,
+) -> Result<()> {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     AppendMenuW(menu, flags, id as usize, PCWSTR(wide.as_ptr())).context("AppendMenuW")
 }
@@ -291,7 +339,12 @@ fn spaced_pin(pin: &str) -> String {
     format!("{} {}", &pin[..mid], &pin[mid..])
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     let tray = get_user_data(hwnd) as *mut Tray;
     if tray.is_null() {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -299,14 +352,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     let tray = &mut *tray;
     match msg {
         WM_TRAY => {
+            // Version 4 sends NIN_SELECT for a left click *as well as* the
+            // legacy WM_LBUTTONUP; reacting to both would open the menu twice.
             let event = (lparam.0 & 0xffff) as u32;
-            if matches!(event, WM_LBUTTONUP | WM_CONTEXTMENU | NIN_SELECT | NIN_KEYSELECT) {
+            if matches!(event, WM_CONTEXTMENU | NIN_SELECT | NIN_KEYSELECT) {
                 tray.show_menu();
             }
-            LRESULT(0)
-        }
-        WM_COMMAND => {
-            tray.command((wparam.0 & 0xffff) as u32);
             LRESULT(0)
         }
         WM_SETTINGCHANGE => {
@@ -356,12 +407,23 @@ fn taskbar_is_light() -> bool {
 }
 
 fn load_icon() -> Result<HICON> {
-    let bytes = if taskbar_is_light() { ICON_LIGHT } else { ICON_DARK };
+    let bytes = if taskbar_is_light() {
+        ICON_LIGHT
+    } else {
+        ICON_DARK
+    };
     let want = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
     let (size, image) = pick_ico_entry(bytes, want)?;
     unsafe {
-        CreateIconFromResourceEx(image, true, 0x0003_0000, size as i32, size as i32, LR_DEFAULTCOLOR)
-            .context("CreateIconFromResourceEx")
+        CreateIconFromResourceEx(
+            image,
+            true,
+            0x0003_0000,
+            size as i32,
+            size as i32,
+            LR_DEFAULTCOLOR,
+        )
+        .context("CreateIconFromResourceEx")
     }
 }
 
@@ -428,8 +490,11 @@ fn copy_to_clipboard(hwnd: HWND, text: &str) -> Result<()> {
             std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
             let _ = GlobalUnlock(handle);
             // The clipboard owns the memory from here on.
-            SetClipboardData(CF_UNICODETEXT.0 as u32, windows::Win32::Foundation::HANDLE(handle.0))
-                .context("SetClipboardData")?;
+            SetClipboardData(
+                CF_UNICODETEXT.0 as u32,
+                windows::Win32::Foundation::HANDLE(handle.0),
+            )
+            .context("SetClipboardData")?;
             Ok(())
         })();
         let _ = CloseClipboard();
