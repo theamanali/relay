@@ -99,9 +99,10 @@ PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier
-mapping, "Native keyboard and pointer control", latency HUD — `SessionPrefs`; the
-control one is also PC ▸ Native Keyboard and Pointer Control / ⌃⌥⌘K, which mid-session goes through the
-local event monitor, saves the pref, releases held keys when turning off, and flashes
+mapping, Control the PC / Observe only radio buttons, latency HUD — `SessionPrefs`; the
+mode is also PC ▸ Control / Observe (Screen Sharing's words; ⌃⌥⌘K sits on whichever is
+not current so it always switches), which mid-session goes through the local event
+monitor, saves the pref, releases held keys when turning off, and flashes
 "Controlling/Observing <PC>"), all remembered in UserDefaults and
 overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
 then it moves to Paired without streaming); a paired host connects from within the picker
@@ -117,8 +118,8 @@ the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is 
 host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
 `hosts.txt` — there is no name-based fallback. The menu bar (`MainMenu.swift`, built in
 code) has the standard Relay/Edit/Window/Help menus plus **PC** in File's slot (the
-selected row's Connect ⌘↩ / Pair, Rename ⌘R, Revert Name ⇧⌘R, Forget ⌘⌫, then the global Native
-Keyboard and Pointer Control ⌃⌥⌘K checkmark, Close Window) and **View** = the picture
+selected row's Connect ⌘↩ / Pair, Rename ⌘R, Revert Name ⇧⌘R, Forget ⌘⌫, then the global
+Control / Observe radio pair with ⌃⌥⌘K, Close Window) and **View** = the picture
 (Resolution and Refresh Rate submenus — the latter hidden on a one-rate panel — the footer's mode, kept in sync; a Bitrate
 submenu of presets rebuilt on open so an off-preset slider value appears checked in sorted
 place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the

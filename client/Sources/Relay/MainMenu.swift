@@ -84,10 +84,12 @@ enum MainMenu {
         menu.addItem(.separator())
         item(menu, "Forget", #selector(HostPickerWindowController.forgetSelected(_:)), "\u{8}", symbol: "xmark.circle")
         menu.addItem(.separator())
-        // How the PC is used, not something done to one row: it lives here
-        // rather than in View, which is about the picture.
-        item(menu, "Native Keyboard and Pointer Control", #selector(HostPickerWindowController.toggleControl(_:)), "k",
-             [.control, .option, .command], symbol: "keyboard")
+        // How the PC is used, not something done to one row, so here rather
+        // than in View. Screen Sharing's two modes, as a radio pair; the
+        // ⌃⌥⌘K equivalent sits on whichever is not current (validation moves
+        // it), so the key always switches modes.
+        item(menu, "Control", #selector(HostPickerWindowController.setControlMode(_:)), symbol: "keyboard").tag = 1
+        item(menu, "Observe", #selector(HostPickerWindowController.setControlMode(_:)), symbol: "eye").tag = 0
         menu.addItem(.separator())
         // Not `performClose:`: AppKit pairs that with an automatic "Close All".
         item(menu, "Close Window", #selector(AppDelegate.closeKeyWindow(_:)), "w", symbol: "xmark")

@@ -530,8 +530,10 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         onPrefsChange?(prefs)
     }
 
-    @objc func toggleControl(_ sender: Any?) {
-        prefs.forwardInput.toggle()
+    /// Control (tag 1) or Observe (tag 0).
+    @objc func setControlMode(_ sender: NSMenuItem) {
+        guard prefs.forwardInput != (sender.tag == 1) else { return }
+        prefs.forwardInput = sender.tag == 1
         onPrefsChange?(prefs)
     }
 
@@ -581,8 +583,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         case #selector(toggleLatencyStats(_:)):
             item.state = prefs.showLatency ? .on : .off
             return true
-        case #selector(toggleControl(_:)):
-            item.state = prefs.forwardInput ? .on : .off
+        case #selector(setControlMode(_:)):
+            let current = prefs.forwardInput == (item.tag == 1)
+            item.state = current ? .on : .off
+            // ⌃⌥⌘K on the mode you would switch to.
+            item.keyEquivalent = current ? "" : "k"
+            item.keyEquivalentModifierMask = [.control, .option, .command]
             return true
         // The mode items mirror the footer: shown always, usable once a
         // paired PC is selected (the mode describes its session).
@@ -746,11 +752,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         modifiers.action = #selector(optionChanged(_:))
         modifiers.identifier = .init("modifiers")
 
-        // Same words as View ▸ Native Keyboard and Pointer Control, in the
-        // sentence case checkboxes use; shortcuts belong in the menu, not here.
-        let input = NSButton(checkboxWithTitle: "Native keyboard and pointer control", target: self, action: #selector(optionChanged(_:)))
-        input.state = prefs.forwardInput ? .on : .off
-        input.identifier = .init("input")
+        // PC ▸ Control / Observe as radio buttons (grouped by AppKit: same
+        // superview, same action). Shortcuts belong in the menu, not here.
+        let control = NSButton(radioButtonWithTitle: "Control the PC", target: self, action: #selector(optionChanged(_:)))
+        control.state = prefs.forwardInput ? .on : .off
+        control.identifier = .init("control")
+        let observe = NSButton(radioButtonWithTitle: "Observe only", target: self, action: #selector(optionChanged(_:)))
+        observe.state = prefs.forwardInput ? .off : .on
+        observe.identifier = .init("observe")
         let latency = NSButton(checkboxWithTitle: "Show latency stats", target: self, action: #selector(optionChanged(_:)))
         latency.state = prefs.showLatency ? .on : .off
         latency.identifier = .init("latency")
@@ -758,13 +767,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let keyboardLabel = NSTextField(labelWithString: "Keyboard")
         keyboardLabel.font = Style.Font.section
         keyboardLabel.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [videoLabel, bitrateRow, keyboardLabel, modifiers, input, latency])
+        let stack = NSStackView(views: [videoLabel, bitrateRow, keyboardLabel, modifiers, control, observe, latency])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = Style.Space.s
         stack.setCustomSpacing(Style.Space.xs, after: videoLabel)
         stack.setCustomSpacing(Style.Space.l, after: bitrateRow)
         stack.setCustomSpacing(Style.Space.xs, after: keyboardLabel)
+        stack.setCustomSpacing(Style.Space.xs, after: control)
         stack.edgeInsets = NSEdgeInsets(top: Style.Space.l, left: Style.Space.l, bottom: Style.Space.l, right: Style.Space.l)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let vc = NSViewController()
@@ -793,7 +803,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
                let m = ModifierMapping(rawValue: raw) {
                 prefs.modifiers = m
             }
-        case "input": prefs.forwardInput = (sender as? NSButton)?.state == .on
+        case "control": prefs.forwardInput = true
+        case "observe": prefs.forwardInput = false
         case "latency": prefs.showLatency = (sender as? NSButton)?.state == .on
         default: return
         }
