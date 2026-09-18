@@ -77,10 +77,17 @@ enum MainMenu {
         let menu = NSMenu(title: "PC")
         item(menu, "Connect", #selector(HostPickerWindowController.connectSelected(_:)), "\r", symbol: "display")
         menu.addItem(.separator())
-        item(menu, "Rename", #selector(HostPickerWindowController.renameSelected(_:)), symbol: "pencil")
-        item(menu, "Revert Name", #selector(HostPickerWindowController.revertNameSelected(_:)), symbol: "arrow.uturn.backward")
+        // Return is Connect, so Finder's rename key is not available.
+        item(menu, "Rename", #selector(HostPickerWindowController.renameSelected(_:)), "r", symbol: "pencil")
+        item(menu, "Revert Name", #selector(HostPickerWindowController.revertNameSelected(_:)), "r", [.command, .shift],
+             symbol: "arrow.uturn.backward")
         menu.addItem(.separator())
         item(menu, "Forget", #selector(HostPickerWindowController.forgetSelected(_:)), "\u{8}", symbol: "xmark.circle")
+        menu.addItem(.separator())
+        // How the PC is used, not something done to one row: it lives here
+        // rather than in View, which is about the picture.
+        item(menu, "Native Keyboard and Pointer Control", #selector(HostPickerWindowController.toggleControl(_:)), "k",
+             [.control, .option, .command], symbol: "keyboard")
         menu.addItem(.separator())
         // Not `performClose:`: AppKit pairs that with an automatic "Close All".
         item(menu, "Close Window", #selector(AppDelegate.closeKeyWindow(_:)), "w", symbol: "xmark")
@@ -119,8 +126,6 @@ enum MainMenu {
         bitrate.delegate = bitrateDelegate
         item(menu, "Bitrate", nil, symbol: "speedometer").submenu = bitrate
         menu.addItem(.separator())
-        item(menu, "Native Keyboard and Pointer Control", #selector(HostPickerWindowController.toggleControl(_:)), "k",
-             [.control, .option, .command], symbol: "keyboard")
         item(menu, "Show Latency Stats", #selector(HostPickerWindowController.toggleLatencyStats(_:)), "l",
              [.control, .option, .command], symbol: "stopwatch")
         return menu

@@ -89,7 +89,7 @@ PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier
 mapping, "Native keyboard and pointer control", latency HUD — `SessionPrefs`; the
-control one is also View ▸ Native Keyboard and Pointer Control / ⌃⌥⌘K, which mid-session goes through the
+control one is also PC ▸ Native Keyboard and Pointer Control / ⌃⌥⌘K, which mid-session goes through the
 local event monitor, saves the pref, releases held keys when turning off, and flashes
 "Controlling/Observing <PC>"), all remembered in UserDefaults and
 overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
@@ -106,10 +106,11 @@ the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is 
 host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
 `hosts.txt` — there is no name-based fallback. The menu bar (`MainMenu.swift`, built in
 code) has the standard Relay/Edit/Window/Help menus plus **PC** in File's slot (the
-selected row's Connect ⌘↩ / Pair, Rename, Revert Name, Forget ⌘⌫, Close Window) and
-**View** (Resolution submenu, 120/60 Hz checkmarks — the footer's mode, kept in sync —
-a Bitrate submenu of presets rebuilt on open so an off-preset slider value appears checked
-in sorted place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the
+selected row's Connect ⌘↩ / Pair, Rename ⌘R, Revert Name ⇧⌘R, Forget ⌘⌫, then the global Native
+Keyboard and Pointer Control ⌃⌥⌘K checkmark, Close Window) and **View** = the picture
+(Resolution submenu, 120/60 Hz checkmarks — the footer's mode, kept in sync — a Bitrate
+submenu of presets rebuilt on open so an off-preset slider value appears checked in sorted
+place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the
 picker controller, so they disable themselves while the kiosk window is key, and
 `StreamView.performKeyEquivalent` swallows ⌘-shortcuts before the menu bar sees them
 during a session. Without a main menu ⌘Q/⌘W/⌘H and ⌘A/⌘C/⌘V in text fields do nothing.

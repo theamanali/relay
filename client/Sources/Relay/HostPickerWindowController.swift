@@ -566,7 +566,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         case #selector(revertNameSelected(_:)):
             if let r = selected, let _ = r.nickname {
                 item.title = "Revert Name to “\(r.host.name)”"
-                return true
+                // Not mid-edit: the edit's own commit would land after the revert.
+                return renamingRow == nil
             }
             item.title = "Revert Name"
             return false
