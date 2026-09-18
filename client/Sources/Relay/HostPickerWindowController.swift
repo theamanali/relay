@@ -674,7 +674,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         if r.nickname != nil {
             // Says what changes and what it becomes; "Revert to X" on a PC's
             // row reads as reverting the PC.
-            menu.addItem(menuItem("Revert Name to “\(r.host.name)”", symbol: "arrow.uturn.backward", action: #selector(revertNameClicked)))
+            menu.addItem(menuItem("Revert Name to “\(r.host.name)”", symbol: "arrow.counterclockwise", action: #selector(revertNameClicked)))
         }
         if r.state == .paired {
             menu.addItem(.separator())

@@ -80,7 +80,7 @@ enum MainMenu {
         // Return is Connect, so Finder's rename key is not available.
         item(menu, "Rename", #selector(HostPickerWindowController.renameSelected(_:)), "r", symbol: "pencil")
         item(menu, "Revert Name", #selector(HostPickerWindowController.revertNameSelected(_:)), "r", [.command, .shift],
-             symbol: "arrow.uturn.backward")
+             symbol: "arrow.counterclockwise")
         menu.addItem(.separator())
         item(menu, "Forget", #selector(HostPickerWindowController.forgetSelected(_:)), "\u{8}", symbol: "xmark.circle")
         menu.addItem(.separator())
