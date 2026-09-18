@@ -12,8 +12,10 @@ mod native_nvenc;
 mod nvenc_bindings;
 pub mod protocol;
 pub mod server;
+pub mod status;
 pub mod sysinfo;
 pub mod topology;
+pub mod tray;
 
 /// `%LOCALAPPDATA%\Relay`: identity, PIN, paired clients, display snapshot.
 /// The host was called TravelDisplay; its directory is moved over once so

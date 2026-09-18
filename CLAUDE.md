@@ -21,20 +21,34 @@ Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session 
 Protocol changes go host-first (verified with `probe` + tests), then the spec, then the
 client. Never change `docs/PROTOCOL.md` and only one side.
 
-## Status (2026-09-15)
+## Status (2026-09-17)
 
-- Host: complete and verified on the real hardware — virtual display becomes the only
-  display at the Mac's exact mode, layout restored on disconnect/Ctrl-C/hard kill,
-  3024x1964@120 HEVC stream to `probe`, PIN pairing + encryption.
-- Client: written blind (never compiled). First job on the Mac: `cd client && swift build`,
-  fix compile errors **without changing the wire format**, then the first real session.
-- After that: tray icon, installers, and milestone 5 (in-process DXGI → NVENC instead of
-  the ffmpeg child, which removes one frame of latency).
+- Milestones 0–3 and 5 done and verified on the real hardware: virtual display becomes
+  the only display at the Mac's exact mode, layout restored on disconnect/Ctrl-C/hard
+  kill, in-process DXGI → NVENC at 3024x1964@120 (stable in exclusive-fullscreen
+  games), PIN pairing + encryption, real sessions over the cable from the Mac client
+  (Metal presenter).
+- Milestone 4 in progress: **tray icon done** (see below). Still to do: headless boot,
+  DPI, installers/signing. Open measurement items live in `docs/HOST-LATENCY.md` and
+  `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers, `--scale 0.75`, mode changes).
+- The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
+  `%LOCALAPPDATA%\Relay\host.log`; from a terminal it attaches to that terminal instead
+  (`AttachConsole`, with the inherited std handles put back so `> file` still works).
+  Subcommands print after the prompt returns — a GUI process is not waited on.
+- Tray (`host/src/tray.rs`): hidden **top-level** window, not `HWND_MESSAGE` — message-only
+  windows never get `TaskbarCreated`, `WM_SETTINGCHANGE` or `WM_ENDSESSION`, all of which
+  it relies on. Menu is built on each click from `status::HostStatus` (server writes,
+  tray reads). The PIN rotates after every successful pairing and is never logged.
+- Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
+  and chosen by `SystemUsesLightTheme`. They are rendered **on the Mac** from the
+  picker's glyph: `swift run Relay --render-icons ../host/assets`. The files checked in
+  on 2026-09-17 are PC-drawn placeholders; the Mac session should overwrite them (and
+  first compile `IconExport.swift`, written blind).
 
 ## Running it
 
-PC: `host\target\release\relay-host.exe` (prints the pairing PIN; `pin`, `paired`,
-`gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
+PC: `host\target\release\relay-host.exe` (tray icon with the PIN and status; `pin`,
+`paired`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier

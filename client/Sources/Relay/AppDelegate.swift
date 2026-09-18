@@ -60,6 +60,13 @@ struct LaunchOptions {
                 o.renderer = value
             case "--metal-vsync":
                 o.metalVSync = true
+            case "--render-icons":
+                // Host tray icons from the picker's glyph; see host/assets/README.md.
+                guard let dir = it.next() else {
+                    print("--render-icons requires a directory")
+                    exit(2)
+                }
+                exit(IconExport.run(into: dir))
             case "--help", "-h":
                 print("""
                 Relay client
@@ -74,6 +81,7 @@ struct LaunchOptions {
                   --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
                   --renderer metal|avsbdl    presentation backend (default metal)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
+                  --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
                 Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)

@@ -72,7 +72,7 @@ small encrypted protocol between them.
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
-| 4. Polish: tray icon, auto-start, headless boot, DPI | pending |
+| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (the checked-in `.ico` files are placeholders until the Mac renders the real glyph with `--render-icons`). Auto-start via the installer's `-AutoStart` task. Headless boot and DPI pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
 
 ## Setup
@@ -112,7 +112,7 @@ from `-Resolutions "WxH@Hz",...`, five at most.
 Then run:
 
 ```powershell
-host\target\release\relay-host.exe            # serve (default); prints the pairing PIN
+host\target\release\relay-host.exe            # serve (default): a tray icon, no window
 host\target\release\relay-host.exe pin        # show the PIN (--new to change it)
 host\target\release\relay-host.exe paired     # paired Macs (--forget <fingerprint>)
 host\target\release\relay-host.exe gpus       # adapters and which one is used
@@ -131,7 +131,17 @@ has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (sp
 `--no-native` (fall back to the ffmpeg capture path instead of the in-process
 NVENC one), `--no-input`, `-v`. Add
 `-AutoStart` to the install script to launch the host at
-logon (needed for a headless PC). Ctrl-C restores your displays and removes the
+logon (needed for a headless PC).
+
+The host has no window. Serving puts a Relay icon in the notification area; click it
+for the status line (`Idle` or `Streaming to <Mac> — WxH @ Hz`), the pairing PIN
+(click to copy), **New PIN**, the list of paired Macs and **Quit Relay**. The PIN
+changes by itself after every successful pairing, so a PIN only ever admits one Mac
+(`--pin` pins it). Started from a terminal the log goes to that terminal; started by
+the logon task or a double-click it goes to `%LOCALAPPDATA%\Relay\host.log`
+(`host.log.1` is the previous one). The subcommands above print to the terminal but,
+being a windowless program, return the prompt first. Quit, Ctrl-C and a logoff or
+shutdown restore your displays and remove the
 virtual monitor; if the host is killed, the helper task disables the virtual
 monitor and Windows brings the physical ones back, and the next host start (or
 `restore`) re-applies the saved layout.

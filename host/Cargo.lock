@@ -722,6 +722,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "if-addrs",
  "log",
  "mdns-sd",
  "rand",

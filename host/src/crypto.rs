@@ -207,6 +207,16 @@ pub fn load_or_create_pin(path: &Path) -> Result<String> {
     Ok(pin)
 }
 
+/// Generate a fresh PIN and persist it, replacing whatever `path` held.
+pub fn rotate_pin(path: &Path) -> Result<String> {
+    let pin = generate_pin();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, &pin).with_context(|| format!("writing {}", path.display()))?;
+    Ok(pin)
+}
+
 pub fn generate_pin() -> String {
     // Six digits from a CSPRNG; rejection-free because 2^32 % 10^6 bias is negligible here.
     format!("{:06}", OsRng.next_u32() % 1_000_000)

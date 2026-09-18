@@ -1,6 +1,12 @@
 //! Relay host: makes a connected client a virtual monitor of this PC.
+//!
+//! Built without a console: serving shows only a tray icon and logs to a
+//! file. Run from a terminal, it attaches to that terminal instead, so the
+//! subcommands still print (after the prompt — a GUI process is not waited on).
 
-use relay_host::{crypto, display, driver, encoder, gpu, protocol, server, topology};
+#![windows_subsystem = "windows"]
+
+use relay_host::{crypto, display, driver, encoder, gpu, protocol, server, status, topology, tray};
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -8,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 
 use display::Mode;
 use driver::{DriverKind, VirtualDisplay};
@@ -153,16 +160,84 @@ impl From<CodecArg> for Codec {
     }
 }
 
+/// Rotate the log once it passes this; one previous file is kept.
+const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+
 fn main() -> Result<()> {
+    // Launched from a terminal: use it. Launched by the logon task or a
+    // double-click: there is none, and the log goes to a file.
+    let has_console = attach_parent_console();
     let cli = Cli::parse();
     let level = match cli.verbose {
         0 => "info",
         1 => "debug",
         _ => "trace",
     };
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level))
-        .format_timestamp_millis()
-        .init();
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
+    logger.format_timestamp_millis();
+    if !has_console {
+        // No console and no file either: nothing to say it to. Keep going anyway.
+        if let Ok(file) = open_log_file() {
+            logger.target(env_logger::Target::Pipe(Box::new(file)));
+        }
+    }
+    logger.init();
+    let result = run(cli);
+    if let Err(error) = &result {
+        // The `?` from main prints to stderr, which does not exist here.
+        log::error!("{error:#}");
+    }
+    result
+}
+
+/// Join the parent's console, if it has one, without losing a redirect:
+/// `AttachConsole` points every standard handle at the console, including
+/// ones the shell had already pointed at a file or pipe.
+fn attach_parent_console() -> bool {
+    use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::System::Console::{
+        GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    unsafe {
+        let ids = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+        let inherited: Vec<Option<HANDLE>> = ids
+            .iter()
+            .map(|&id| match GetStdHandle(id) {
+                Ok(h) if !h.is_invalid() && h != INVALID_HANDLE_VALUE => Some(h),
+                _ => None,
+            })
+            .collect();
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return false;
+        }
+        for (id, handle) in ids.iter().zip(inherited) {
+            if let Some(h) = handle {
+                let _ = SetStdHandle(*id, h);
+            }
+        }
+        true
+    }
+}
+
+/// `%LOCALAPPDATA%\Relay\host.log`, rotated to `host.log.1` when it is large.
+fn open_log_file() -> Result<std::fs::File> {
+    let path = state_dir()?.join("host.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > LOG_ROTATE_BYTES {
+            let _ = std::fs::rename(&path, path.with_extension("log.1"));
+        }
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))
+}
+
+fn run(cli: Cli) -> Result<()> {
     if let Err(error) = relay_host::input::enable_physical_pixel_coordinates() {
         log::warn!("could not enable physical-pixel input coordinates: {error}");
     }
@@ -388,17 +463,23 @@ fn serve(args: ServeArgs) -> Result<()> {
     let identity = Arc::new(crypto::Identity::load_or_create(
         &state_dir()?.join("identity.key"),
     )?);
-    let paired = crypto::PeerList::load(&state_dir()?.join("paired-clients.txt"))?;
-    let pin = match args.pin {
-        Some(p) if crypto::is_valid_pin(&p) => p,
+    let paired = Arc::new(Mutex::new(crypto::PeerList::load(
+        &state_dir()?.join("paired-clients.txt"),
+    )?));
+    let pin_path = state_dir()?.join("pin.txt");
+    let (pin, pin_fixed) = match args.pin {
+        Some(p) if crypto::is_valid_pin(&p) => (p, true),
         Some(p) => anyhow::bail!("--pin {p:?} must be 4-8 digits"),
-        None => crypto::load_or_create_pin(&state_dir()?.join("pin.txt"))?,
+        None => (crypto::load_or_create_pin(&pin_path)?, false),
     };
+    // The PIN itself stays out of the log: it is in the tray menu and
+    // `relay-host pin`, and the log is a file now.
     log::info!(
-        "identity {}; {} paired client(s); pairing PIN: {pin}",
+        "identity {}; {} paired client(s)",
         crypto::fingerprint(identity.public.as_bytes()),
-        paired.len()
+        paired.lock().unwrap().len()
     );
+    let status = Arc::new(Mutex::new(status::HostStatus::new(pin, pin_fixed, pin_path)));
 
     let cfg = server::ServerConfig {
         port: args.port,
@@ -413,14 +494,31 @@ fn serve(args: ServeArgs) -> Result<()> {
         prefer_ffmpeg: args.no_native,
         lock_physical: !args.no_lock_physical,
         gpu,
-        driver,
+        driver: driver.clone(),
         allow_input: !args.no_input,
         identity,
-        paired: Arc::new(Mutex::new(paired)),
-        pin,
+        paired: Arc::clone(&paired),
+        status: Arc::clone(&status),
         pair_limiter: Arc::new(Mutex::new(crypto::PairLimiter::new())),
     };
-    server::run(cfg)
+    // The accept loop never returns on its own; the tray's message loop owns
+    // the main thread and Quit ends the process the way Ctrl-C does.
+    std::thread::Builder::new()
+        .name("server".into())
+        .spawn(move || {
+            if let Err(e) = server::run(cfg) {
+                log::error!("server stopped: {e:#}");
+                std::process::exit(1);
+            }
+        })
+        .context("starting the server thread")?;
+    tray::run(status, paired, move || {
+        log::info!("quitting");
+        if let Some(drv) = &driver {
+            put_displays_back(drv);
+        }
+        std::process::exit(0);
+    })
 }
 
 /// Where identity, PIN and the paired-client list live.

@@ -21,6 +21,7 @@ use crate::input::Injector;
 use crate::protocol::{
     self, msg, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME, UNKNOWN_MICROS,
 };
+use crate::status::{HostStatus, SessionInfo};
 use crate::topology;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -66,8 +67,8 @@ pub struct ServerConfig {
     pub identity: Arc<Identity>,
     /// Clients that have paired (persisted).
     pub paired: Arc<Mutex<PeerList>>,
-    /// PIN a new client must present.
-    pub pin: String,
+    /// The pairing PIN and the session in progress, shared with the tray.
+    pub status: Arc<Mutex<HostStatus>>,
     pub pair_limiter: Arc<Mutex<PairLimiter>>,
 }
 
@@ -101,6 +102,9 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
             Ok(()) => log::info!("session with {peer} ended"),
             Err(e) => log::warn!("session with {peer} ended with error: {e:#}"),
         }
+        // Cleared here rather than in `handle_session` so every exit path,
+        // including `?`, leaves the tray showing "Idle".
+        cfg.status.lock().unwrap().session = None;
     }
 }
 
@@ -463,7 +467,8 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
             tx.send(msg::PAIR_RESULT, 0, &[0])?;
             bail!("pairing refused for {client_fp}: too many failed PINs recently");
         }
-        if !crypto::verify_pin_proof(&hs.keys.pair, &cfg.pin, &proof) {
+        let pin = cfg.status.lock().unwrap().pin.clone();
+        if !crypto::verify_pin_proof(&hs.keys.pair, &pin, &proof) {
             limiter.record_failure();
             tx.send(msg::PAIR_RESULT, 0, &[0])?;
             bail!("wrong PIN from {client_fp} at {peer}");
@@ -477,6 +482,13 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         }
         tx.send(msg::PAIR_RESULT, 0, &[1])?;
         log::info!("paired client {client_fp}");
+        // Each PIN admits one Mac: a PIN that was read off the screen (or out
+        // of a log) stops being useful the moment it has done its job.
+        match cfg.status.lock().unwrap().rotate_pin() {
+            Ok(true) => log::info!("pairing PIN rotated"),
+            Ok(false) => {}
+            Err(e) => log::warn!("could not rotate the pairing PIN: {e:#}"),
+        }
         (ty, flags, payload) = rx.recv().context("waiting for CLIENT_HELLO")?;
     } else if ty == msg::UNPAIR {
         // The client is forgetting us and asks us to forget it too, so the
@@ -566,6 +578,17 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
             codec,
         ),
     )?;
+    cfg.status.lock().unwrap().session = Some(SessionInfo {
+        client: if hello.name.is_empty() {
+            client_fp.clone()
+        } else {
+            hello.name.clone()
+        },
+        client_key: hs.peer,
+        width: placement.width,
+        height: placement.height,
+        hz: placement.hz,
+    });
 
     let mut encoder_config = EncoderConfig {
         ffmpeg: cfg.ffmpeg.clone(),
