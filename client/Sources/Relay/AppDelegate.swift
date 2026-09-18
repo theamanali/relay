@@ -139,6 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// The modal (--host) prompt was closed by the connection, not the user.
     private var pinPromptEndedByConnection = false
     private var kioskActive = false
+    /// Held while the stream window is up: without it the Mac's display
+    /// sleeps and the screen saver starts on top of the picture as soon as
+    /// the user stops touching the keyboard and trackpad (view-only mode, or
+    /// watching something on the PC). System sleep from the lid is unaffected.
+    private var keepAwake: NSObjectProtocol?
     private var screenObserver: Any?
     private var cursorHidden = false
     private var exitMonitor: Any?
@@ -436,6 +441,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         NSApp.activate(ignoringOtherApps: true)
         setCursorHidden(true)
+        if keepAwake == nil {
+            keepAwake = ProcessInfo.processInfo.beginActivity(
+                options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled],
+                reason: "Showing a PC's display"
+            )
+        }
     }
 
     /// Back to the host list (picker mode only): the stream window goes
@@ -451,6 +462,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         window.orderOut(nil)
         NSApp.presentationOptions = []
         setCursorHidden(false)
+        if let token = keepAwake {
+            ProcessInfo.processInfo.endActivity(token)
+            keepAwake = nil
+        }
         showPicker()
         pickerScreenChanged()
         picker?.reloadPairing()

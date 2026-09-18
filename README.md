@@ -240,6 +240,9 @@ ffplay -f hevc capture.hevc
   useful frame-rate test.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys for itself; everything else is
   forwarded.
+- While the stream window is up the Mac holds a display-sleep assertion (the
+  one QuickTime uses), so the screen saver and idle display/system sleep stay
+  off even in view-only mode; closing the lid still sleeps as usual.
 - Windows DPI scaling for the virtual monitor is a per-monitor setting Windows
   remembers; set it once in Settings → Display (200% for a Retina-native mode).
 - Headless boot works once the host runs at logon; the BIOS and the login screen
