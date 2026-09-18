@@ -117,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var picker: HostPickerWindowController?
     /// The host of the current or last session, for reselecting it in the picker.
     private var currentHost: DiscoveredHost?
+    /// Set when the host refused a PIN from the picker: the re-dial's PIN
+    /// sheet opens with this line instead of the usual explanation.
+    private var pinError: String?
     private var kioskActive = false
     private var screenObserver: Any?
     private var cursorHidden = false
@@ -312,8 +315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let shown = ClientState.nicknames()[key] ?? host.name
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Forget “\(shown)”?"
-        alert.informativeText = "This MacBook and the PC will both forget each other. To connect again you'll enter the PIN shown on the PC."
+        alert.messageText = "Are you sure you want to forget “\(shown)”?"
+        alert.informativeText = "Your MacBook will no longer be paired with this PC. To connect again, you’ll need to enter its PIN."
         alert.addButton(withTitle: "Forget").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -393,8 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private func explainHostSideForget(host: String, fingerprint: String, on p: HostPickerWindowController) {
         guard let window = p.window else { return }
         let alert = NSAlert()
-        alert.messageText = "\(host) didn't answer"
-        alert.informativeText = "This MacBook has forgotten it, but the PC still remembers this MacBook. On the PC, run:\n\nrelay-host paired --forget \(fingerprint)"
+        alert.messageText = "“\(host)” couldn’t be reached."
+        alert.informativeText = "Your MacBook has forgotten this PC, but the PC still remembers your MacBook. To remove the pairing there, run this on the PC:\n\nrelay-host paired --forget \(fingerprint)"
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
@@ -511,14 +514,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 completion(nil)
                 return
             }
+            // Shaped like Apple's verification-code sheet: six boxes that
+            // submit on the last digit; Pair only as the Return fallback.
             let alert = NSAlert()
-            alert.messageText = "Pair with \(host)"
-            alert.informativeText = "Enter the pairing PIN shown by Relay on the PC (host fingerprint \(fingerprint)). You only need to do this once per PC."
-            alert.addButton(withTitle: "Pair")
+            alert.messageText = "Enter the PIN for “\(host)”"
+            alert.informativeText = self.pinError ?? "A pairing PIN is shown by Relay on the PC. Enter it to continue."
+            self.pinError = nil
+            let pair = alert.addButton(withTitle: "Pair")
+            pair.isEnabled = false
             alert.addButton(withTitle: "Cancel")
-            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-            field.placeholderString = "6-digit PIN"
-            alert.accessoryView = field
+
+            let field = PINEntryView()
+            field.onChange = { pair.isEnabled = $0.count == PINEntryView.length }
+            field.onComplete = { _ in pair.performClick(nil) }
+            let check = NSTextField(labelWithString: "Fingerprint \(fingerprint)")
+            check.font = Style.Font.caption
+            check.textColor = .secondaryLabelColor
+            let stack = NSStackView(views: [field, check])
+            stack.orientation = .vertical
+            stack.alignment = .centerX
+            stack.spacing = Style.Space.s
+            stack.edgeInsets = NSEdgeInsets(top: Style.Space.xs, left: 0, bottom: 0, right: 0)
+            stack.frame.size = stack.fittingSize
+            alert.accessoryView = stack
             alert.window.initialFirstResponder = field
 
             if !self.kioskActive, let pickerWindow = self.picker?.window, pickerWindow.isVisible {
@@ -526,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 alert.beginSheetModal(for: pickerWindow) { response in
                     guard self.connection === c else { return completion(nil) }
                     guard response == .alertFirstButtonReturn else { return completion(nil) }
-                    completion(field.stringValue.trimmingCharacters(in: .whitespaces))
+                    completion(field.code)
                 }
                 return
             }
@@ -553,7 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 if self.options.fixedHost != nil { NSApp.terminate(nil) }
                 return
             }
-            completion(field.stringValue.trimmingCharacters(in: .whitespaces))
+            completion(field.code)
         }
     }
 
@@ -605,6 +623,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             } else if let p = self.picker {
                 self.pendingSession = nil
                 p.connecting = false
+                if c.pinRejected, self.options.pin == nil, let host = self.currentHost {
+                    // The host closes after a refusal, so trying again is a new
+                    // connection; keep the sheet's flow, not the footer's.
+                    self.pinError = "That PIN wasn’t correct. Check the PIN shown by Relay on the PC and try again."
+                    self.picker(p, didChoose: host)
+                    return
+                }
                 if c.pairingCompleted {
                     p.flash("Paired with \(self.currentHostLabel)")
                     if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }

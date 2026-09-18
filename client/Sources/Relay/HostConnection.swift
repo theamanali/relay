@@ -71,6 +71,8 @@ final class HostConnection {
     private(set) var hostConfirmedUnpair = false
     /// Pair-only mode finished with both sides knowing each other.
     private(set) var pairingCompleted = false
+    /// The host answered the PIN with a refusal (wrong, or too many tries).
+    private(set) var pinRejected = false
     private var stopped = true
     private var attempt: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
@@ -224,9 +226,18 @@ final class HostConnection {
 
     // MARK: handshake + pairing
 
+    /// How long after the socket connects the host has to answer message 1.
+    /// The host serves one session at a time: a second connection sits in its
+    /// listen backlog, fully connected, until the current one ends.
+    static let handshakeTimeout: TimeInterval = 10
+
     private func startHandshake(_ c: NWConnection, attempt: UInt64) {
         guard isCurrent(c, attempt: attempt) else { return }
         let pending = Handshake.Pending(identity: identity)
+        queue.asyncAfter(deadline: .now() + Self.handshakeTimeout) { [weak self] in
+            guard let self, self.isCurrent(c, attempt: attempt), self.send == nil else { return }
+            self.finish("the PC didn't answer — it may still be in another session", from: c, attempt: attempt)
+        }
         var frame = Data()
         frame.appendBE32(UInt32(pending.message1.count))
         frame.append(pending.message1)
@@ -404,6 +415,7 @@ final class HostConnection {
                     sendClientHello()
                 }
             } else {
+                pinRejected = true
                 finish("the host rejected the PIN")
             }
 
