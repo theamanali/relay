@@ -12,6 +12,9 @@ struct DiscoveredHost {
     let interfaces: [NWInterface]
     /// From TXT `pk`, when the host advertises it.
     let publicKey: Data?
+    /// False when Bonjour reported the service with no TXT record at all —
+    /// the shape of a goodbye (the TXT is flushed a beat before the PTR).
+    var hasTXT = true
     /// PC facts from the TXT record (`cpu`, `ram`, `gpu`, `os`, `ip`); informational.
     var facts = HostFacts()
 
@@ -151,9 +154,19 @@ enum PairingClassifier {
 /// it, so a host that re-registers (the PC re-advertising new addresses) or a
 /// brief Wi-Fi flap does not make its row vanish and slide back in. Pure, so
 /// it can be tested without a network.
+///
+/// The one exception is a goodbye: when the host quits, its TXT goodbye
+/// (cache-flush, TTL 0) lands a beat before the PTR removal, so NWBrowser
+/// briefly reports the service with no TXT record. A host that advertised a
+/// `pk` and now has no TXT at all is only ever that stale cache entry — never
+/// a real unpaired PC — so it is dropped at once rather than re-filed under
+/// Available for the length of the hold.
 struct HostListDebouncer {
     let grace: TimeInterval
     private var lastSeen: [String: (host: DiscoveredHost, vanishedAt: Date?)] = [:]
+    /// Hosts dropped on a goodbye whose TXT-less result Bonjour may still be
+    /// reporting; ignored until they are absent or come back with a TXT.
+    private var saidGoodbye: Set<String> = []
 
     init(grace: TimeInterval = 2.5) {
         self.grace = grace
@@ -162,7 +175,15 @@ struct HostListDebouncer {
     /// Feed the hosts Bonjour currently reports; returns what to show.
     mutating func update(seen: [DiscoveredHost], now: Date) -> [DiscoveredHost] {
         let seenNames = Set(seen.map(\.name))
+        saidGoodbye = saidGoodbye.intersection(seenNames)
         for host in seen {
+            if Self.isGoodbye(host, previous: lastSeen[host.name]?.host) {
+                lastSeen[host.name] = nil
+                saidGoodbye.insert(host.name)
+                continue
+            }
+            if !host.hasTXT, saidGoodbye.contains(host.name) { continue }
+            saidGoodbye.remove(host.name)
             lastSeen[host.name] = (host, nil)
         }
         for (name, entry) in lastSeen where !seenNames.contains(name) {
@@ -173,6 +194,11 @@ struct HostListDebouncer {
             }
         }
         return lastSeen.values.map(\.host).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// A host that had a `pk` and now comes with no TXT record at all.
+    private static func isGoodbye(_ host: DiscoveredHost, previous: DiscoveredHost?) -> Bool {
+        !host.hasTXT && host.publicKey == nil && previous?.publicKey != nil
     }
 
     /// True while some host is being held past its disappearance.
@@ -239,11 +265,14 @@ final class HostBrowser {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
         var key: Data?
         var facts = HostFacts()
+        var hasTXT = false
         if case .bonjour(let txt) = result.metadata {
+            hasTXT = true
             if let hex = txt["pk"], let data = Data(hex: hex), data.count == 32 { key = data }
             facts = HostFacts(txt: txt)
         }
         var host = DiscoveredHost(name: name, endpoint: result.endpoint, interfaces: result.interfaces, publicKey: key)
+        host.hasTXT = hasTXT
         host.facts = facts
         return host
     }

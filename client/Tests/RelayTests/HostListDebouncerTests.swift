@@ -3,9 +3,50 @@ import XCTest
 @testable import Relay
 
 final class HostListDebouncerTests: XCTestCase {
-    private func host(_ name: String) -> DiscoveredHost {
+    private func host(_ name: String, pk: Data? = nil, hasTXT: Bool = true) -> DiscoveredHost {
         DiscoveredHost(name: name, endpoint: .service(name: name, type: Proto.serviceType, domain: "local.", interface: nil),
-                       interfaces: [], publicKey: nil)
+                       interfaces: [], publicKey: pk, hasTXT: hasTXT)
+    }
+
+    private let key = Data(repeating: 0xAB, count: 32)
+
+    func testGoodbyeDropsAPairedHostImmediately() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        XCTAssertEqual(d.update(seen: [host("PC", pk: key)], now: t0).map(\.name), ["PC"])
+        // TXT goodbye lands: same service, no TXT record at all. Gone now, no hold.
+        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.1)).isEmpty)
+        XCTAssertFalse(d.hasPendingRemovals)
+        // Bonjour may keep reporting the TXT-less result for a beat: still gone.
+        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.3)).isEmpty)
+        // PTR removal: still gone, nothing pending.
+        XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(0.6)).isEmpty)
+        XCTAssertFalse(d.hasPendingRemovals)
+        // The host starting again is a fresh appearance.
+        XCTAssertEqual(d.update(seen: [host("PC", pk: key)], now: t0.addingTimeInterval(5)).map(\.name), ["PC"])
+    }
+
+    func testPairedHostThatVanishesWithTXTIntactIsHeld() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        _ = d.update(seen: [host("PC", pk: key)], now: t0)
+        XCTAssertEqual(d.update(seen: [], now: t0.addingTimeInterval(0.5)).map(\.name), ["PC"])
+        XCTAssertTrue(d.hasPendingRemovals)
+        XCTAssertEqual(d.update(seen: [], now: t0.addingTimeInterval(2.4)).map(\.name), ["PC"])
+        XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(2.6)).isEmpty)
+    }
+
+    func testHostWithoutKeyLosingTXTIsUnaffected() {
+        var d = HostListDebouncer(grace: 2)
+        let t0 = Date()
+        _ = d.update(seen: [host("PC")], now: t0)
+        // Never advertised a key: a TXT-less report is just a host with no facts.
+        let shown = d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.1))
+        XCTAssertEqual(shown.map(\.name), ["PC"])
+        XCTAssertFalse(d.hasPendingRemovals)
+        // And when it goes away it gets the normal hold.
+        XCTAssertEqual(d.update(seen: [], now: t0.addingTimeInterval(0.5)).map(\.name), ["PC"])
+        XCTAssertTrue(d.hasPendingRemovals)
     }
 
     func testVanishedHostIsHeldThroughTheGracePeriod() {
