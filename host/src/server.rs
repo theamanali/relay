@@ -1,6 +1,7 @@
 //! TCP server and per-connection session: hello exchange, virtual display
 //! lifecycle, encoder pump, input reader, keep-alive pings.
 
+use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -159,7 +160,7 @@ fn refuse_busy(cfg: &ServerConfig, mut stream: TcpStream) -> Result<()> {
     stream.set_write_timeout(Some(SEND_TIMEOUT))?;
     let hs = crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired.lock().unwrap())
         .context("handshake")?;
-    let mut tx = SecureWriter::new(stream, &hs.keys.h2c);
+    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.h2c);
     tx.send(msg::SERVER_HELLO, 0, &protocol::server_hello(&cfg.name))?;
     tx.send(msg::STREAM_STOP, 0, &[stop_reason::BUSY])?;
     log::info!(
@@ -167,6 +168,18 @@ fn refuse_busy(cfg: &ServerConfig, mut stream: TcpStream) -> Result<()> {
         if hs.paired { "paired" } else { "unpaired" },
         crypto::fingerprint(&hs.peer)
     );
+    // The stop is unsolicited: the client's PAIR or CLIENT_HELLO is already
+    // on its way. Closing now would have that land on a dead socket, and the
+    // RST it draws discards the stop from the client's receive buffer before
+    // it is read (seen: probe got 10053 instead of the reason). Half-close
+    // and swallow whatever arrives until the client hangs up (or, for one
+    // that never does, the hello timeout).
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let deadline = Instant::now() + HELLO_TIMEOUT;
+    let mut sink = [0u8; 1024];
+    while Instant::now() < deadline
+        && matches!(io::Read::read(&mut stream, &mut sink), Ok(n) if n > 0)
+    {}
     Ok(())
 }
 
