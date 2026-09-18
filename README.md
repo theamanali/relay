@@ -257,3 +257,7 @@ ffplay -f hevc capture.hevc
   keep their keys and pairings in `%ProgramData%\Relay` (the identity key readable by
   SYSTEM and administrators only) and
   `~/Library/Application Support/Relay`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

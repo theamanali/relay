@@ -79,7 +79,18 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 - Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
   and chosen by `SystemUsesLightTheme`. They are rendered **on the Mac** from the
   picker's glyph: `swift run Relay --render-icons ../host/assets` (done 2026-09-17;
-  rerun after any change to `Glyphs.swift`).
+  rerun after any change to `Glyphs.swift`). The Mac app icon is the same glyph:
+  `swift run Relay --render-app-icon Assets` writes `client/Assets/AppIcon.icon` (an
+  Icon Composer document — blue fill + the glyph as a 1024 px layer — that `bundle.sh`
+  compiles with Xcode's `actool` into `Assets.car`; **the system renders the light, dark,
+  clear and tinted appearances from it**, which is the only way a macOS icon gets a dark
+  mode: an `.icns` has no appearance slot and an asset catalog silently drops dark
+  variants for macOS icons) plus `Relay.icns`, the same drawing flattened, used when
+  actool is missing and as `applicationIconImage` for a bundle-less `swift run`. Both
+  are checked in. `bundle.sh` also stamps `CFBundleVersion` with the commit count, so
+  About says "0.1.0 (134)".
+  About Relay is the standard panel plus the repo link as credits; copyright is
+  `NSHumanReadableCopyright`. Licence: MIT (`LICENSE`, `host/Cargo.toml`).
 
 ## Running it
 

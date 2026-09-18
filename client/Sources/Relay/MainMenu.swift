@@ -54,7 +54,7 @@ enum MainMenu {
     private static func app() -> NSMenu {
         let name = ProcessInfo.processInfo.processName
         let menu = NSMenu(title: name)
-        item(menu, "About \(name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        item(menu, "About \(name)", #selector(AppDelegate.showAbout(_:)))
         menu.addItem(.separator())
         item(menu, "Settings…", #selector(HostPickerWindowController.showSettings(_:)), ",")
         menu.addItem(.separator())

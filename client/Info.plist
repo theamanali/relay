@@ -14,6 +14,10 @@
     <string>0.1.0</string>
     <key>CFBundleExecutable</key>
     <string>Relay</string>
+    <key>CFBundleIconFile</key>
+    <string>Relay</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Aman Ali</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

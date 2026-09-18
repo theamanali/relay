@@ -77,6 +77,13 @@ struct LaunchOptions {
                     exit(2)
                 }
                 exit(IconExport.run(into: dir))
+            case "--render-app-icon":
+                // Relay.icns for bundle.sh; see client/Assets.
+                guard let dir = it.next() else {
+                    print("--render-app-icon requires a directory")
+                    exit(2)
+                }
+                exit(IconExport.renderAppIcon(into: dir))
             case "--help", "-h":
                 print("""
                 Relay client
@@ -93,6 +100,7 @@ struct LaunchOptions {
                   --renderer metal|avsbdl    presentation backend (default metal)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
                   --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
+                  --render-app-icon <dir>    write the Mac app icon (Relay.icns) and exit
                 Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)
@@ -165,6 +173,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainMenu.install()
+        // A `swift run` has no bundle and so no icon: give the Dock the
+        // flattened drawing. Never for Relay.app — setting this overrides
+        // the tile, and the bundle's icon is what the system renders for the
+        // light, dark and tinted styles.
+        if Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") == nil,
+           Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil {
+            NSApp.applicationIconImage = IconExport.appIcon()
+        }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         view = StreamView(frame: screen.frame)
         view.delegate = self
@@ -521,6 +537,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         c.delegate = self
         connection = c
         c.start()
+    }
+
+    /// Relay ▸ About Relay: the standard panel (icon, name, version and build
+    /// from the bundle, the copyright line) plus the repository as credits.
+    /// A bundle-less `swift run` has none of the bundle parts to show.
+    @objc func showAbout(_ sender: Any?) {
+        let url = URL(string: "https://github.com/theamanali/relay")!
+        let credits = NSAttributedString(string: "github.com/theamanali/relay", attributes: [
+            .link: url,
+            .font: NSFont.systemFont(ofSize: 11),
+        ])
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
     /// PC ▸ Close Window ⌘W, for whichever window is key.

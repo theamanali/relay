@@ -3,6 +3,7 @@ name = "relay-host"
 version = "0.1.0"
 edition = "2021"
 description = "Windows host: turns a connected client into a virtual monitor over a direct network link"
+license = "MIT"
 publish = false
 
 [lib]
