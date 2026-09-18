@@ -76,8 +76,8 @@ final class HostConnection {
     /// With `pinRejected`: the host is not checking PINs at all for this many
     /// seconds (too many wrong ones recently), so retyping is pointless.
     private(set) var pairRetryAfter: Int?
-    /// The host answered with STREAM_STOP(BUSY): it is in a session with
-    /// another client, and nothing we sent after the handshake was read.
+    /// The host answered our CLIENT_HELLO with STREAM_STOP(BUSY): another
+    /// client owns the display. Older hosts may send this before our request.
     private(set) var hostBusy = false
     private var stopped = true
     private var attempt: UInt64 = 0
@@ -236,9 +236,9 @@ final class HostConnection {
     // MARK: handshake + pairing
 
     /// How long after the socket connects the host has to answer message 1.
-    /// A host in another session answers at once (handshake, then
-    /// STREAM_STOP reason 6), so silence means it is not really there: a
-    /// stale Bonjour record, a firewall, a service that is down.
+    /// A host in another session still answers the handshake at once (and
+    /// later refuses CLIENT_HELLO), so silence means it is not really there:
+    /// a stale Bonjour record, a firewall, a service that is down.
     static let handshakeTimeout: TimeInterval = 10
     /// Re-dial interval in --host mode after a busy answer.
     static let busyRetryDelay: TimeInterval = 5
@@ -471,9 +471,9 @@ final class HostConnection {
                 hostConfirmedUnpair = true
                 finish("the host forgot this MacBook")
             case 6:
-                // Sent right after SERVER_HELLO, before anything of ours is
-                // read, so it can arrive with the PIN prompt up or with
-                // CLIENT_HELLO already on its way; the host drains those.
+                // Current hosts send this in reply to CLIENT_HELLO. Older
+                // hosts sent it immediately after SERVER_HELLO, including
+                // while our PIN prompt was open, so keep handling it anywhere.
                 hostBusy = true
                 finish("the PC is in another session")
             default: finish("host stopped the stream (reason \(reason))")

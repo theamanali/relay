@@ -59,8 +59,8 @@ if (-not $isAdmin) {
 if ($Uninstall) {
     $exe = Join-Path $env:ProgramFiles "Relay\relay-host.exe"
     if (Get-Service Relay -ErrorAction SilentlyContinue) {
-        & $exe service uninstall
-        if ($LASTEXITCODE -ne 0) { throw "relay-host service uninstall failed ($LASTEXITCODE)" }
+        $serviceCommand = Start-Process -FilePath $exe -ArgumentList "service", "uninstall" -Wait -PassThru -WindowStyle Hidden
+        if ($serviceCommand.ExitCode -ne 0) { throw "relay-host service uninstall failed ($($serviceCommand.ExitCode))" }
         Write-Host "Relay service removed."
     }
     foreach ($old in "Relay display driver", "Relay host") {
@@ -300,8 +300,12 @@ if (Test-Path $identity) {
 
 # Install the service's own copy of the exe.
 Copy-Item $built $exe -Force
-& $exe service install
-if ($LASTEXITCODE -ne 0) { throw "relay-host service install failed ($LASTEXITCODE)" }
+$serviceCommand = Start-Process -FilePath $exe -ArgumentList "service", "install" -Wait -PassThru -WindowStyle Hidden
+if ($serviceCommand.ExitCode -ne 0) { throw "relay-host service install failed ($($serviceCommand.ExitCode))" }
+$relayService = Get-Service Relay -ErrorAction Stop
+$relayService.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
+$relayService.Refresh()
+if ($relayService.Status -ne 'Running') { throw "Relay service did not reach Running (status: $($relayService.Status))" }
 Write-Host "Relay service installed and running ($exe). The tray icon appears in the signed-in session."
 
 Write-Host ""

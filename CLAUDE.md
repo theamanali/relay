@@ -36,13 +36,16 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Still to do: DPI, installers/signing. Open measurement items live in
   `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers,
   `--scale 0.75`, mode changes).
-- Protocol additions (2026-09-18, both halves done): sessions run on their own scoped
-  thread so `server.rs` answers a second connection at once — full handshake,
-  SERVER_HELLO, `STREAM_STOP` reason 6 `BUSY`, never preempting the running session;
+- Protocol additions (2026-09-18, both halves done): connections run on their own scoped
+  thread so `server.rs` answers a second connection at once — full handshake and
+  SERVER_HELLO, then PAIR/UNPAIR remain available while only CLIENT_HELLO gets
+  the atomic display lease or `STREAM_STOP` reason 6 `BUSY`; waiting for a PIN
+  does not reserve the display and a running display session is never preempted;
   `PAIR_RESULT` is `u8 result` (1 paired, 0 wrong PIN, 2 rate-limited + `u16 seconds`
-  to wait). Host verified with `probe` against the installed service; client verified
-  on the Mac against `client/Tools/fakehost.swift` (every picker path plus `--host`
-  re-dialing at 5 s), **not yet end-to-end against the PC**.
+  to wait). Verified end-to-end on the PC and Mac: an unpaired Mac pairs while `probe`
+  owns the display, its Connect gets BUSY without preempting `probe`, and it connects
+  successfully after the probe releases the display. PAIR_RESULT paths were also
+  verified on the Mac against `client/Tools/fakehost.swift`.
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
   `%ProgramData%\Relay\host.log`; from a terminal it attaches to that terminal instead
   (`AttachConsole`, with the inherited std handles put back so `> file` still works).
@@ -89,8 +92,8 @@ mapping, send input, latency HUD — `SessionPrefs`), all remembered in UserDefa
 overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
 then it moves to Paired without streaming); a paired host connects from within the picker
 (footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. A PC already in a session with another Mac
-answers Connect, Pair and forget at once: the footer says "The PC is in another session"
-(forget then shows the `paired --forget` alert with that wording) and nothing is retried.
+still allows Pair and forget because neither takes over the display. Connect gets
+"The PC is in another session" at once and is not retried from the picker.
 A rate-limited PIN reopens the sheet with "Too many wrong PINs. Try again in N min."
 (minutes rounded up); a wrong one keeps "That PIN wasn't correct…". `--host` skips the picker and re-dials on
 drops (every 5 s instead of 1 s after a busy answer). Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
@@ -152,18 +155,17 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
   `makeFirstResponder` moving focus away. The rename popover's Save is on
   `insertNewline` in the delegate for that reason; a popover that closes itself the
   instant it opens was this.
-- **The PIN sheet belongs to one connection attempt.** STREAM_STOP(BUSY) arrives with
-  the sheet up (the host sends it right after SERVER_HELLO, before reading PAIR), and the
-  host's 120 s PAIR_TIMEOUT closes the socket under a sheet left open; a PIN typed into
-  either went nowhere. `AppDelegate.dismissPINPrompt` closes the sheet from
+- **The PIN sheet belongs to one connection attempt.** Current hosts allow PAIR while
+  the display is busy, but older hosts can send STREAM_STOP(BUSY) with the sheet up;
+  the host's 120 s PAIR_TIMEOUT can also close the socket under a sheet left open. A
+  PIN typed into either dead attempt goes nowhere. `AppDelegate.dismissPINPrompt` closes it from
   `connectionDidEnd` (`endSheet` in the picker, `abortModal` in `--host` mode with a
   flag so that abort is not read as the user's Cancel, which quits there).
-- **An unsolicited STREAM_STOP must not be followed by an immediate close.** The
-  client's next message (PAIR / CLIENT_HELLO) is already in flight; if it lands on a
-  closed socket Windows answers RST, and an RST discards the stop from the client's
-  receive buffer before it is read (probe saw 10053, not the reason). `refuse_busy`
-  half-closes (`shutdown(Write)`) and drains until the client hangs up. The other
-  stops are replies to a client message, so they don't race.
+- **A final STREAM_STOP must be half-closed and drained when client data can be in
+  flight.** Closing with unread bytes can draw a Windows RST that discards the stop
+  from the receive buffer (probe saw 10053, not the reason). BUSY is now a reply to
+  CLIENT_HELLO, but the client becomes input-ready when it sends that hello, so the
+  host still `shutdown(Write)`s and drains until close/timeout before returning.
 - A session-less host in the same session as the SYSTEM worker cannot be run for
   tests (`Local\Relay.host` mutex): redeploy with `install-host.ps1 -SkipDriver`
   (elevated) and test against the service instead. The probe's persisted identity

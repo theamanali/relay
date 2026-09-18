@@ -3,7 +3,7 @@
 // real v2 handshake and encrypted framing with CryptoKit, then acts out one
 // host answer per run:
 //
-//   busy          handshake, SERVER_HELLO, STREAM_STOP(6), half-close, drain
+//   busy          allow PAIR/UNPAIR; reject CLIENT_HELLO with STREAM_STOP(6)
 //   ratelimit <s> PAIR -> PAIR_RESULT 2 + u16 seconds
 //   wrong         PAIR -> PAIR_RESULT 0
 //   accept        PAIR -> PAIR_RESULT 1 (then closes; use `hang` to stay up)
@@ -106,9 +106,28 @@ func serve(_ fd: Int32) {
     var hello = Data(); hello.appendBE16(2); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
+    guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("no first message"); return }
+    print(String(format: "-- first message 0x%02x (%d bytes)", type, payload.count))
     if mode == "busy" {
+        var requestType = type
+        if requestType == 0xA0 {
+            writeAll(fd, tx.seal(type: 0xA1, payload: Data([1])))
+            print("-- PAIR_RESULT paired while display is busy")
+            guard let next = readFrame(fd), let (nextType, _) = rx.open(next) else {
+                print("-- pair-only client closed without requesting the display")
+                return
+            }
+            requestType = nextType
+            print(String(format: "-- next message 0x%02x", requestType))
+        }
+        if requestType == 0xA2 {
+            writeAll(fd, tx.seal(type: 0x06, payload: Data([5])))
+            print("-- UNPAIRED while display is busy")
+            return
+        }
+        guard requestType == 0x81 else { print("-- unexpected busy-time request"); return }
         writeAll(fd, tx.seal(type: 0x06, payload: Data([6])))
-        print("-- sent STREAM_STOP(6); half-closing and draining")
+        print("-- CLIENT_HELLO refused with STREAM_STOP(6); half-closing and draining")
         shutdown(fd, SHUT_WR)
         var buf = [UInt8](repeating: 0, count: 1024); var total = 0
         let deadline = Date().addingTimeInterval(5)
@@ -116,8 +135,6 @@ func serve(_ fd: Int32) {
         print("-- drained \(total) bytes, client hung up")
         return
     }
-    guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("no first message"); return }
-    print(String(format: "-- first message 0x%02x (%d bytes)", type, payload.count))
     switch (mode, type) {
     case ("ratelimit", 0xA0):
         var p = Data([2]); p.appendBE16(limitSecs)

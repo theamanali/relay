@@ -1,7 +1,6 @@
 //! TCP server and per-connection session: hello exchange, virtual display
 //! lifecycle, encoder pump, input reader, keep-alive pings.
 
-use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,13 +97,12 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
     let _readvertiser = readvertise_on_address_change(facts, &cfg);
 
-    // One session at a time, on its own thread, so the accept loop stays free
-    // to answer whoever connects meanwhile: a connection left in the backlog
-    // would be handshaken only after the session ends, long after that client
-    // gave up, and it could not tell "busy" from "not there".
+    // Every connection gets its own control thread. Pairing and unpairing do
+    // not touch the display and may overlap anything; a connection competes
+    // for the single display lease only after it sends CLIENT_HELLO.
     let cfg = &cfg;
+    let display_claimed = Arc::new(AtomicBool::new(false));
     thread::scope(|s| -> Result<()> {
-        let mut session: Option<thread::ScopedJoinHandle<'_, ()>> = None;
         loop {
             let (stream, peer) = match listener.accept() {
                 Ok(x) => x,
@@ -113,74 +111,21 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
                     continue;
                 }
             };
-            if session.as_ref().is_some_and(|h| !h.is_finished()) {
-                log::info!("client connected from {peer} during a session: answering busy");
-                let spawned = thread::Builder::new()
-                    .name(format!("busy-{peer}"))
-                    .spawn_scoped(s, move || {
-                        if let Err(e) = refuse_busy(cfg, stream) {
-                            log::debug!("busy reply to {peer} not delivered: {e:#}");
-                        }
-                    });
-                if let Err(e) = spawned {
-                    log::warn!("could not answer {peer}: {e}");
-                }
-                continue;
-            }
-            if let Some(h) = session.take() {
-                let _ = h.join();
-            }
             log::info!("client connected from {peer}");
+            let display_claimed = Arc::clone(&display_claimed);
             let spawned = thread::Builder::new()
-                .name(format!("session-{peer}"))
+                .name(format!("client-{peer}"))
                 .spawn_scoped(s, move || {
-                    match handle_session(cfg, stream, peer) {
-                        Ok(()) => log::info!("session with {peer} ended"),
-                        Err(e) => log::warn!("session with {peer} ended with error: {e:#}"),
+                    match handle_session(cfg, stream, peer, &display_claimed) {
+                        Ok(()) => log::info!("connection with {peer} ended"),
+                        Err(e) => log::warn!("connection with {peer} ended with error: {e:#}"),
                     }
-                    // Cleared here rather than in `handle_session` so every exit
-                    // path, including `?`, leaves the tray showing "Idle".
-                    cfg.status.lock().unwrap().session = None;
                 });
-            match spawned {
-                Ok(h) => session = Some(h),
-                Err(e) => log::warn!("could not start a session for {peer}: {e}"),
+            if let Err(e) = spawned {
+                log::warn!("could not start a connection for {peer}: {e}");
             }
         }
     })
-}
-
-/// Tell a client that arrived during a session, over an authenticated
-/// channel, that the host is taken: the full handshake so a paired Mac can
-/// trust the answer, SERVER_HELLO, then STREAM_STOP(BUSY). Bounded by the
-/// hello timeout; nothing here touches the display or the running session.
-fn refuse_busy(cfg: &ServerConfig, mut stream: TcpStream) -> Result<()> {
-    stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
-    stream.set_write_timeout(Some(SEND_TIMEOUT))?;
-    let hs = crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired.lock().unwrap())
-        .context("handshake")?;
-    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.h2c);
-    tx.send(msg::SERVER_HELLO, 0, &protocol::server_hello(&cfg.name))?;
-    tx.send(msg::STREAM_STOP, 0, &[stop_reason::BUSY])?;
-    log::info!(
-        "refused {} client {}: busy",
-        if hs.paired { "paired" } else { "unpaired" },
-        crypto::fingerprint(&hs.peer)
-    );
-    // The stop is unsolicited: the client's PAIR or CLIENT_HELLO is already
-    // on its way. Closing now would have that land on a dead socket, and the
-    // RST it draws discards the stop from the client's receive buffer before
-    // it is read (seen: probe got 10053 instead of the reason). Half-close
-    // and swallow whatever arrives until the client hangs up (or, for one
-    // that never does, the hello timeout).
-    let _ = stream.shutdown(std::net::Shutdown::Write);
-    let deadline = Instant::now() + HELLO_TIMEOUT;
-    let mut sink = [0u8; 1024];
-    while Instant::now() < deadline
-        && matches!(io::Read::read(&mut stream, &mut sink), Ok(n) if n > 0)
-    {}
-    Ok(())
 }
 
 /// Keep the advertised `ip` facts current: a cable plugged in after start
@@ -515,7 +460,38 @@ pub fn acquire_display(
     })
 }
 
-fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -> Result<()> {
+/// The one connection allowed to own the virtual display. Releasing this on
+/// every exit path also keeps the tray's session state honest after errors.
+struct DisplayClaim<'a> {
+    claimed: &'a AtomicBool,
+    status: &'a Mutex<HostStatus>,
+}
+
+impl<'a> DisplayClaim<'a> {
+    fn acquire(claimed: &'a AtomicBool, status: &'a Mutex<HostStatus>) -> Option<Self> {
+        claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self { claimed, status })
+    }
+}
+
+impl Drop for DisplayClaim<'_> {
+    fn drop(&mut self) {
+        self.status.lock().unwrap().session = None;
+        self.claimed.store(false, Ordering::Release);
+    }
+}
+
+/// Run the authenticated control prelude, then atomically claim the display
+/// when the client asks to stream it. Pairing and unpairing are control-plane
+/// operations and remain available while another connection owns the display.
+fn handle_session(
+    cfg: &ServerConfig,
+    mut stream: TcpStream,
+    peer: SocketAddr,
+    display_claimed: &AtomicBool,
+) -> Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     // A stalled client (e.g. its decoder wedges at a game's fullscreen match
@@ -573,7 +549,17 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
             Ok(false) => {}
             Err(e) => log::warn!("could not rotate the pairing PIN: {e:#}"),
         }
-        (ty, flags, payload) = rx.recv().context("waiting for CLIENT_HELLO")?;
+        match rx.recv() {
+            Ok(next) => (ty, flags, payload) = next,
+            Err(e) => {
+                // Pair-only clients deliberately close as soon as they have
+                // PAIR_RESULT. The durable pairing is already complete.
+                log::info!(
+                    "paired client {client_fp} disconnected before requesting a stream: {e}"
+                );
+                return Ok(());
+            }
+        }
     } else if ty == msg::UNPAIR {
         // The client is forgetting us and asks us to forget it too, so the
         // pairing disappears from both sides at once. Answer even when we
@@ -610,6 +596,17 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         tx.send(msg::STREAM_STOP, 0, &[stop_reason::BAD_VERSION])?;
         bail!("unsupported protocol version {}", hello.version);
     }
+    let Some(_display_claim) = DisplayClaim::acquire(display_claimed, &cfg.status) else {
+        tx.send(msg::STREAM_STOP, 0, &[stop_reason::BUSY])?;
+        log::info!("refused stream request from client {client_fp}: display is in another session");
+        // HostConnection becomes input-ready as soon as it sends CLIENT_HELLO,
+        // so input can already be in flight. Half-close and drain it: closing
+        // with unread bytes could produce an RST that discards BUSY on Windows.
+        tx.shutdown_write();
+        rx.set_read_timeout(Some(HELLO_TIMEOUT))?;
+        while rx.recv().is_ok() {}
+        return Ok(());
+    };
     if !hello.name.is_empty() {
         // Remember the client by the name it gives itself.
         let _ = cfg.paired.lock().unwrap().add(hs.peer, &hello.name);
@@ -1046,4 +1043,30 @@ fn read_loop(
 
 fn duration_us(duration: Duration) -> u32 {
     duration.as_micros().min(u128::from(u32::MAX - 1)) as u32
+}
+
+#[cfg(test)]
+mod display_claim_tests {
+    use super::*;
+
+    #[test]
+    fn exactly_one_connection_owns_the_display_and_drop_releases_it() {
+        let claimed = AtomicBool::new(false);
+        let status = Mutex::new(HostStatus::new("123456".into(), true, PathBuf::new()));
+
+        let first = DisplayClaim::acquire(&claimed, &status).expect("first claim");
+        assert!(DisplayClaim::acquire(&claimed, &status).is_none());
+        status.lock().unwrap().session = Some(SessionInfo {
+            client: "test".into(),
+            client_key: [0; 32],
+            width: 1920,
+            height: 1080,
+            hz: 60,
+        });
+
+        drop(first);
+        assert!(!claimed.load(Ordering::Acquire));
+        assert!(status.lock().unwrap().session.is_none());
+        assert!(DisplayClaim::acquire(&claimed, &status).is_some());
+    }
 }

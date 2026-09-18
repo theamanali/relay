@@ -48,6 +48,9 @@ struct Args {
     /// Ask the host to forget this probe's identity instead of streaming
     #[arg(long)]
     unpair: bool,
+    /// Pair if needed, then close without requesting the display
+    #[arg(long, conflicts_with = "unpair")]
+    pair_only: bool,
 }
 
 fn main() -> Result<()> {
@@ -102,6 +105,10 @@ fn main() -> Result<()> {
             .context("not paired with this host: pass --pin <host PIN>")?;
         crypto::pair_as_client(&mut tx, &mut rx, &hs.keys, &pin)?;
         println!("paired");
+    }
+    if args.pair_only {
+        println!("pair-only complete; not requesting the display");
+        return Ok(());
     }
 
     let mut hello = Vec::new();

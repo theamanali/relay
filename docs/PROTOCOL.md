@@ -161,12 +161,17 @@ client                                   host
 The host removes the virtual display when the connection closes for any reason.
 If the client stops answering PINGs for 5 s the host closes the connection.
 
-**Busy.** The host serves one session at a time. A client that connects while
-one is running is not left waiting in the listen backlog: the host completes
-the handshake (so a paired client can trust the answer), sends SERVER_HELLO,
-then STREAM_STOP with reason 6 (`BUSY`) and closes, all before the client's
-PAIR or CLIENT_HELLO. The running session is never preempted; the client
-should show "in another session" rather than retry in a loop.
+**Busy.** The host serves one display session at a time, but pairing is not a
+display session. A client that connects while one is running is not left in
+the listen backlog: the host completes the handshake (so a paired client can
+trust the answer), sends SERVER_HELLO, and reads its first encrypted request.
+PAIR and UNPAIR are handled normally without touching the running session. A
+pair-only client may close after PAIR_RESULT. If the client sends CLIENT_HELLO
+(the request to take over the display), it atomically competes for the one
+display lease; if another client owns it, the host answers STREAM_STOP reason
+6 (`BUSY`) and closes. A connection waiting for a PIN does not reserve the
+display. The running session is never preempted; the client should show "in
+another session" rather than retry in a loop.
 
 ## Host → client
 

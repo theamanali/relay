@@ -121,8 +121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// sheet opens with this line instead of the usual explanation.
     private var pinError: String?
     /// The PIN prompt in front of the user and the connection it answers.
-    /// If that connection ends first (the PC is in another session, or gave
-    /// up waiting) the prompt is closed: a PIN typed into it would go nowhere.
+    /// If that connection ends first (including an older host reporting BUSY
+    /// before PAIR, or giving up waiting) the prompt is closed: a PIN typed
+    /// into it would go nowhere.
     private var pinPrompt: (alert: NSAlert, connection: HostConnection)?
     /// The modal (--host) prompt was closed by the connection, not the user.
     private var pinPromptEndedByConnection = false

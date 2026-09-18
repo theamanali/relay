@@ -95,7 +95,7 @@ pub mod stop_reason {
     pub const BAD_VERSION: u8 = 3;
     pub const NOT_PAIRED: u8 = 4;
     pub const UNPAIRED: u8 = 5;
-    /// Another client is being served; sent right after SERVER_HELLO.
+    /// Another client owns the display; sent in reply to CLIENT_HELLO.
     pub const BUSY: u8 = 6;
 }
 

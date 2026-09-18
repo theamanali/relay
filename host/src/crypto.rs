@@ -495,6 +495,12 @@ impl SecureWriter {
     pub fn shutdown(&self) {
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
+
+    /// Stop sending while leaving the read half open so a final reply is not
+    /// discarded by an RST if the peer already has another message in flight.
+    pub fn shutdown_write(&self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Write);
+    }
 }
 
 /// Receives protocol messages encrypted under one direction's key.
