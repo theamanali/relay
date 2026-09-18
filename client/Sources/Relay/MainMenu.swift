@@ -127,7 +127,6 @@ enum MainMenu {
         let refreshItem = item(menu, "Refresh Rate", nil, symbol: "arrow.triangle.2.circlepath")
         refreshItem.submenu = refresh
         refreshItem.identifier = refreshRateIdentifier
-        menu.addItem(.separator())
         let bitrate = NSMenu(title: "Bitrate")
         bitrate.delegate = bitrateDelegate
         item(menu, "Bitrate", nil, symbol: "speedometer").submenu = bitrate
