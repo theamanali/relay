@@ -119,7 +119,7 @@ enum MainMenu {
         for i in StreamMode.scales.indices {
             item(resolution, "", #selector(HostPickerWindowController.selectResolution(_:))).tag = i
         }
-        item(menu, "Resolution", nil, symbol: "aspectratio").submenu = resolution
+        item(menu, "Resolution", nil, symbol: "arrow.up.left.and.arrow.down.right").submenu = resolution
         let refresh = NSMenu(title: "Refresh Rate")
         for hz in StreamMode.refreshCandidates {
             item(refresh, "\(hz) Hz", #selector(HostPickerWindowController.selectRefresh(_:))).tag = hz
