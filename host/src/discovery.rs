@@ -77,10 +77,18 @@ fn service_info(
         .context("building mDNS service info")
 }
 
+/// How long the responder stays up after the goodbye so its built-in
+/// retransmission (120 ms later) also goes out. Multicast over Wi-Fi is
+/// unacknowledged: with a single goodbye the Mac kept a half-expired entry
+/// (TXT flushed, PTR still there) whenever that one packet was lost on the
+/// Wi-Fi path, and the picker showed a nameless "Available" row.
+const GOODBYE_LINGER: std::time::Duration = std::time::Duration::from_millis(400);
+
 impl Drop for Advertisement {
     fn drop(&mut self) {
         if let Ok(rx) = self.daemon.unregister(&self.fullname) {
             let _ = rx.recv_timeout(std::time::Duration::from_secs(1));
+            std::thread::sleep(GOODBYE_LINGER);
         }
         let _ = self.daemon.shutdown();
     }
