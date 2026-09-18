@@ -35,6 +35,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Still to do: DPI, installers/signing. Open measurement items live in
   `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers,
   `--scale 0.75`, mode changes).
+- Protocol additions (2026-09-18, host + spec done, verified with `probe` against the
+  installed service; **client half pending**): sessions run on their own scoped thread
+  so `server.rs` answers a second connection at once — full handshake, SERVER_HELLO,
+  `STREAM_STOP` reason 6 `BUSY`, never preempting the running session; `PAIR_RESULT`
+  is `u8 result` (1 paired, 0 wrong PIN, 2 rate-limited + `u16 seconds` to wait).
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
   `%ProgramData%\Relay\host.log`; from a terminal it attaches to that terminal instead
   (`AttachConsole`, with the inherited std handles put back so `> file` still works).
@@ -140,6 +145,16 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
   `makeFirstResponder` moving focus away. The rename popover's Save is on
   `insertNewline` in the delegate for that reason; a popover that closes itself the
   instant it opens was this.
+- **An unsolicited STREAM_STOP must not be followed by an immediate close.** The
+  client's next message (PAIR / CLIENT_HELLO) is already in flight; if it lands on a
+  closed socket Windows answers RST, and an RST discards the stop from the client's
+  receive buffer before it is read (probe saw 10053, not the reason). `refuse_busy`
+  half-closes (`shutdown(Write)`) and drains until the client hangs up. The other
+  stops are replies to a client message, so they don't race.
+- A session-less host in the same session as the SYSTEM worker cannot be run for
+  tests (`Local\Relay.host` mutex): redeploy with `install-host.ps1 -SkipDriver`
+  (elevated) and test against the service instead. The probe's persisted identity
+  is paired with it since 2026-09-18 (`probe --unpair` removes it).
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on
