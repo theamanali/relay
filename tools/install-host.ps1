@@ -67,7 +67,7 @@ if ($Uninstall) {
         Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
     }
     Remove-Item (Join-Path $env:ProgramFiles "Relay") -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "Removed $env:ProgramFilesRelay. Driver and $env:ProgramDataRelay (identity, pairings) kept."
+    Write-Host "Removed $env:ProgramFiles\Relay. Driver and $env:ProgramData\Relay (identity, pairings) kept."
     exit 0
 }
 
