@@ -81,7 +81,14 @@ impl Injector {
 
     fn send(input: INPUT) {
         unsafe {
-            SendInput(&[input], size_of::<INPUT>() as i32);
+            if SendInput(&[input], size_of::<INPUT>() as i32) == 0 {
+                // Blocked: usually the input desktop changed under us (lock,
+                // unlock, UAC). Re-bind this thread and try once more.
+                if let Ok(name) = crate::desktop::bind_input_desktop() {
+                    log::debug!("input re-bound to the {name} desktop");
+                    SendInput(&[input], size_of::<INPUT>() as i32);
+                }
+            }
         }
     }
 

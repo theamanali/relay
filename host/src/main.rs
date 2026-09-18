@@ -7,8 +7,8 @@
 #![windows_subsystem = "windows"]
 
 use relay_host::{
-    autostart, crypto, discovery, display, driver, encoder, gpu, protocol, server, status,
-    topology, tray,
+    crypto, discovery, display, driver, encoder, gpu, protocol, server, service, status, topology,
+    tray,
 };
 
 use std::path::PathBuf;
@@ -63,21 +63,14 @@ enum Command {
         #[arg(long)]
         reapply: bool,
     },
-    /// Start the host at login (a logon task running a copy of this exe under %LOCALAPPDATA%\Relay\bin)
-    Autostart {
-        /// Register the logon task (also refreshes the exe copy)
-        #[arg(long, conflicts_with_all = ["off", "status"])]
-        on: bool,
-        /// Remove the logon task
-        #[arg(long, conflicts_with = "status")]
-        off: bool,
-        /// Print enabled/disabled; exit code 1 when disabled
-        #[arg(long)]
-        status: bool,
+    /// The Relay Windows service: install, uninstall, or run (SCM only)
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
     },
-    /// What the logon task runs: serve in a child process and start it again if it dies
+    /// What the service runs in the signed-in session: serve as SYSTEM (hidden)
     #[command(hide = true)]
-    Supervise,
+    Worker,
     /// Run a full session's display dance at a given mode — other displays go dark for a few seconds
     AttachTest {
         #[arg(long, default_value_t = 3024)]
@@ -161,6 +154,16 @@ struct ServeArgs {
     /// Pairing PIN (4-8 digits). Default: the one stored under %LOCALAPPDATA%Relay
     #[arg(long)]
     pin: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ServiceAction {
+    /// Register and start the service (elevated prompt)
+    Install,
+    /// Stop and remove the service (elevated prompt)
+    Uninstall,
+    /// Entry point used by the service control manager
+    Run,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -293,7 +296,7 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
-        None => serve(cli.serve),
+        None => serve(cli.serve, false),
         Some(Command::Displays) => {
             print!("{}", display::describe_all());
             Ok(())
@@ -313,25 +316,21 @@ fn run(cli: Cli) -> Result<()> {
         Some(Command::Restore) => restore_displays(cli.serve.driver),
         Some(Command::Pin { new }) => show_pin(new),
         Some(Command::Paired { forget }) => paired_clients(forget),
-        Some(Command::Supervise) => autostart::supervise(),
-        Some(Command::Autostart { on, off, status: _ }) => {
-            if on {
-                autostart::enable()?;
-                println!(
-                    "start at login: enabled ({})",
-                    autostart::bin_path()?.display()
-                );
-            } else if off {
-                autostart::disable()?;
-                println!("start at login: disabled");
-            } else if autostart::is_enabled() {
-                println!("start at login: enabled");
-            } else {
-                println!("start at login: disabled");
-                std::process::exit(1);
+        Some(Command::Service { action }) => match action {
+            ServiceAction::Install => {
+                let exe = std::env::current_exe()?;
+                service::install(&exe)?;
+                println!("Relay service installed and started ({})", exe.display());
+                Ok(())
             }
-            Ok(())
-        }
+            ServiceAction::Uninstall => {
+                service::uninstall()?;
+                println!("Relay service removed");
+                Ok(())
+            }
+            ServiceAction::Run => service::run(),
+        },
+        Some(Command::Worker) => serve(cli.serve, true),
         Some(Command::Layout { reapply }) => {
             let snap = topology::Snapshot::take()?;
             println!("active displays: {}", snap.describe());
@@ -526,9 +525,15 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     Ok(())
 }
 
-fn serve(args: ServeArgs) -> Result<()> {
+/// `worker`: started by the Relay service inside the console session.
+fn serve(args: ServeArgs, worker: bool) -> Result<()> {
     claim_single_instance();
-    autostart::refresh_copy();
+    if worker {
+        log::info!(
+            "worker started by the Relay service in session {}",
+            unsafe { windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId() }
+        );
+    }
     let name = args
         .name
         .or_else(|| std::env::var("COMPUTERNAME").ok())
@@ -549,9 +554,10 @@ fn serve(args: ServeArgs) -> Result<()> {
             .context("installing Ctrl-C handler")?;
     }
 
-    let identity = Arc::new(crypto::Identity::load_or_create(
-        &state_dir()?.join("identity.key"),
-    )?);
+    let identity_path = state_dir()?.join("identity.key");
+    let identity = Arc::new(crypto::Identity::load_or_create(&identity_path)?);
+    // The state dir is world-readable (PIN, paired list); the key is not.
+    relay_host::restrict_to_admins(&identity_path);
     let paired = Arc::new(Mutex::new(crypto::PeerList::load(
         &state_dir()?.join("paired-clients.txt"),
     )?));

@@ -32,9 +32,10 @@ small encrypted protocol between them.
    **only** active display at the Mac's exact pixel size. It also temporarily
    disables the physical monitor device nodes, preventing fullscreen games from
    reactivating them. On disconnect those exact devices are re-enabled, the saved
-   layout comes back, and the virtual device is disabled again. The host never
-   needs elevation: device changes go through a scheduled task the installer
-   registers, and that task watches the host so a crash also restores the monitors.
+   layout comes back, and the virtual device is disabled again. The host runs as a
+   Windows service (SYSTEM, inside the signed-in session), so it flips those device
+   nodes itself, can capture the lock and login screens, and restores the monitors
+   if its worker ever crashes.
    [parsec-vdd](https://github.com/nomi-san/parsec-vdd) remains available as a
    fallback (`--driver parsec`) with neither of those two properties.
 2. **Capture + encode.** The new monitor is captured with DXGI Desktop
@@ -72,7 +73,7 @@ small encrypted protocol between them.
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons. Bonjour goodbye handling verified on the hardware (2026-09-17): quitting the host from its tray removes the row within ~1 s with no intermediate Available state; restarting it returns the row to Paired |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCrâRGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
-| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (icons rendered on the Mac from the picker glyph). Start at login done and verified on this PC: unelevated logon task, exe copy in `%LOCALAPPDATA%Relaybin`, supervisor restarts a crashed host in 5 s, tray toggle, single-instance guard. Headless boot and DPI pending |
+| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done; **Relay runs as a Windows service** (SYSTEM worker in the console session): starts at boot, streams the lock and login screens, in-process device-node control, crash restore, state in `%ProgramData%Relay`. Verification on real hardware pending (see the plan in `CLAUDE.md`). DPI pending |
 | 5. In-process DXGI â NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024Ã1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
 
 ## Setup
@@ -101,8 +102,9 @@ cargo build --release
 ```
 
 The script installs the driver, creates `C:\VirtualDisplayDriver\vdd_settings.xml`
-(writable by your account), registers the elevated helper task, opens the
-firewall, and leaves the driver device disabled. A session enables it and uses
+(writable by your account), opens the firewall, installs and starts the **Relay
+service** (a copy of the exe in `%ProgramFiles%\Relay`; re-run with `-SkipDriver`
+after a rebuild, `-Uninstall` to remove it), and leaves the driver device disabled. A session enables it and uses
 whatever size the connecting Mac reports (its native pixels, or Â¾/Â½ of them with
 the client's `--scale`); an unknown size is merged into the settings file first.
 Nothing is tied to one MacBook.
@@ -131,26 +133,26 @@ has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (sp
 `--no-native` (fall back to the ffmpeg capture path instead of the in-process
 NVENC one), `--no-input`, `-v`.
 
-The host has no window. Serving puts a Relay icon in the notification area; click it
-for the status line (`Idle` or `Streaming to <Mac> â WxH @ Hz`), the pairing PIN
-(click to copy), **New PIN**, **Start at login**, the list of paired Macs and **Quit Relay**. The PIN
-changes by itself after every successful pairing, so a PIN only ever admits one Mac
-(`--pin` pins it). Started from a terminal the log goes to that terminal; started by
-the logon task or a double-click it goes to `%LOCALAPPDATA%\Relay\host.log`
-(`host.log.1` is the previous one). The subcommands above print to the terminal but,
-being a windowless program, return the prompt first. Quit, Ctrl-C and a logoff or
-shutdown restore your displays and remove the
-virtual monitor; if the host is killed, the helper task disables the virtual
-monitor and Windows brings the physical ones back, and the next host start (or
-`restore`) re-applies the saved layout.
+The host has no window. The service starts it at boot inside whatever session is at
+the console — the login screen included — and it puts a Relay icon in the
+notification area once you are signed in; click it for the status line (`Idle` or
+`Streaming to <Mac> — WxH @ Hz`), the pairing PIN (click to copy), **New PIN**, the
+list of paired Macs and **Quit Relay until next sign-in**. The PIN changes by itself
+after every successful pairing, so a PIN only ever admits one Mac (`--pin` pins it).
+Because the host runs as SYSTEM on the input desktop, connecting while the PC is
+locked or at the login screen shows that screen and lets you type the password from
+the Mac. State (identity, pairings, PIN, layout snapshot, `host.log`) lives in
+`%ProgramData%\Relay`; `relay-host pin` and `paired` read it unelevated, `pin --new`
+and `paired --forget` need an elevated prompt (or the tray). Quit, a logoff or a
+shutdown restore your displays and remove the virtual monitor; if the worker is
+killed, the service runs `restore` and starts a new one within seconds.
 
-**Start at login** (tray item, `relay-host autostart --on|--off|--status`, or the
-installer's `-AutoStart`) registers a logon task for your user — no elevation —
-that runs a copy of the exe from `%LOCALAPPDATA%Relayin` under a small supervisor,
-so the host comes back within seconds if it crashes (Quit stays quit). Whenever you
-run a newer build by hand, that copy is refreshed, so the last build you ran is the one
-that starts at login. Launching a second host while one is running just shows a
-"Relay is already running" box.
+A dev run from a terminal (`relay-host --no-vdd`, or a full run with the service
+stopped: `Stop-Service Relay`) behaves as before: the log goes to that terminal, the
+subcommands print after the prompt returns (a windowless program is not waited
+on), Ctrl-C restores the displays, and a second host shows a "Relay is already
+running" box. A user-session host cannot capture the lock screen; the session simply
+waits until the desktop is back.
 
 ### macOS client
 
@@ -239,5 +241,6 @@ ffplay -f hevc capture.hevc
 - Pairing is PIN-based, not a PAKE: someone actively in the middle of the *first*
   pairing could brute-force the PIN. Pair on the cable or at home; afterwards the
   pinned keys make impersonation impossible, and hotel Wi-Fi is fine. Both sides
-  keep their keys and pairings in `%LOCALAPPDATA%Relay` and
+  keep their keys and pairings in `%ProgramData%\Relay` (the identity key readable by
+  SYSTEM and administrators only) and
   `~/Library/Application Support/Relay`.

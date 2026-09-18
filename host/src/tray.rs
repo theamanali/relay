@@ -10,13 +10,16 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WPARAM,
+};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP,
     NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NINF_KEY, NIN_SELECT, NOTIFYICONDATAW,
@@ -24,12 +27,13 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
-    TrackPopupMenuEx, TranslateMessage, HICON, HMENU, LR_DEFAULTCOLOR, MF_CHECKED, MF_DISABLED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CONTEXTMENU, WM_DESTROY,
-    WM_ENDSESSION, WM_NULL, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
+    DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetSystemMetrics,
+    MsgWaitForMultipleObjects, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
+    LR_DEFAULTCOLOR, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
+    PM_REMOVE, QS_ALLINPUT, SM_CXSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_NULL,
+    WM_QUIT, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
 };
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
@@ -52,7 +56,6 @@ const CMD_COPY_PIN: u32 = 2;
 const CMD_NEW_PIN: u32 = 3;
 const CMD_PAIRED: u32 = 4;
 const CMD_QUIT: u32 = 5;
-const CMD_AUTOSTART: u32 = 6;
 
 /// Everything the window procedure needs; stored in the window's user data.
 struct Tray {
@@ -65,9 +68,6 @@ struct Tray {
     taskbar_created: u32,
     /// A popup menu's modal loop is running on this thread.
     menu_open: bool,
-    /// Whether the logon task exists. Read at startup and after each toggle,
-    /// not per menu open: a schtasks spawn costs ~100 ms.
-    autostart: bool,
 }
 
 /// Show the icon and run the message loop on the calling thread until the
@@ -119,16 +119,41 @@ pub fn run(
             on_quit: Box::new(on_quit),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             menu_open: false,
-            autostart: crate::autostart::is_enabled(),
         });
         let tray = Box::into_raw(tray);
         set_user_data(hwnd, tray as isize);
-        (*tray).add_icon()?;
+        // No taskbar yet (the worker starts at the login screen, before
+        // Explorer): not an error, the icon is added on TaskbarCreated.
+        if let Err(e) = (*tray).add_icon() {
+            log::info!("no notification area yet ({e:#}); the icon appears once Explorer is up");
+        }
 
+        // Started by the service: it asks us to quit through this event
+        // (Stop-Service, shutdown, session change), the same way as Quit.
+        let quit_event = crate::service::open_quit_event();
+        let handles: Vec<HANDLE> = quit_event.into_iter().collect();
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        loop {
+            let woke = MsgWaitForMultipleObjects(Some(&handles), false, INFINITE, QS_ALLINPUT);
+            if !handles.is_empty() && woke == WAIT_OBJECT_0 {
+                log::info!("quit requested by the Relay service");
+                ((*tray).on_quit)();
+            }
+            let mut done = false;
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    done = true;
+                    break;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            if done {
+                break;
+            }
+        }
+        for h in handles {
+            let _ = CloseHandle(h);
         }
         drop(Box::from_raw(tray));
     }
@@ -269,12 +294,6 @@ impl Tray {
         if !status.pin_fixed {
             append(menu, MF_STRING, CMD_NEW_PIN, "New PIN")?;
         }
-        let flags = if self.autostart {
-            MF_STRING | MF_CHECKED
-        } else {
-            MF_STRING
-        };
-        append(menu, flags, CMD_AUTOSTART, "Start at login")?;
         append(menu, MF_SEPARATOR, 0, "")?;
 
         let paired = CreatePopupMenu().context("CreatePopupMenu")?;
@@ -307,8 +326,20 @@ impl Tray {
         }
         AppendMenuW(menu, MF_POPUP, paired.0 as usize, w!("Paired Macs"))
             .context("AppendMenuW(popup)")?;
+        // Under the service a quit is not final: the next sign-in starts a
+        // new worker.
+        let quit_label = if crate::service::open_quit_event()
+            .map(|h| {
+                let _ = CloseHandle(h);
+            })
+            .is_some()
+        {
+            "Quit Relay until next sign-in"
+        } else {
+            "Quit Relay"
+        };
         append(menu, MF_SEPARATOR, 0, "")?;
-        append(menu, MF_STRING, CMD_QUIT, "Quit Relay")?;
+        append(menu, MF_STRING, CMD_QUIT, quit_label)?;
         Ok(menu)
     }
 
@@ -325,25 +356,6 @@ impl Tray {
                 Ok(false) => {}
                 Err(e) => log::warn!("could not rotate the pairing PIN: {e:#}"),
             },
-            CMD_AUTOSTART => {
-                let result = if self.autostart {
-                    crate::autostart::disable()
-                } else {
-                    crate::autostart::enable()
-                };
-                if let Err(e) = result {
-                    log::warn!("changing start at login failed: {e:#}");
-                }
-                self.autostart = crate::autostart::is_enabled();
-                log::info!(
-                    "start at login {}",
-                    if self.autostart {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-            }
             CMD_QUIT => (self.on_quit)(),
             _ => {}
         }

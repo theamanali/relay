@@ -11,8 +11,10 @@
     2. Downloads nefcon + the driver-only release zip, trusts the driver's certificate,
        creates the Root\MttVDD device node and installs the INF.
     3. Opens the firewall for the host's TCP port and for mDNS.
-    4. Optionally enables start at login (-AutoStart; same as the tray's "Start at login"),
-       which matters when the PC runs headless and the Mac is its only display.
+    4. Installs the Relay service (LocalSystem): it runs the host inside the signed-in
+       session as SYSTEM, so the lock and login screens stream and the PC can boot
+       headless. State lives in %ProgramData%Relay (migrated from your
+       %LOCALAPPDATA%Relay on first install).
 
   -Driver parsec installs parsec-vdd instead (fallback: no GPU choice, at most five
   fixed modes given with -Resolutions).
@@ -20,24 +22,26 @@
   Run from an elevated PowerShell:
     Set-ExecutionPolicy -Scope Process Bypass
     .\tools\install-host.ps1
-    .\tools\install-host.ps1 -AutoStart
+    .\tools\install-host.ps1 -SkipDriver      # driver already there: refresh service + exe
+    .\tools\install-host.ps1 -Uninstall
     .\tools\install-host.ps1 -Driver parsec -Resolutions "3024x1964@120","1512x982@120"
 
 .PARAMETER Driver
   mtt (default) or parsec.
 .PARAMETER Resolutions
   parsec only: up to five "WxH@Hz" modes to register. MTT modes are created on demand.
-.PARAMETER AutoStart
-  Enable start at login (runs `relay-host autostart --on`; the tray menu can toggle it later).
+.PARAMETER Uninstall
+  Stop and remove the service, the old tasks and %ProgramFiles%Relay. Keeps the
+  driver and %ProgramData%Relay (identity and pairings).
 .PARAMETER SkipDriver
-  Don't (re)install the driver, only settings/firewall/task.
+  Don't (re)install the driver, only settings/firewall/service.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet("mtt", "parsec")]
     [string]$Driver = "mtt",
     [string[]]$Resolutions = @("3024x1964@120", "2268x1473@120", "1512x982@120"),
-    [switch]$AutoStart,
+    [switch]$Uninstall,
     [switch]$SkipDriver,
     [int]$Port = 8468
 )
@@ -50,6 +54,21 @@ New-Item -ItemType Directory -Force $downloads | Out-Null
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     throw "Run this from an elevated (Administrator) PowerShell."
+}
+
+if ($Uninstall) {
+    $exe = Join-Path $env:ProgramFiles "Relayelay-host.exe"
+    if (Get-Service Relay -ErrorAction SilentlyContinue) {
+        & $exe service uninstall
+        if ($LASTEXITCODE -ne 0) { throw "relay-host service uninstall failed ($LASTEXITCODE)" }
+        Write-Host "Relay service removed."
+    }
+    foreach ($old in "Relay display driver", "Relay host") {
+        Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    Remove-Item (Join-Path $env:ProgramFiles "Relay") -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed $env:ProgramFilesRelay. Driver and $env:ProgramDataRelay (identity, pairings) kept."
+    exit 0
 }
 
 function Get-Download($Url, $Name) {
@@ -117,38 +136,19 @@ if ($Driver -eq "mtt") {
     & icacls $vddDir /grant "${hostUser}:(OI)(CI)M" /T | Out-Null
     Write-Host "Granted $hostUser modify rights on $vddDir"
 
-    # --- 2. elevated helper task: the only privileged thing the host ever needs
-    # The driver reads its settings when its device starts, and its own reload
-    # command crashes it, so the host enables/disables the device node instead
-    # (which also makes the virtual monitor vanish completely between sessions).
-    # A task that runs with highest privileges can be started by its owner
-    # without a UAC prompt. Keep its executable script and device-state records
-    # outside the host-writable request directory.
-    $helperInstallDir = Join-Path $env:ProgramFiles "Relay"
-    $helperScript = Join-Path $helperInstallDir "vdd-device.ps1"
-    $helperRoot = Join-Path $env:ProgramData "Relay"
-    $helperRequests = Join-Path $helperRoot "Requests"
-    $helperState = Join-Path $helperRoot "State"
-    New-Item -ItemType Directory -Force $helperInstallDir, $helperRequests, $helperState | Out-Null
-    Set-RelayAcl $helperInstallDir @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)RX")
-    Set-RelayAcl $helperRequests @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)M")
-    Set-RelayAcl $helperState @("SYSTEM:(OI)(CI)F", "BUILTIN\Administrators:(OI)(CI)F", "${hostUser}:(OI)(CI)RX")
-    Remove-LockedHelper $helperScript $hostUser
-    Copy-Item (Join-Path $root "tools\vdd-device.ps1") $helperScript -Force
-    Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
-    New-ItemProperty -Path $regKey -Name HelperStatePath -PropertyType String -Value $helperRequests -Force | Out-Null
-    New-ItemProperty -Path $regKey -Name HelperPrivateStatePath -PropertyType String -Value $helperState -Force | Out-Null
-    $helperTask = "Relay display driver"
-    $helperArgs = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$helperScript`" -RequestDir `"$helperRequests`" -StateDir `"$helperState`""
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $helperArgs
-    $principal = New-ScheduledTaskPrincipal -UserId $hostUser -LogonType Interactive -RunLevel Highest
-    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-    Register-ScheduledTask -TaskName $helperTask -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
-    # Names from before the rename to Relay.
-    foreach ($old in "TravelDisplay display driver", "TravelDisplay display driver restart", "TravelDisplay host") {
+    # --- 2. leftovers from the elevated-helper era -----------------------------
+    # Device changes are done by the Relay service itself now (section 4);
+    # the helper task, its script and the registry pointers are removed.
+    foreach ($old in "Relay display driver", "Relay host",
+                     "TravelDisplay display driver", "TravelDisplay display driver restart", "TravelDisplay host") {
         Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
     }
-    Write-Host "Scheduled task '$helperTask' registered (guards the virtual and physical monitor devices for the host)."
+    Remove-ItemProperty -Path $regKey -Name HelperStatePath -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $regKey -Name HelperPrivateStatePath -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $env:ProgramFiles "Relay\vdd-device.ps1") -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $env:ProgramData "Relay\Requests") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $env:ProgramData "Relay\State") -Recurse -Force -ErrorAction SilentlyContinue
 
     # --- 3. driver ------------------------------------------------------------
     $device = Get-DeviceByHardwareId "Root\MttVDD"
@@ -247,19 +247,48 @@ foreach ($rule in @(
     }
 }
 
-# --- 4. auto start ----------------------------------------------------------
-if ($AutoStart) {
-    $exe = Join-Path $root "host\target\release\relay-host.exe"
-    if (-not (Test-Path $exe)) {
-        throw "build the release host first: cd host; cargo build --release"
+# --- 4. the Relay service ---------------------------------------------------
+# Runs as LocalSystem and keeps the host alive inside the signed-in session
+# (as SYSTEM too), which is what lets it stream the lock and login screens
+# and flip device nodes without any helper. It runs a copy of the exe from
+# %ProgramFiles%\Relay, so a cargo build never fights the running service.
+$built = Join-Path $root "host\target\release\relay-host.exe"
+if (-not (Test-Path $built)) {
+    throw "build the release host first: cd host; cargo build --release"
+}
+$installDir = Join-Path $env:ProgramFiles "Relay"
+$exe = Join-Path $installDir "relay-host.exe"
+$stateDir = Join-Path $env:ProgramData "Relay"
+New-Item -ItemType Directory -Force $installDir, $stateDir | Out-Null
+
+# State that used to be per user: the host's identity is what the Mac has
+# paired with, so it must come along. Only when the machine-wide dir has none.
+$oldState = Join-Path $env:LOCALAPPDATA "Relay"
+if (-not (Test-Path (Join-Path $stateDir "identity.key")) -and (Test-Path (Join-Path $oldState "identity.key"))) {
+    foreach ($f in "identity.key", "paired-clients.txt", "pin.txt", "display-snapshot.bin") {
+        if (Test-Path (Join-Path $oldState $f)) { Copy-Item (Join-Path $oldState $f) $stateDir -Force }
     }
-    # The host registers its own logon task (a copy of the exe under
-    # %LOCALAPPDATA%\Relay\bin, run through its supervisor); the same thing the
-    # tray's "Start at login" item does. No elevation needed for that part.
-    & $exe autostart --on
-    if ($LASTEXITCODE -ne 0) { throw "relay-host autostart --on failed ($LASTEXITCODE)" }
-    Write-Host "Start at login enabled (tray menu > Start at login toggles it; 'relay-host autostart --off' removes it)."
+    Write-Host "Moved identity, pairings and PIN from $oldState to $stateDir"
+}
+# Everyone may read the PIN and the paired list (relay-host pin/paired work
+# unelevated); only SYSTEM and administrators may read the identity key.
+& icacls.exe $stateDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" "BUILTIN\Users:(OI)(CI)RX" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls failed for $stateDir (exit $LASTEXITCODE)" }
+$identity = Join-Path $stateDir "identity.key"
+if (Test-Path $identity) {
+    & icacls.exe $identity /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" | Out-Null
 }
 
+# The service's own copy of the exe. A running service holds it, so stop first.
+if (Get-Service Relay -ErrorAction SilentlyContinue) {
+    Stop-Service Relay -Force -ErrorAction SilentlyContinue
+    Get-Process relay-host -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+Copy-Item $built $exe -Force
+& $exe service install
+if ($LASTEXITCODE -ne 0) { throw "relay-host service install failed ($LASTEXITCODE)" }
+Write-Host "Relay service installed and running ($exe). The tray icon appears in the signed-in session."
+
 Write-Host ""
-Write-Host "Done. Test the driver with:  host\target\release\relay-host.exe attach-test --width 3024 --height 1964 --hz 120"
+Write-Host "Done. Check: Get-Service Relay (Running), the Relay tray icon, then connect from the Mac."

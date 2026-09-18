@@ -37,6 +37,9 @@ const FRAME_TIMING_INTERVAL: u64 = 4;
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const ENCODER_RESTART_DELAY: Duration = Duration::from_millis(250);
 const ENCODER_RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Between capture attempts while the desktop refuses us (locked). The
+/// client keeps its last picture; input still flows so the PC can be unlocked.
+const DESKTOP_RETRY: Duration = Duration::from_secs(2);
 /// Let a game's fullscreen modeset finish before we touch display config.
 const RECOVERY_SETTLE: Duration = Duration::from_millis(750);
 /// Never reassert the virtual-only topology more often than this.
@@ -612,7 +615,14 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         intra_refresh: cfg.intra_refresh,
         prefer_ffmpeg: cfg.prefer_ffmpeg,
     };
-    let mut encoder = Encoder::spawn(&encoder_config)?;
+    let mut encoder = match Encoder::spawn(&encoder_config) {
+        Ok(e) => e,
+        Err(e) if crate::encoder::is_desktop_not_capturable(&e) => {
+            log::warn!("{e:#}; the session starts without a picture and retries");
+            Encoder::waiting()
+        }
+        Err(e) => return Err(e),
+    };
 
     // Reader thread: client -> host messages (input, pongs).
     let stop = Arc::new(AtomicBool::new(false));
@@ -630,6 +640,13 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         thread::Builder::new()
             .name(format!("client-rx-{peer}"))
             .spawn(move || {
+                // SendInput reaches the secure desktop only from a thread
+                // bound to it (and only for a SYSTEM worker).
+                if injector.is_some() {
+                    if let Ok(name) = crate::desktop::bind_input_desktop() {
+                        log::debug!("input thread on the {name} desktop");
+                    }
+                }
                 let r = read_loop(rx, injector, &last_pong, &last_ping_sent, &network_rtt);
                 if let Err(e) = r {
                     log::debug!("client reader finished: {e:#}");
@@ -691,6 +708,8 @@ fn pump(
     let mut send_time = Duration::ZERO;
     let mut max_send = Duration::ZERO;
     let mut recovery_started: Option<Instant> = None;
+    // Since when the desktop has refused capture (lock screen).
+    let mut desktop_wait: Option<Instant> = None;
     let mut restart_attempts = 0u32;
     let mut last_reassert: Option<Instant> = None;
     let mut frame_sequence = 0u64;
@@ -723,6 +742,11 @@ fn pump(
                     );
                     Instant::now()
                 });
+                // A locked or secure desktop is not a failure to time out on:
+                // the stream resumes when it comes back (unlock, sign-in).
+                if desktop_wait.is_some() {
+                    recovery_started = Some(Instant::now());
+                }
                 if started.elapsed() >= ENCODER_RECOVERY_TIMEOUT {
                     let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
                     bail!(
@@ -781,6 +805,22 @@ fn pump(
                         // A fresh encoder emits its own parameter sets. Forward
                         // them even if their bytes match the previous process.
                         last_config.clear();
+                        if desktop_wait.take().is_some() {
+                            log::info!(
+                                "desktop capturable again ({})",
+                                crate::desktop::input_desktop_name()
+                            );
+                        }
+                    }
+                    Err(error) if crate::encoder::is_desktop_not_capturable(&error) => {
+                        if desktop_wait.is_none() {
+                            log::warn!(
+                                "the {} desktop cannot be captured (PC locked, or not running as the Relay service); waiting for it to change",
+                                crate::desktop::input_desktop_name()
+                            );
+                            desktop_wait = Some(Instant::now());
+                        }
+                        thread::sleep(DESKTOP_RETRY);
                     }
                     Err(error) => {
                         log::debug!("encoder restart failed: {error:#}");

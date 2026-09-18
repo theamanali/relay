@@ -269,6 +269,13 @@ impl NativeNvenc {
         }
 
         let api = NvApi::load()?;
+        // Desktop Duplication only opens from a thread on the input desktop;
+        // a SYSTEM worker may bind to Winlogon (lock/login screen), a user
+        // process may not — that failure shows up as E_ACCESSDENIED below.
+        match crate::desktop::bind_input_desktop() {
+            Ok(name) => log::debug!("capture bound to the {name} desktop"),
+            Err(e) => log::debug!("not bound to the input desktop: {e:#}"),
+        }
         let (device, context, duplication, width, height) =
             create_capture(cfg.capture_adapter_idx, cfg.output_idx)?;
         let composition_texture = create_texture(&device, width, height)?;
@@ -731,6 +738,9 @@ impl CaptureLoop {
     /// (reported as `CaptureLost`) or until something fails (`CaptureFailed`).
     fn run(mut self) -> Self {
         raise_thread_priority("nvenc-capture");
+        if let Ok(name) = crate::desktop::bind_input_desktop() {
+            log::debug!("capture thread on the {name} desktop");
+        }
         while !self.stop.load(Ordering::Relaxed) {
             match self.step() {
                 Ok(true) => {}

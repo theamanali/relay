@@ -421,6 +421,18 @@ pub struct Encoder {
 }
 
 impl Encoder {
+    /// No backend yet: the session starts in its recovery loop, which keeps
+    /// trying to create one. Used when the desktop refuses capture at connect
+    /// time (the PC is locked) so the client is not turned away.
+    pub fn waiting() -> Self {
+        Encoder {
+            inner: None,
+            fallback: None,
+        }
+    }
+}
+
+impl Encoder {
     /// NVENC and the display driver can stop returning from teardown calls
     /// during a fullscreen GPU reset. Never let that block the session thread:
     /// a detached cleanup thread owns every native handle until teardown does
@@ -457,6 +469,11 @@ impl Encoder {
                         fallback: Some(cfg.clone()),
                     });
                 }
+                // The desktop cannot be captured from here (locked, or the
+                // secure desktop is up and this is not a SYSTEM worker).
+                // ffmpeg would fail the same way: report it, the session
+                // waits for the desktop to come back.
+                Err(e) if is_access_denied(&e) => return Err(e.context(DesktopNotCapturable)),
                 Err(e) => {
                     log::warn!(
                         "native NVENC startup failed ({e:#}); falling back to ffmpeg {}",
@@ -848,4 +865,33 @@ mod tests {
         let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
         assert!(graph.contains("hwdownload,format=bgra,format=yuv420p"));
     }
+}
+
+/// Marker in an error chain: Desktop Duplication refused the current desktop
+/// (`E_ACCESSDENIED`). Not a fault of the pipeline — retry when the desktop
+/// changes (unlock, sign-in, UAC prompt dismissed).
+#[derive(Debug)]
+pub struct DesktopNotCapturable;
+
+impl std::fmt::Display for DesktopNotCapturable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the desktop cannot be captured from this process right now")
+    }
+}
+
+impl std::error::Error for DesktopNotCapturable {}
+
+/// Whether `error` (anywhere in its chain) says the desktop is not capturable.
+pub fn is_desktop_not_capturable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|e| e.downcast_ref::<DesktopNotCapturable>().is_some())
+}
+
+fn is_access_denied(error: &anyhow::Error) -> bool {
+    use windows::Win32::Foundation::E_ACCESSDENIED;
+    error.chain().any(|e| {
+        e.downcast_ref::<windows::core::Error>()
+            .is_some_and(|w| w.code() == E_ACCESSDENIED)
+    })
 }

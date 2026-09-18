@@ -13,7 +13,7 @@ piece of ceremony and it is intentional.
 | `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
-| `tools/` | elevated installer (`install-host.ps1`), driver settings template, elevated helper script | Windows |
+| `tools/` | elevated installer (`install-host.ps1`), driver settings template, (no helper script any more: the service does the privileged work) | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
 Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session owns
@@ -21,35 +21,50 @@ Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session 
 Protocol changes go host-first (verified with `probe` + tests), then the spec, then the
 client. Never change `docs/PROTOCOL.md` and only one side.
 
-## Status (2026-09-17)
+## Status (2026-09-18)
 
 - Milestones 0–3 and 5 done and verified on the real hardware: virtual display becomes
   the only display at the Mac's exact mode, layout restored on disconnect/Ctrl-C/hard
   kill, in-process DXGI → NVENC at 3024x1964@120 (stable in exclusive-fullscreen
   games), PIN pairing + encryption, real sessions over the cable from the Mac client
   (Metal presenter).
-- Milestone 4 in progress: **tray icon and start-at-login done** (see below). Still to do: headless boot,
-  DPI, installers/signing. Open measurement items live in `docs/HOST-LATENCY.md` and
-  `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers, `--scale 0.75`, mode changes).
+- Milestone 4 in progress: tray icon done; **the host is a Windows service now**
+  (`host/src/service.rs`, 2026-09-18) so the lock and login screens stream and the PC
+  can boot headless — verification on the real hardware pending (lock screen, login
+  screen, reboot, crash restore, sign-out/in; the list is in the README status row).
+  Still to do: DPI, installers/signing. Open measurement items live in
+  `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers,
+  `--scale 0.75`, mode changes).
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
-  `%LOCALAPPDATA%\Relay\host.log`; from a terminal it attaches to that terminal instead
+  `%ProgramData%\Relay\host.log`; from a terminal it attaches to that terminal instead
   (`AttachConsole`, with the inherited std handles put back so `> file` still works).
   Subcommands print after the prompt returns — a GUI process is not waited on.
 - Tray (`host/src/tray.rs`): hidden **top-level** window, not `HWND_MESSAGE` — message-only
   windows never get `TaskbarCreated`, `WM_SETTINGCHANGE` or `WM_ENDSESSION`, all of which
   it relies on. Menu is built on each click from `status::HostStatus` (server writes,
   tray reads). The PIN rotates after every successful pairing and is never logged.
-- Start at login (`host/src/autostart.rs`): a logon task the host registers itself with
-  `schtasks /Create /XML` (UTF-16 + BOM, or schtasks chokes) — no elevation needed for a
-  task that runs as the creating user. **Task Scheduler's `RestartOnFailure` does not
-  restart a process that crashes or is killed** — it only covers a task that failed to
-  *launch* (verified: killed host, `LastTaskResult 0xFFFFFFFF`, task back to Ready, no
-  restart). So the task runs `relay-host supervise`, a parent that respawns the child on
-  a non-zero exit (5 s; 60 s backoff when it dies within 30 s) and exits with it on 0.
-  Task priority must be set to 4 explicitly; the scheduler's default 7 runs the host
-  below normal. The task runs a copy in `%LOCALAPPDATA%\Relay\bin`, refreshed whenever a
-  build from elsewhere is run while the task exists. One serving host per session is
-  enforced with the `Local\Relay.host` mutex + a message box.
+- The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
+  `relay-host worker` into the **console session as SYSTEM**: duplicate our token,
+  `SetTokenInformation(TokenSessionId)` (needs SE_TCB — only LocalSystem has it),
+  `CreateProcessAsUserW` on `winsta0\default`. Desktop Duplication and `SendInput` only
+  work from a thread bound to the *input* desktop (`OpenInputDesktop` +
+  `SetThreadDesktop`, `host/src/desktop.rs`); a user process may not open `Winlogon`,
+  which is why a dev run gets `E_ACCESSDENIED` at the lock screen — the session then
+  waits (`DesktopNotCapturable`) instead of falling back to ffmpeg, which fails the
+  same way. Threads that own windows (the tray) can never bind. Worker exit 0 = down
+  until the next `WTS_SESSION_LOGON`/`CONSOLE_CONNECT`; non-zero = service runs
+  `restore` in-session and respawns (5 s / 60 s backoff). `Stop-Service` sets the
+  `Global\Relay.quit.<session>` event the worker's tray loop waits on. At the login
+  screen there is no Explorer: `NIM_ADD` fails, the icon arrives on `TaskbarCreated`.
+  SCM's own recovery restarts a crashed *service*; Task Scheduler's
+  `RestartOnFailure` never restarted a crashed process — that is why the logon-task
+  design (2026-09-17) was replaced.
+- State is `%ProgramData%\Relay` (SYSTEM has no meaningful `%LOCALAPPDATA%`): Users
+  RX, `identity.key` SYSTEM/Admins only (`restrict_to_admins` after creation). The
+  installer and the first run as a user migrate the old `%LOCALAPPDATA%\Relay`. So
+  `pin --new` / `paired --forget` need an elevated prompt; the tray does them as SYSTEM.
+  One serving host per session is enforced with the `Local\Relay.host` mutex + a
+  message box (SYSTEM worker and a user dev run share session 1's namespace).
 - Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
   and chosen by `SystemUsesLightTheme`. They are rendered **on the Mac** from the
   picker's glyph: `swift run Relay --render-icons ../host/assets` (done 2026-09-17;
@@ -57,8 +72,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Running it
 
-PC: `host\target\release\relay-host.exe` (tray icon with the PIN, status and Start at login; `pin`,
-`paired`, `autostart`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
+PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray icon with the PIN and status; `pin`,
+`paired`, `service install/uninstall`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier
@@ -86,21 +101,18 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
 
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
-  Code 43. The device node is the switch: the host enables/disables it through the
-  scheduled task `Relay display driver`. The elevated script lives in
-  `%ProgramFiles%\Relay\vdd-device.ps1` (host user read-only — never in a host-writable
-  folder); the host writes its order to `%ProgramData%\Relay\Requests\action.txt` (plus
-  `guard-<pid>.txt` and the physical-monitor heartbeat), and the helper keeps its
-  privileged records and `vdd-device.log` in `%ProgramData%\Relay\State`. Both paths are
-  published in the driver's registry key (`HelperStatePath` = Requests,
-  `HelperPrivateStatePath` = State). There is no `Restart-PnpDevice`; use Disable/Enable.
+  Code 43. The device node is the switch: the host enables/disables it in-process
+  (`host/src/devnode.rs`, CfgMgr32 `CM_Disable_DevNode`/`CM_Enable_DevNode`, needs
+  admin — the SYSTEM worker or an elevated prompt). The physical monitors a session
+  disabled are listed in `%ProgramData%\Relay\physical-locked.txt` so `restore` can
+  re-enable them after a crash. There is no `Restart-PnpDevice`; use Disable/Enable.
 - The driver keeps one monitor whenever enabled (count 0 == 1), so "invisible when idle"
   means the device is **disabled** between sessions. Enabling takes ~2 s.
 - `SetDisplayConfig(SDC_TOPOLOGY_SUPPLIED)` fails with ERROR_GEN_FAILURE (31) for a layout
   Windows has never stored. Attach the monitor normally first, read back its modes with
   `QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS)`, then apply a complete one-path config with
   `SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES`. Never save the virtual-only layout
-  to the database. The snapshot for restore lives in `%LOCALAPPDATA%\Relay`.
+  to the database. The snapshot for restore lives in `%ProgramData%\Relay`.
 - DXGI lists the driver's proxy adapter with the **same name and VRAM as the real GPU**;
   D3DKMT's `IndirectDisplayDevice` flag tells them apart (`gpu.rs`).
 - **Never block inside `AcquireNextFrame`** on the native path. With `ID3D11Multithread`
@@ -118,7 +130,7 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on
-  hotel Wi-Fi. Keys/pairings: `%LOCALAPPDATA%\Relay`,
+  hotel Wi-Fi. Keys/pairings: `%ProgramData%\Relay`,
   `~/Library/Application Support/Relay`.
 
 ## Conventions

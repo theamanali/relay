@@ -1,8 +1,8 @@
 //! Relay host library: virtual display control, capture/encode, wire protocol.
 
-pub mod autostart;
 pub mod crypto;
 mod cursor_overlay;
+pub mod desktop;
 pub mod devnode;
 pub mod discovery;
 pub mod display;
@@ -14,6 +14,7 @@ mod native_nvenc;
 mod nvenc_bindings;
 pub mod protocol;
 pub mod server;
+pub mod service;
 pub mod status;
 pub mod sysinfo;
 pub mod topology;
@@ -65,5 +66,34 @@ pub fn migrate_user_state() {
                 Err(e) => log::warn!("could not copy {}: {e}", from.display()),
             }
         }
+    }
+}
+
+/// Make `path` readable by SYSTEM and administrators only (the identity key
+/// lives in a directory everyone may read). Needs administrator rights;
+/// silently a no-op without them, since then the file was not ours to lock.
+pub fn restrict_to_admins(path: &std::path::Path) {
+    if !devnode::is_admin() {
+        return;
+    }
+    use std::os::windows::process::CommandExt;
+    let result = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "SYSTEM:F",
+            r"BUILTIN\Administrators:F",
+        ])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output();
+    match result {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => log::warn!(
+            "could not restrict {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => log::warn!("could not run icacls for {}: {e}", path.display()),
     }
 }
