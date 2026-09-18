@@ -120,6 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// Set when the host refused a PIN from the picker: the re-dial's PIN
     /// sheet opens with this line instead of the usual explanation.
     private var pinError: String?
+    /// The PIN prompt in front of the user and the connection it answers.
+    /// If that connection ends first (the PC is in another session, or gave
+    /// up waiting) the prompt is closed: a PIN typed into it would go nowhere.
+    private var pinPrompt: (alert: NSAlert, connection: HostConnection)?
+    /// The modal (--host) prompt was closed by the connection, not the user.
+    private var pinPromptEndedByConnection = false
     private var kioskActive = false
     private var screenObserver: Any?
     private var cursorHidden = false
@@ -375,28 +381,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         let shown = SessionText.shortName(ClientState.nicknames()[key] ?? host.name)
         p.status = "Forgetting \(shown)…"
         let myFingerprint = (try? ClientState.identity()).map { fingerprint($0.publicKey.rawRepresentation) } ?? "?"
-        task.run(timeout: 6) { [weak self] confirmed in
+        task.run(timeout: 6) { [weak self] outcome in
             ClientState.forget(host: key)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.unpairTask = nil
                 p.reloadPairing()
-                if confirmed {
+                switch outcome {
+                case .confirmed:
                     p.flash("Forgot \(shown)")
-                } else {
+                case .busy:
                     p.flash("Forgot \(shown) on this MacBook only")
-                    self.explainHostSideForget(host: shown, fingerprint: myFingerprint, on: p)
+                    self.explainHostSideForget(host: shown, because: "is in another session", fingerprint: myFingerprint, on: p)
+                case .unreachable:
+                    p.flash("Forgot \(shown) on this MacBook only")
+                    self.explainHostSideForget(host: shown, because: "couldn’t be reached", fingerprint: myFingerprint, on: p)
                 }
             }
         }
     }
 
-    /// The PC was unreachable, so its half of the pairing is still there;
-    /// give the user the one command that removes it.
-    private func explainHostSideForget(host: String, fingerprint: String, on p: HostPickerWindowController) {
+    /// The PC did not take the UNPAIR (`because` says why), so its half of
+    /// the pairing is still there; give the user the one command that
+    /// removes it.
+    private func explainHostSideForget(host: String, because: String, fingerprint: String, on p: HostPickerWindowController) {
         guard let window = p.window else { return }
         let alert = NSAlert()
-        alert.messageText = "“\(host)” couldn’t be reached."
+        alert.messageText = "“\(host)” \(because)."
         alert.informativeText = "Your MacBook has forgotten this PC, but the PC still remembers your MacBook. To remove the pairing there, run this on the PC:\n\nrelay-host paired --forget \(fingerprint)"
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
@@ -539,9 +550,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             alert.accessoryView = stack
             alert.window.initialFirstResponder = field
 
+            self.pinPrompt = (alert, c)
             if !self.kioskActive, let pickerWindow = self.picker?.window, pickerWindow.isVisible {
                 // Connecting from the list: ask as a sheet on it.
                 alert.beginSheetModal(for: pickerWindow) { response in
+                    if self.pinPrompt?.alert === alert { self.pinPrompt = nil }
                     guard self.connection === c else { return completion(nil) }
                     guard response == .alertFirstButtonReturn else { return completion(nil) }
                     completion(field.code)
@@ -556,7 +569,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             NSApp.presentationOptions = []
             self.setCursorHidden(false)
             NSApp.activate(ignoringOtherApps: true)
+            self.pinPromptEndedByConnection = false
             let response = alert.runModal()
+            let endedByConnection = self.pinPromptEndedByConnection
+            if self.pinPrompt?.alert === alert { self.pinPrompt = nil }
 
             self.window.level = kioskLevel
             NSApp.presentationOptions = [.hideDock, .hideMenuBar]
@@ -566,9 +582,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             guard response == .alertFirstButtonReturn else {
                 // Cancel means "let me out": the connection ends with
                 // "pairing cancelled", which returns to the picker, or quits
-                // in --host mode where there is no list to go back to.
+                // in --host mode where there is no list to go back to. A
+                // prompt the connection closed under the user is neither;
+                // --host mode re-dials and asks again.
                 completion(nil)
-                if self.options.fixedHost != nil { NSApp.terminate(nil) }
+                if self.options.fixedHost != nil, !endedByConnection { NSApp.terminate(nil) }
                 return
             }
             completion(field.code)
@@ -611,9 +629,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         latencyStats.record(timing)
     }
 
+    /// Close the PIN prompt that belongs to `c`, whose connection is gone:
+    /// the sheet's handler sees Cancel and the answer is dropped as stale.
+    private func dismissPINPrompt(for c: HostConnection) {
+        guard let prompt = pinPrompt, prompt.connection === c else { return }
+        pinPrompt = nil
+        let sheet = prompt.alert.window
+        if let parent = sheet.sheetParent {
+            parent.endSheet(sheet, returnCode: .cancel)
+        } else if NSApp.modalWindow === sheet {
+            pinPromptEndedByConnection = true
+            NSApp.abortModal()
+        }
+    }
+
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         DispatchQueue.main.async {
             guard self.connection === c else { return }
+            self.dismissPINPrompt(for: c)
             self.renderer.reset()
             self.view.releaseAllInput()
             self.view.status = "Disconnected: \(reason)"
@@ -626,7 +659,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 if c.pinRejected, self.options.pin == nil, let host = self.currentHost {
                     // The host closes after a refusal, so trying again is a new
                     // connection; keep the sheet's flow, not the footer's.
-                    self.pinError = "That PIN wasn’t correct. Check the PIN shown by Relay on the PC and try again."
+                    self.pinError = c.pairRetryAfter.map {
+                        "Too many wrong PINs. Try again in \(SessionText.retryWait(seconds: $0))."
+                    } ?? "That PIN wasn’t correct. Check the PIN shown by Relay on the PC and try again."
                     self.picker(p, didChoose: host)
                     return
                 }

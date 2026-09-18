@@ -68,7 +68,7 @@ small encrypted protocol between them.
 | milestone | state |
 |-----------|-------|
 | 0. Toolchain, repo, protocol spec | done |
-| 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. A second client during a session is answered at once with an authenticated STREAM_STOP(BUSY) instead of waiting in the backlog, and PAIR_RESULT tells a wrong PIN from the rate limit (with the wait) — both verified against the installed service with `probe` (2026-09-18); the client half is pending. parsec path untested |
+| 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. A second client during a session is answered at once with an authenticated STREAM_STOP(BUSY) instead of waiting in the backlog, and PAIR_RESULT tells a wrong PIN from the rate limit (with the wait) — both verified against the installed service with `probe` (2026-09-18); the client shows "The PC is in another session" / "Too many wrong PINs. Try again in N min." — verified on the Mac against `client/Tools/fakehost.swift`, end-to-end run against the PC still to do. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons. Bonjour goodbye handling verified on the hardware (2026-09-17): quitting the host from its tray removes the row within ~1 s with no intermediate Available state; restarting it returns the row to Paired |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
@@ -187,7 +187,9 @@ own name moves to the hover); the ⊗ on a paired PC (or Delete with it
 selected) **forgets** it: the Mac tells the PC to
 drop the pairing too, then removes it locally either way — if the PC was
 unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
-to run on it.
+to run on it. A PC that is already in a session with another Mac says so at once
+("The PC is in another session") rather than keeping you waiting; after too many
+wrong PINs the sheet says how long the PC will refuse them.
 
 Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
 `--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`

@@ -14,11 +14,28 @@ final class SessionTextTests: XCTestCase {
             "PC identity changed — forget it, pair again"
         )
         XCTAssertEqual(SessionText.ended("something new", streamed: false), "Couldn't connect: something new")
+        XCTAssertEqual(SessionText.ended("the PC is in another session", streamed: false), "The PC is in another session")
+        XCTAssertEqual(SessionText.ended("host stopped the stream (reason 6)", streamed: false), "The PC is in another session")
+        XCTAssertEqual(SessionText.ended("the PC didn't answer", streamed: false), "The PC didn't answer")
+        XCTAssertEqual(
+            SessionText.ended("too many wrong PINs — the host accepts none for 599 s", streamed: false),
+            "Too many wrong PINs — try again later"
+        )
+    }
+
+    func testRetryWaitIsWholeMinutesRoundedUp() {
+        XCTAssertEqual(SessionText.retryWait(seconds: 599), "10 min")
+        XCTAssertEqual(SessionText.retryWait(seconds: 600), "10 min")
+        XCTAssertEqual(SessionText.retryWait(seconds: 61), "2 min")
+        XCTAssertEqual(SessionText.retryWait(seconds: 1), "1 min")
+        XCTAssertEqual(SessionText.retryWait(seconds: 0), "1 min")
     }
 
     func testEveryMessageFitsTheFooter() {
         let reasons = ["the host rejected the PIN", "pairing cancelled", "handshake failed: host identity changed",
-                       "reason 4", "reason 3", "reason 1", "reason 2", "reason 0", "connection closed",
+                       "too many wrong PINs — the host accepts none for 599 s", "the PC is in another session",
+                       "the PC didn't answer",
+                       "reason 4", "reason 3", "reason 1", "reason 2", "reason 0", "reason 6", "connection closed",
                        "read error: x", "connection failed: x", "handshake failed: x", "protocol error: x",
                        String(repeating: "z", count: 200)]
         for reason in reasons {

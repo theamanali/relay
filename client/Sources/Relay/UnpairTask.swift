@@ -1,14 +1,24 @@
 // One-shot connection that asks a host to forget this Mac. Wraps a
 // HostConnection in unpair mode and reduces its delegate callbacks to a single
-// completion: whether the host confirmed. The local pairing is the caller's to
-// remove, and it should go regardless of the outcome.
+// completion: whether the host confirmed, and if not, why. The local pairing
+// is the caller's to remove, and it should go regardless of the outcome.
 
 import CoreMedia
 import Foundation
 
 final class UnpairTask: HostConnectionDelegate {
+    enum Outcome {
+        /// The host answered UNPAIR: the pairing is gone on both sides.
+        case confirmed
+        /// The host is in a session with another client and read nothing
+        /// of ours; its half of the pairing is still there.
+        case busy
+        /// No usable answer before the timeout.
+        case unreachable
+    }
+
     private let connection: HostConnection
-    private var completion: ((Bool) -> Void)?
+    private var completion: ((Outcome) -> Void)?
     private var timeout: DispatchWorkItem?
 
     init(options: HostConnection.Options) throws {
@@ -19,26 +29,26 @@ final class UnpairTask: HostConnectionDelegate {
         connection.delegate = self
     }
 
-    /// `completion` runs once, on an arbitrary queue, with `true` when the host
-    /// answered UNPAIR. An unreachable host counts as unconfirmed after `timeout`.
-    func run(timeout seconds: Double, completion: @escaping (Bool) -> Void) {
+    /// `completion` runs once, on an arbitrary queue. A host that has not
+    /// answered by `timeout` counts as unreachable.
+    func run(timeout seconds: Double, completion: @escaping (Outcome) -> Void) {
         self.completion = completion
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.connection.stop()
-            self.deliver(false)
+            self.deliver(.unreachable)
         }
         timeout = work
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
         connection.start()
     }
 
-    private func deliver(_ confirmed: Bool) {
+    private func deliver(_ outcome: Outcome) {
         timeout?.cancel()
         timeout = nil
         guard let completion else { return }
         self.completion = nil
-        completion(confirmed)
+        completion(outcome)
     }
 
     // MARK: HostConnectionDelegate
@@ -56,6 +66,6 @@ final class UnpairTask: HostConnectionDelegate {
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {}
 
     func connectionDidEnd(_ c: HostConnection, reason: String) {
-        deliver(c.hostConfirmedUnpair)
+        deliver(c.hostConfirmedUnpair ? .confirmed : c.hostBusy ? .busy : .unreachable)
     }
 }

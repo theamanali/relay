@@ -13,6 +13,7 @@ piece of ceremony and it is intentional.
 | `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
+| `client/Tools/fakehost.swift` | fake host in Swift (CryptoKit, real handshake); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc`, advertise with `dns-sd -R`) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template, (no helper script any more: the service does the privileged work) | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
@@ -35,11 +36,13 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Still to do: DPI, installers/signing. Open measurement items live in
   `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers,
   `--scale 0.75`, mode changes).
-- Protocol additions (2026-09-18, host + spec done, verified with `probe` against the
-  installed service; **client half pending**): sessions run on their own scoped thread
-  so `server.rs` answers a second connection at once — full handshake, SERVER_HELLO,
-  `STREAM_STOP` reason 6 `BUSY`, never preempting the running session; `PAIR_RESULT`
-  is `u8 result` (1 paired, 0 wrong PIN, 2 rate-limited + `u16 seconds` to wait).
+- Protocol additions (2026-09-18, both halves done): sessions run on their own scoped
+  thread so `server.rs` answers a second connection at once — full handshake,
+  SERVER_HELLO, `STREAM_STOP` reason 6 `BUSY`, never preempting the running session;
+  `PAIR_RESULT` is `u8 result` (1 paired, 0 wrong PIN, 2 rate-limited + `u16 seconds`
+  to wait). Host verified with `probe` against the installed service; client verified
+  on the Mac against `client/Tools/fakehost.swift` (every picker path plus `--host`
+  re-dialing at 5 s), **not yet end-to-end against the PC**.
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
   `%ProgramData%\Relay\host.log`; from a terminal it attaches to that terminal instead
   (`AttachConsole`, with the inherited std handles put back so `> file` still works).
@@ -85,8 +88,12 @@ of the current screen), a 120/60 Hz segmented control and an Advanced popover (m
 mapping, send input, latency HUD — `SessionPrefs`), all remembered in UserDefaults and
 overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
 then it moves to Paired without streaming); a paired host connects from within the picker
-(footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. `--host` skips the picker and re-dials on
-drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
+(footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. A PC already in a session with another Mac
+answers Connect, Pair and forget at once: the footer says "The PC is in another session"
+(forget then shows the `paired --forget` alert with that wording) and nothing is retried.
+A rate-limited PIN reopens the sheet with "Too many wrong PINs. Try again in N min."
+(minutes rounded up); a wrong one keeps "That PIN wasn't correct…". `--host` skips the picker and re-dials on
+drops (every 5 s instead of 1 s after a busy answer). Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
 `--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
 `--host` mode). Each row has a rename (pencil: a popover with the nickname, Return saves, "Use PC's name" clears) and, when paired, a forget (⊗) button; forget removes
 the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is the
@@ -145,6 +152,12 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
   `makeFirstResponder` moving focus away. The rename popover's Save is on
   `insertNewline` in the delegate for that reason; a popover that closes itself the
   instant it opens was this.
+- **The PIN sheet belongs to one connection attempt.** STREAM_STOP(BUSY) arrives with
+  the sheet up (the host sends it right after SERVER_HELLO, before reading PAIR), and the
+  host's 120 s PAIR_TIMEOUT closes the socket under a sheet left open; a PIN typed into
+  either went nowhere. `AppDelegate.dismissPINPrompt` closes the sheet from
+  `connectionDidEnd` (`endSheet` in the picker, `abortModal` in `--host` mode with a
+  flag so that abort is not read as the user's Cancel, which quits there).
 - **An unsolicited STREAM_STOP must not be followed by an immediate close.** The
   client's next message (PAIR / CLIENT_HELLO) is already in flight; if it lands on a
   closed socket Windows answers RST, and an RST discards the stop from the client's

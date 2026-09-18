@@ -73,6 +73,12 @@ final class HostConnection {
     private(set) var pairingCompleted = false
     /// The host answered the PIN with a refusal (wrong, or too many tries).
     private(set) var pinRejected = false
+    /// With `pinRejected`: the host is not checking PINs at all for this many
+    /// seconds (too many wrong ones recently), so retyping is pointless.
+    private(set) var pairRetryAfter: Int?
+    /// The host answered with STREAM_STOP(BUSY): it is in a session with
+    /// another client, and nothing we sent after the handshake was read.
+    private(set) var hostBusy = false
     private var stopped = true
     private var attempt: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
@@ -152,6 +158,7 @@ final class HostConnection {
         send = nil
         receive = nil
         pairing = false
+        hostBusy = false
         nextFrameSequence = 0
         reader.reset()
         receiving = false
@@ -209,7 +216,9 @@ final class HostConnection {
         receiving = false
         delegate?.connectionDidEnd(self, reason: reason)
         guard options.reconnects else { return }
-        // Fixed-host mode: the host is probably just restarting, re-dial.
+        // Fixed-host mode: the host is probably just restarting, re-dial. A
+        // busy host answers every attempt with a full handshake, so those
+        // are spaced out; it may be our own session still being torn down.
         let finishedAttempt = attempt
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.stopped, self.attempt == finishedAttempt,
@@ -217,7 +226,7 @@ final class HostConnection {
             self.connect(to: self.options.endpoint, via: self.options.interface)
         }
         reconnectWorkItem = work
-        queue.asyncAfter(deadline: .now() + 1, execute: work)
+        queue.asyncAfter(deadline: .now() + (hostBusy ? Self.busyRetryDelay : 1), execute: work)
     }
 
     private func status(_ s: String) {
@@ -227,16 +236,19 @@ final class HostConnection {
     // MARK: handshake + pairing
 
     /// How long after the socket connects the host has to answer message 1.
-    /// The host serves one session at a time: a second connection sits in its
-    /// listen backlog, fully connected, until the current one ends.
+    /// A host in another session answers at once (handshake, then
+    /// STREAM_STOP reason 6), so silence means it is not really there: a
+    /// stale Bonjour record, a firewall, a service that is down.
     static let handshakeTimeout: TimeInterval = 10
+    /// Re-dial interval in --host mode after a busy answer.
+    static let busyRetryDelay: TimeInterval = 5
 
     private func startHandshake(_ c: NWConnection, attempt: UInt64) {
         guard isCurrent(c, attempt: attempt) else { return }
         let pending = Handshake.Pending(identity: identity)
         queue.asyncAfter(deadline: .now() + Self.handshakeTimeout) { [weak self] in
             guard let self, self.isCurrent(c, attempt: attempt), self.send == nil else { return }
-            self.finish("the PC didn't answer — it may still be in another session", from: c, attempt: attempt)
+            self.finish("the PC didn't answer", from: c, attempt: attempt)
         }
         var frame = Data()
         frame.appendBE32(UInt32(pending.message1.count))
@@ -405,7 +417,8 @@ final class HostConnection {
         case .pairResult:
             guard pairing else { return }
             pairing = false
-            if payload.first == 1 {
+            switch Proto.PairResult(payload) {
+            case .paired:
                 ClientState.remember(host: hostKey, name: serviceName)
                 status("Paired with \(serviceName)")
                 if options.pairOnly {
@@ -414,7 +427,11 @@ final class HostConnection {
                 } else {
                     sendClientHello()
                 }
-            } else {
+            case .rateLimited(let seconds):
+                pinRejected = true
+                pairRetryAfter = seconds
+                finish("too many wrong PINs — the host accepts none for \(seconds) s")
+            case .wrongPIN, .rejected:
                 pinRejected = true
                 finish("the host rejected the PIN")
             }
@@ -453,6 +470,12 @@ final class HostConnection {
             case 5:
                 hostConfirmedUnpair = true
                 finish("the host forgot this MacBook")
+            case 6:
+                // Sent right after SERVER_HELLO, before anything of ours is
+                // read, so it can arrive with the PIN prompt up or with
+                // CLIENT_HELLO already on its way; the host drains those.
+                hostBusy = true
+                finish("the PC is in another session")
             default: finish("host stopped the stream (reason \(reason))")
             }
 

@@ -28,8 +28,10 @@ enum SessionText {
         let r = reason.lowercased()
         func has(_ needle: String) -> Bool { r.contains(needle) }
 
+        if has("too many wrong pins") { return "Too many wrong PINs — try again later" }
         if has("rejected the pin") { return "Wrong PIN — try again" }
         if has("pairing cancelled") { return "Pairing cancelled" }
+        if has("another session") || has("reason 6") { return "The PC is in another session" }
         if has("host identity changed") { return "PC identity changed — forget it, pair again" }
         if has("does not know this macbook") || has("reason 4") { return "PC doesn't know this MacBook — pair again" }
         if has("speaks protocol") || has("reason 3") { return "The PC runs a different Relay version" }
@@ -38,7 +40,7 @@ enum SessionText {
         if has("reason 0") || has("host closed the connection") || has("connection closed") {
             return streamed ? "The PC ended the session" : "The PC closed the connection"
         }
-        if has("no output") || has("waiting") { return "The PC didn't answer" }
+        if has("no output") || has("waiting") || has("didn't answer") { return "The PC didn't answer" }
         if has("connection failed") || has("read error") || has("send failed") {
             return streamed ? "Lost the connection to the PC" : "Couldn't reach the PC"
         }
@@ -47,6 +49,12 @@ enum SessionText {
         }
         if has("protocol error") || has("malformed") { return "The PC sent something unexpected" }
         return fit((streamed ? "Disconnected: " : "Couldn't connect: ") + reason)
+    }
+
+    /// The pairing lock-out as a wait a person would plan around: whole
+    /// minutes, rounded up, never "0 min".
+    static func retryWait(seconds: Int) -> String {
+        "\(max(1, (seconds + 59) / 60)) min"
     }
 
     /// Whether a connection status deserves to replace the footer's

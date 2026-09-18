@@ -13,3 +13,5 @@ Thumbs.db
 .idea/
 # Local artifacts
 /tools/downloads/
+/client/fakehost.key
+/client/fakehost

@@ -76,6 +76,27 @@ enum Proto {
         }
     }
 
+    /// The host's answer to PAIR. Anything it does not spell out (a short
+    /// payload, a value from a newer host) is a refusal without a wait, so
+    /// the user is told the PIN was refused rather than shown a stream that
+    /// never starts.
+    enum PairResult: Equatable {
+        case paired
+        case wrongPIN
+        /// Too many failures recently; no PIN is checked for this many seconds.
+        case rateLimited(seconds: Int)
+        case rejected
+
+        init(_ p: Data) {
+            switch p.first {
+            case 1: self = .paired
+            case 0: self = .wrongPIN
+            case 2 where p.count >= 3: self = .rateLimited(seconds: Int(p.be16(at: 1)))
+            default: self = .rejected
+            }
+        }
+    }
+
     struct FrameTiming {
         static let unknownMicros = UInt32.max
 
