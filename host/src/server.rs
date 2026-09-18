@@ -70,6 +70,8 @@ pub struct ServerConfig {
     /// The pairing PIN and the session in progress, shared with the tray.
     pub status: Arc<Mutex<HostStatus>>,
     pub pair_limiter: Arc<Mutex<PairLimiter>>,
+    /// Where `run` parks the mDNS record so a quit can withdraw it.
+    pub advertisement: crate::discovery::AdSlot,
 }
 
 pub fn run(cfg: ServerConfig) -> Result<()> {
@@ -87,8 +89,9 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
     );
     let ad =
         crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
+    *cfg.advertisement.lock().unwrap() = Some(ad);
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
-    let _readvertiser = readvertise_on_address_change(ad, facts, &cfg);
+    let _readvertiser = readvertise_on_address_change(facts, &cfg);
 
     loop {
         let (stream, peer) = match listener.accept() {
@@ -115,34 +118,34 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
 /// once registered, so re-register when they differ. Polling every few
 /// seconds is plenty and avoids the IP Helper notification machinery.
 fn readvertise_on_address_change(
-    ad: crate::discovery::Advertisement,
     mut facts: crate::sysinfo::HostFacts,
     cfg: &ServerConfig,
 ) -> thread::JoinHandle<()> {
     let name = cfg.name.clone();
     let port = cfg.port;
     let public_key = *cfg.identity.public.as_bytes();
+    let slot = Arc::clone(&cfg.advertisement);
     thread::Builder::new()
         .name("readvertise".into())
-        .spawn(move || {
-            let mut ad = Some(ad);
-            loop {
-                thread::sleep(Duration::from_secs(5));
-                let ips = crate::sysinfo::ipv4_addresses();
-                if ips == facts.ips {
-                    continue;
-                }
-                log::info!(
-                    "addresses changed {:?} -> {:?}; re-advertising",
-                    facts.ips,
-                    ips
-                );
-                facts.ips = ips;
-                drop(ad.take()); // unregisters the old record first
-                match crate::discovery::advertise(&name, port, &public_key, &facts) {
-                    Ok(new_ad) => ad = Some(new_ad),
-                    Err(e) => log::warn!("re-advertising failed: {e:#}"),
-                }
+        .spawn(move || loop {
+            thread::sleep(Duration::from_secs(5));
+            let ips = crate::sysinfo::ipv4_addresses();
+            if ips == facts.ips {
+                continue;
+            }
+            log::info!(
+                "addresses changed {:?} -> {:?}; re-advertising",
+                facts.ips,
+                ips
+            );
+            facts.ips = ips;
+            // Hold the slot across the swap so a quit in between cannot
+            // miss the new record.
+            let mut ad = slot.lock().unwrap();
+            drop(ad.take()); // unregisters the old record first
+            match crate::discovery::advertise(&name, port, &public_key, &facts) {
+                Ok(new_ad) => *ad = Some(new_ad),
+                Err(e) => log::warn!("re-advertising failed: {e:#}"),
             }
         })
         .expect("spawn readvertise thread")

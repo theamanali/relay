@@ -6,7 +6,9 @@
 
 #![windows_subsystem = "windows"]
 
-use relay_host::{crypto, display, driver, encoder, gpu, protocol, server, status, topology, tray};
+use relay_host::{
+    crypto, discovery, display, driver, encoder, gpu, protocol, server, status, topology, tray,
+};
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -307,20 +309,29 @@ fn select_gpu(want: Option<&str>) -> Result<GpuInfo> {
     Ok(chosen)
 }
 
-/// Open the driver, undo whatever an earlier session left behind (physical
-/// displays off, virtual device enabled), and make sure Ctrl-C does the same.
+/// Open the driver and undo whatever an earlier session left behind (physical
+/// displays off, virtual device enabled).
 fn open_driver(kind: DriverKind) -> Result<Arc<dyn VirtualDisplay>> {
     let drv = driver::open(kind)?;
     log::info!("virtual display driver: {}", drv.name());
     put_displays_back(&drv);
-    let for_handler = Arc::clone(&drv);
-    ctrlc::set_handler(move || {
-        log::info!("shutting down");
-        put_displays_back(&for_handler);
-        std::process::exit(0);
-    })
-    .context("installing Ctrl-C handler")?;
     Ok(drv)
+}
+
+/// The one way out for Ctrl-C, tray Quit and logoff: displays back, Bonjour
+/// goodbye sent (so the Mac's list drops us now, not at the record's TTL),
+/// then exit. `process::exit` runs no destructors, hence the explicit steps.
+fn shut_down(
+    why: &str,
+    driver: Option<&Arc<dyn VirtualDisplay>>,
+    advertisement: &discovery::AdSlot,
+) -> ! {
+    log::info!("{why}");
+    if let Some(drv) = driver {
+        put_displays_back(drv);
+    }
+    discovery::withdraw(advertisement);
+    std::process::exit(0);
 }
 
 /// Restore the saved display layout (if a session left one) and remove the
@@ -460,6 +471,13 @@ fn serve(args: ServeArgs) -> Result<()> {
     } else {
         Some(open_driver(args.driver)?)
     };
+    let advertisement: discovery::AdSlot = Arc::new(Mutex::new(None));
+    {
+        let driver = driver.clone();
+        let advertisement = Arc::clone(&advertisement);
+        ctrlc::set_handler(move || shut_down("shutting down", driver.as_ref(), &advertisement))
+            .context("installing Ctrl-C handler")?;
+    }
 
     let identity = Arc::new(crypto::Identity::load_or_create(
         &state_dir()?.join("identity.key"),
@@ -503,6 +521,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         paired: Arc::clone(&paired),
         status: Arc::clone(&status),
         pair_limiter: Arc::new(Mutex::new(crypto::PairLimiter::new())),
+        advertisement: Arc::clone(&advertisement),
     };
     // The accept loop never returns on its own; the tray's message loop owns
     // the main thread and Quit ends the process the way Ctrl-C does.
@@ -516,11 +535,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         })
         .context("starting the server thread")?;
     tray::run(status, paired, move || {
-        log::info!("quitting");
-        if let Some(drv) = &driver {
-            put_displays_back(drv);
-        }
-        std::process::exit(0);
+        shut_down("quitting", driver.as_ref(), &advertisement)
     })
 }
 

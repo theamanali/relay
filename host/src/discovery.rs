@@ -2,6 +2,7 @@
 //! IPv6 link-local addresses instantly and Bonjour resolves over those.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
@@ -12,6 +13,19 @@ use crate::sysinfo::HostFacts;
 pub struct Advertisement {
     daemon: ServiceDaemon,
     fullname: String,
+}
+
+/// The live advertisement, shared between the thread that re-registers it on
+/// an address change and the quit paths (tray Quit, Ctrl-C, logoff), which
+/// all end in `process::exit` and so never run `Drop` on their own. Taking it
+/// out of the slot and dropping it sends the goodbye that makes the Mac's
+/// list forget the host at once instead of after the record's TTL.
+pub type AdSlot = Arc<Mutex<Option<Advertisement>>>;
+
+/// Withdraw the advertisement now (goodbye packet, responder stopped).
+pub fn withdraw(slot: &AdSlot) {
+    let ad = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+    drop(ad);
 }
 
 pub fn advertise(
@@ -83,7 +97,14 @@ mod tests {
             0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x0f, 0x1e, 0x2d, 0x3c,
             0x4b, 0x5a, 0x69, 0x78,
         ];
-        let info = service_info("Test PC", "test-pc.local.", 8468, &key, &HostFacts::default()).unwrap();
+        let info = service_info(
+            "Test PC",
+            "test-pc.local.",
+            8468,
+            &key,
+            &HostFacts::default(),
+        )
+        .unwrap();
         assert_eq!(info.get_property_val_str("v").unwrap(), VERSION.to_string());
         let pk = info.get_property_val_str("pk").unwrap();
         assert_eq!(pk.len(), 64);
@@ -105,7 +126,13 @@ mod tests {
         let info = service_info("Test PC", "test-pc.local.", 8468, &[0u8; 32], &facts).unwrap();
         assert_eq!(info.get_property_val_str("ram").unwrap(), "64");
         assert!(info.get_property_val_str("ramtype").is_none());
-        assert_eq!(info.get_property_val_str("ip").unwrap(), "192.168.1.5,169.254.10.20");
-        assert_eq!(info.get_property_val_str("gpu").unwrap().len(), 255 - "gpu=".len());
+        assert_eq!(
+            info.get_property_val_str("ip").unwrap(),
+            "192.168.1.5,169.254.10.20"
+        );
+        assert_eq!(
+            info.get_property_val_str("gpu").unwrap().len(),
+            255 - "gpu=".len()
+        );
     }
 }
