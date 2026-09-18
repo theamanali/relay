@@ -90,6 +90,9 @@ fn main() -> Result<()> {
             println!("host forgot this probe");
             return Ok(());
         }
+        if ty == msg::STREAM_STOP {
+            bail!("host stopped: {}", stop_name(p.first().copied()));
+        }
         bail!("expected STREAM_STOP(UNPAIRED), got 0x{ty:02x} {p:?}");
     }
     if !hs.paired || args.pin.is_some() {
@@ -193,7 +196,7 @@ fn main() -> Result<()> {
                 }
             }
             msg::STREAM_STOP => {
-                println!("STREAM_STOP reason {}", p.first().copied().unwrap_or(255));
+                println!("STREAM_STOP: {}", stop_name(p.first().copied()));
                 break;
             }
             other => println!("message 0x{other:02x} ({} bytes)", p.len()),
@@ -223,4 +226,19 @@ fn main() -> Result<()> {
         println!("wrote {}", args.out.unwrap().display());
     }
     Ok(())
+}
+
+fn stop_name(reason: Option<u8>) -> String {
+    use protocol::stop_reason as r;
+    match reason {
+        Some(r::HOST_SHUTDOWN) => "host shutting down".into(),
+        Some(r::ENCODER_FAILED) => "encoder failed".into(),
+        Some(r::DISPLAY_LOST) => "display lost".into(),
+        Some(r::BAD_VERSION) => "bad protocol version".into(),
+        Some(r::NOT_PAIRED) => "not paired".into(),
+        Some(r::UNPAIRED) => "unpaired".into(),
+        Some(r::BUSY) => "busy with another client".into(),
+        Some(other) => format!("reason {other}"),
+        None => "no reason given".into(),
+    }
 }

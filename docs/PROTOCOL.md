@@ -97,13 +97,15 @@ the client sends PAIR before its CLIENT_HELLO:
 | type | name        | direction | payload |
 |------|-------------|-----------|---------|
 | 0xA0 | PAIR        | client -> host | `HMAC-SHA256(k_pair, "pin:" || PIN digits)` (32 bytes) |
-| 0xA1 | PAIR_RESULT | host -> client | `u8 ok` (1 = paired, 0 = rejected; the host then closes) |
+| 0xA1 | PAIR_RESULT | host -> client | `u8 result`: 1 = paired, 0 = wrong PIN, 2 = rate-limited, followed by `u16 seconds` until pairing is accepted again. On 0 and 2 the host then closes. |
 | 0xA2 | UNPAIR      | client -> host | empty. Sent instead of CLIENT_HELLO: the host forgets `S_c`, answers STREAM_STOP reason 5 (`UNPAIRED`) and closes. |
 
-The host rate-limits failures (5 per 10 minutes, then refuses all pairing) and
-accepts a PIN from an already-paired client too (a client that lost its copy of
-the host key). An unpaired client that sends anything but PAIR gets STREAM_STOP
-with reason 4 (`NOT_PAIRED`).
+The host rate-limits failures (5 per 10 minutes, then refuses all pairing with
+result 2 and the remaining wait, checked before the proof so a locked-out
+guesser learns nothing about the PIN) and accepts a PIN from an already-paired
+client too (a client that lost its copy of the host key). A client that only
+tests `result == 1` keeps working. An unpaired client that sends anything but
+PAIR gets STREAM_STOP with reason 4 (`NOT_PAIRED`).
 
 **Forgetting.** A client that drops a pairing sends UNPAIR as its first
 encrypted message so both sides forget each other in one step; the host
@@ -159,6 +161,13 @@ client                                   host
 The host removes the virtual display when the connection closes for any reason.
 If the client stops answering PINGs for 5 s the host closes the connection.
 
+**Busy.** The host serves one session at a time. A client that connects while
+one is running is not left waiting in the listen backlog: the host completes
+the handshake (so a paired client can trust the answer), sends SERVER_HELLO,
+then STREAM_STOP with reason 6 (`BUSY`) and closes, all before the client's
+PAIR or CLIENT_HELLO. The running session is never preempted; the client
+should show "in another session" rather than retry in a loop.
+
 ## Host → client
 
 | type | name           | payload |
@@ -168,7 +177,7 @@ If the client stops answering PINGs for 5 s the host closes the connection.
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
 | 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
-| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request) |
+| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request, 6 = busy with another client) |
 | 0x07 | PING           | `u64 host_time_us` |
 | 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
 

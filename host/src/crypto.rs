@@ -45,7 +45,7 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::protocol::{self, msg, MAX_PAYLOAD};
+use crate::protocol::{self, msg, pair_result, MAX_PAYLOAD};
 
 const MAGIC: &[u8; 4] = b"TDH2";
 const HANDSHAKE_VERSION: u16 = 2;
@@ -420,6 +420,16 @@ impl PairLimiter {
     pub fn record_failure(&mut self) {
         self.failures.push(Instant::now());
     }
+
+    /// How long until `allowed` is true again (zero when it already is).
+    pub fn retry_after(&self) -> Duration {
+        if self.failures.len() < PAIR_FAILS_ALLOWED {
+            return Duration::ZERO;
+        }
+        // The window reopens once enough of the oldest failures have aged out.
+        let oldest = self.failures[self.failures.len() - PAIR_FAILS_ALLOWED];
+        PAIR_FAIL_WINDOW.saturating_sub(oldest.elapsed())
+    }
 }
 
 impl Default for PairLimiter {
@@ -541,11 +551,21 @@ pub fn pair_as_client(
 ) -> Result<()> {
     writer.send(msg::PAIR, 0, &pin_proof(&keys.pair, pin))?;
     let (ty, _, payload) = reader.recv().context("waiting for the pairing result")?;
+    if ty == msg::STREAM_STOP && payload.first() == Some(&protocol::stop_reason::BUSY) {
+        bail!("the host is busy with another client");
+    }
     if ty != msg::PAIR_RESULT {
         bail!("expected PAIR_RESULT, got 0x{ty:02x}");
     }
     match payload.first() {
-        Some(1) => Ok(()),
+        Some(&pair_result::PAIRED) => Ok(()),
+        Some(&pair_result::RATE_LIMITED) => {
+            let secs = payload
+                .get(1..3)
+                .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                .unwrap_or(0);
+            bail!("the host is refusing PINs after too many failures; try again in {secs} s")
+        }
         _ => bail!("the host rejected the PIN"),
     }
 }
@@ -679,6 +699,16 @@ mod tests {
             l.record_failure();
         }
         assert!(!l.allowed());
+        let wait = l.retry_after();
+        assert!(wait > Duration::ZERO && wait <= PAIR_FAIL_WINDOW);
+    }
+
+    #[test]
+    fn limiter_retry_after_is_zero_while_allowed() {
+        let mut l = PairLimiter::new();
+        assert_eq!(l.retry_after(), Duration::ZERO);
+        l.record_failure();
+        assert_eq!(l.retry_after(), Duration::ZERO);
     }
 }
 

@@ -95,6 +95,16 @@ pub mod stop_reason {
     pub const BAD_VERSION: u8 = 3;
     pub const NOT_PAIRED: u8 = 4;
     pub const UNPAIRED: u8 = 5;
+    /// Another client is being served; sent right after SERVER_HELLO.
+    pub const BUSY: u8 = 6;
+}
+
+/// PAIR_RESULT payload: `u8 result`, followed by `u16 seconds` until pairing
+/// is accepted again when the result is `RATE_LIMITED`.
+pub mod pair_result {
+    pub const WRONG_PIN: u8 = 0;
+    pub const PAIRED: u8 = 1;
+    pub const RATE_LIMITED: u8 = 2;
 }
 
 #[derive(Debug, Clone)]

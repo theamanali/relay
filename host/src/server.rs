@@ -19,7 +19,8 @@ use crate::encoder::{Encoder, EncoderConfig, Quality};
 use crate::gpu::GpuInfo;
 use crate::input::Injector;
 use crate::protocol::{
-    self, msg, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME, UNKNOWN_MICROS,
+    self, msg, pair_result, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME,
+    UNKNOWN_MICROS,
 };
 use crate::status::{HostStatus, SessionInfo};
 use crate::topology;
@@ -96,23 +97,77 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
     let _readvertiser = readvertise_on_address_change(facts, &cfg);
 
-    loop {
-        let (stream, peer) = match listener.accept() {
-            Ok(x) => x,
-            Err(e) => {
-                log::warn!("accept failed: {e}");
+    // One session at a time, on its own thread, so the accept loop stays free
+    // to answer whoever connects meanwhile: a connection left in the backlog
+    // would be handshaken only after the session ends, long after that client
+    // gave up, and it could not tell "busy" from "not there".
+    let cfg = &cfg;
+    thread::scope(|s| -> Result<()> {
+        let mut session: Option<thread::ScopedJoinHandle<'_, ()>> = None;
+        loop {
+            let (stream, peer) = match listener.accept() {
+                Ok(x) => x,
+                Err(e) => {
+                    log::warn!("accept failed: {e}");
+                    continue;
+                }
+            };
+            if session.as_ref().is_some_and(|h| !h.is_finished()) {
+                log::info!("client connected from {peer} during a session: answering busy");
+                let spawned = thread::Builder::new()
+                    .name(format!("busy-{peer}"))
+                    .spawn_scoped(s, move || {
+                        if let Err(e) = refuse_busy(cfg, stream) {
+                            log::debug!("busy reply to {peer} not delivered: {e:#}");
+                        }
+                    });
+                if let Err(e) = spawned {
+                    log::warn!("could not answer {peer}: {e}");
+                }
                 continue;
             }
-        };
-        log::info!("client connected from {peer}");
-        match handle_session(&cfg, stream, peer) {
-            Ok(()) => log::info!("session with {peer} ended"),
-            Err(e) => log::warn!("session with {peer} ended with error: {e:#}"),
+            if let Some(h) = session.take() {
+                let _ = h.join();
+            }
+            log::info!("client connected from {peer}");
+            let spawned = thread::Builder::new()
+                .name(format!("session-{peer}"))
+                .spawn_scoped(s, move || {
+                    match handle_session(cfg, stream, peer) {
+                        Ok(()) => log::info!("session with {peer} ended"),
+                        Err(e) => log::warn!("session with {peer} ended with error: {e:#}"),
+                    }
+                    // Cleared here rather than in `handle_session` so every exit
+                    // path, including `?`, leaves the tray showing "Idle".
+                    cfg.status.lock().unwrap().session = None;
+                });
+            match spawned {
+                Ok(h) => session = Some(h),
+                Err(e) => log::warn!("could not start a session for {peer}: {e}"),
+            }
         }
-        // Cleared here rather than in `handle_session` so every exit path,
-        // including `?`, leaves the tray showing "Idle".
-        cfg.status.lock().unwrap().session = None;
-    }
+    })
+}
+
+/// Tell a client that arrived during a session, over an authenticated
+/// channel, that the host is taken: the full handshake so a paired Mac can
+/// trust the answer, SERVER_HELLO, then STREAM_STOP(BUSY). Bounded by the
+/// hello timeout; nothing here touches the display or the running session.
+fn refuse_busy(cfg: &ServerConfig, mut stream: TcpStream) -> Result<()> {
+    stream.set_nodelay(true)?;
+    stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
+    stream.set_write_timeout(Some(SEND_TIMEOUT))?;
+    let hs = crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired.lock().unwrap())
+        .context("handshake")?;
+    let mut tx = SecureWriter::new(stream, &hs.keys.h2c);
+    tx.send(msg::SERVER_HELLO, 0, &protocol::server_hello(&cfg.name))?;
+    tx.send(msg::STREAM_STOP, 0, &[stop_reason::BUSY])?;
+    log::info!(
+        "refused {} client {}: busy",
+        if hs.paired { "paired" } else { "unpaired" },
+        crypto::fingerprint(&hs.peer)
+    );
+    Ok(())
 }
 
 /// Keep the advertised `ip` facts current: a cable plugged in after start
@@ -475,13 +530,18 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
         let proof = payload;
         let mut limiter = cfg.pair_limiter.lock().unwrap();
         if !limiter.allowed() {
-            tx.send(msg::PAIR_RESULT, 0, &[0])?;
-            bail!("pairing refused for {client_fp}: too many failed PINs recently");
+            // Checked before the proof so a locked-out guesser learns nothing
+            // about the PIN. The wait lets the Mac say when to try again.
+            let wait = limiter.retry_after().as_secs().min(u16::MAX as u64) as u16;
+            let mut reply = vec![pair_result::RATE_LIMITED];
+            reply.extend_from_slice(&wait.to_be_bytes());
+            tx.send(msg::PAIR_RESULT, 0, &reply)?;
+            bail!("pairing refused for {client_fp}: too many failed PINs recently ({wait} s left)");
         }
         let pin = cfg.status.lock().unwrap().pin.clone();
         if !crypto::verify_pin_proof(&hs.keys.pair, &pin, &proof) {
             limiter.record_failure();
-            tx.send(msg::PAIR_RESULT, 0, &[0])?;
+            tx.send(msg::PAIR_RESULT, 0, &[pair_result::WRONG_PIN])?;
             bail!("wrong PIN from {client_fp} at {peer}");
         }
         drop(limiter);
@@ -491,7 +551,7 @@ fn handle_session(cfg: &ServerConfig, mut stream: TcpStream, peer: SocketAddr) -
                 .unwrap()
                 .add(hs.peer, &format!("paired {}", peer.ip()))?;
         }
-        tx.send(msg::PAIR_RESULT, 0, &[1])?;
+        tx.send(msg::PAIR_RESULT, 0, &[pair_result::PAIRED])?;
         log::info!("paired client {client_fp}");
         // Each PIN admits one Mac: a PIN that was read off the screen (or out
         // of a log) stops being useful the moment it has done its job.
