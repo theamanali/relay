@@ -119,7 +119,7 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
 code) has the standard Relay/Edit/Window/Help menus plus **PC** in File's slot (the
 selected row's Connect ⌘↩ / Pair, Rename ⌘R, Revert Name ⇧⌘R, Forget ⌘⌫, then the global Native
 Keyboard and Pointer Control ⌃⌥⌘K checkmark, Close Window) and **View** = the picture
-(Resolution submenu, 120/60 Hz checkmarks — the footer's mode, kept in sync — a Bitrate
+(Resolution and Refresh Rate submenus — the latter hidden on a one-rate panel — the footer's mode, kept in sync; a Bitrate
 submenu of presets rebuilt on open so an off-preset slider value appears checked in sorted
 place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the
 picker controller, so they disable themselves while the kiosk window is key, and

@@ -288,6 +288,9 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         return "\(name) (\(s.width) × \(s.height))"
     }
 
+    /// The rates this screen can show, highest first (one on a 60 Hz panel).
+    var offeredRefreshRates: [Int] { StreamMode.refreshRates(max: maxRefresh) }
+
     var mode: StreamMode {
         get {
             let scaleIndex = resolutionPopup.selectedItem?.tag ?? 0
@@ -591,7 +594,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             return selected?.state == .paired
         case #selector(selectRefresh(_:)):
             item.state = mode.refresh == item.tag ? .on : .off
-            return selected?.state == .paired && StreamMode.refreshRates(max: maxRefresh).contains(item.tag)
+            return selected?.state == .paired && offeredRefreshRates.contains(item.tag)
         case #selector(selectBitrate(_:)):
             return selected?.state == .paired
         default:

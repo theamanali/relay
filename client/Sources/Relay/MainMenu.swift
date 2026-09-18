@@ -107,20 +107,26 @@ enum MainMenu {
         return menu
     }
 
-    /// The stream mode, as the footer offers it: the sizes as a submenu, the
-    /// rates as checkmarks. Titles and availability come from the picker's
-    /// screen at validation; tags carry the scale index and the rate.
+    /// The stream mode, as the footer offers it: sizes, rates and bitrate
+    /// as submenus of checkmarks. Titles and availability come from the
+    /// picker's screen at validation; tags carry the scale index and the
+    /// rate. Refresh Rate disappears altogether on a panel with one rate,
+    /// as the footer's control does.
     private static func view() -> NSMenu {
         let menu = NSMenu(title: "View")
+        menu.delegate = viewDelegate
         let resolution = NSMenu(title: "Resolution")
         for i in StreamMode.scales.indices {
             item(resolution, "", #selector(HostPickerWindowController.selectResolution(_:))).tag = i
         }
         item(menu, "Resolution", nil, symbol: "aspectratio").submenu = resolution
-        menu.addItem(.separator())
+        let refresh = NSMenu(title: "Refresh Rate")
         for hz in StreamMode.refreshCandidates {
-            item(menu, "\(hz) Hz", #selector(HostPickerWindowController.selectRefresh(_:))).tag = hz
+            item(refresh, "\(hz) Hz", #selector(HostPickerWindowController.selectRefresh(_:))).tag = hz
         }
+        let refreshItem = item(menu, "Refresh Rate", nil, symbol: "arrow.triangle.2.circlepath")
+        refreshItem.submenu = refresh
+        refreshItem.identifier = refreshRateIdentifier
         menu.addItem(.separator())
         let bitrate = NSMenu(title: "Bitrate")
         bitrate.delegate = bitrateDelegate
@@ -132,6 +138,21 @@ enum MainMenu {
     }
 
     private static let bitrateDelegate = BitrateMenu()
+    private static let viewDelegate = ViewMenu()
+    private static let refreshRateIdentifier = NSUserInterfaceItemIdentifier("refreshRate")
+
+    /// Hides Refresh Rate when the picker's screen offers a single rate.
+    /// The picker is found through the responder chain; with none to ask
+    /// (a session's kiosk window is key) the item stays, disabled like the rest.
+    private final class ViewMenu: NSObject, NSMenuDelegate {
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            guard let item = menu.items.first(where: { $0.identifier == refreshRateIdentifier }) else { return }
+            let action = #selector(HostPickerWindowController.selectRefresh(_:))
+            if let picker = NSApp.target(forAction: action) as? HostPickerWindowController {
+                item.isHidden = picker.offeredRefreshRates.count < 2
+            }
+        }
+    }
 
     /// Builds the Bitrate submenu each time it opens: the presets, plus the
     /// current value in its sorted place when the slider set something in
