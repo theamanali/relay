@@ -15,8 +15,9 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Disable_DevNode, CM_Enable_DevNode, CM_Get_DevNode_Status, CM_Locate_DevNodeW,
     SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
     SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceRegistryPropertyW, CM_DEVNODE_STATUS_FLAGS,
-    CM_LOCATE_DEVNODE_NORMAL, CM_PROB, CM_PROB_DISABLED, CONFIGRET, CR_SUCCESS, DIGCF_ALLCLASSES,
-    DIGCF_PRESENT, DN_HAS_PROBLEM, GUID_DEVCLASS_MONITOR, SPDRP_HARDWAREID, SP_DEVINFO_DATA,
+    CM_DISABLE_PERSIST, CM_LOCATE_DEVNODE_NORMAL, CM_PROB, CM_PROB_DISABLED, CONFIGRET, CR_SUCCESS,
+    DIGCF_ALLCLASSES, DIGCF_PRESENT, DN_HAS_PROBLEM, GUID_DEVCLASS_MONITOR, SPDRP_HARDWAREID,
+    SP_DEVINFO_DATA,
 };
 use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, HWND};
 use windows::Win32::UI::Shell::IsUserAnAdmin;
@@ -130,15 +131,29 @@ pub fn enable(instance_id: &str) -> Result<()> {
     .with_context(|| format!("enabling {instance_id}"))
 }
 
-/// Stop a node (problem 22 afterwards). Already-disabled nodes are left alone.
+/// Stop a node until it is enabled explicitly or Windows reboots. This is the
+/// safe form for physical monitors: reboot remains a last-resort recovery if
+/// the host dies while they are locked.
 pub fn disable(instance_id: &str) -> Result<()> {
+    disable_with_flags(instance_id, 0, false)
+}
+
+/// Stop a node and keep it disabled across reboots. Used for the virtual
+/// display, which must not briefly reappear during boot before Relay starts.
+pub fn disable_persistent(instance_id: &str) -> Result<()> {
+    // Call CfgMgr32 even when the node is already disabled: an older Relay may
+    // have disabled it without persistence, and this upgrades that state.
+    disable_with_flags(instance_id, CM_DISABLE_PERSIST, true)
+}
+
+fn disable_with_flags(instance_id: &str, flags: u32, apply_when_disabled: bool) -> Result<()> {
     require_admin()?;
-    if status(instance_id)? == Status::Disabled {
+    if !apply_when_disabled && status(instance_id)? == Status::Disabled {
         return Ok(());
     }
     let devinst = locate(instance_id)?;
     check(
-        unsafe { CM_Disable_DevNode(devinst, 0) },
+        unsafe { CM_Disable_DevNode(devinst, flags) },
         "CM_Disable_DevNode",
     )
     .with_context(|| format!("disabling {instance_id}"))

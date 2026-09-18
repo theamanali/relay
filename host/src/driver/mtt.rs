@@ -176,7 +176,7 @@ impl MttVdd {
         state.enabled_by_us = false;
         let started = Instant::now();
         let node = self.device_node()?;
-        devnode::disable(&node.instance_id)?;
+        devnode::disable_persistent(&node.instance_id)?;
         let deadline = started + GONE_TIMEOUT;
         while !display::present_matching(&is_virtual).is_empty() {
             if Instant::now() >= deadline {
