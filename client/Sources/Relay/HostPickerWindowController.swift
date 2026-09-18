@@ -248,6 +248,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             connectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
         window.initialFirstResponder = table
+        updateConnectButton()
         spinner.startAnimation(nil)
     }
 
@@ -416,6 +417,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let selected = hostRow(at: table.selectedRow)
         connectButton.title = connecting ? "Cancel" : (selected?.state == .unpaired ? "Pair" : "Connect")
         connectButton.isEnabled = connecting || selected != nil
+        // The mode and options describe a session, and only a paired PC can
+        // start one; until then the controls have nothing to apply to.
+        let paired = selected?.state == .paired
+        resolutionPopup.isEnabled = paired
+        refreshSegment.isEnabled = paired
+        optionsButton.isEnabled = paired
     }
 
     /// Crossfade between the list and the "looking" placeholder.
