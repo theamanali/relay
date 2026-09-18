@@ -83,7 +83,7 @@ then it moves to Paired without streaming); a paired host connects from within t
 (footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. `--host` skips the picker and re-dials on
 drops. Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
 `--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
-`--host` mode). Each row has a rename (pencil) and, when paired, a forget (⊗) button; forget removes
+`--host` mode). Each row has a rename (pencil: a popover with the nickname, Return saves, "Use PC's name" clears) and, when paired, a forget (⊗) button; forget removes
 the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is the
 host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
 `hosts.txt` — there is no name-based fallback.
@@ -127,6 +127,19 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
 - The mDNS TXT record is static once registered: `server.rs` re-registers the service
   when the host's IPv4 set changes (polled every 5 s) so the advertised `ip` facts follow
   a late 169.254 self-assignment or a switch↔cable move.
+- **Unplugging the Mac's cable makes mDNSResponder purge the TXT, not the host.** It
+  drops everything learned on the vanished interface; the PTR usually survives on Wi-Fi
+  but the TXT (with `pk`) was cached on the cable alone and is not re-fetched until its
+  TTL (measured 2026-09-18: 53 s TXT-less on Wi-Fi, until the cable came back). That
+  looks exactly like a host's goodbye (TXT gone, PTR still there), so `HostListDebouncer`
+  tells them apart by whether the result's interface set changed in the same update and
+  carries the last key/facts forward. A picker row is re-rendered on every
+  `NWPathMonitor` update too: a freshly plugged cable is seen by Bonjour (IPv6
+  link-local) seconds before it has an IPv4, and Bonjour never fires for the latter.
+- NSTextField sends its action when editing ends for *any* reason, including
+  `makeFirstResponder` moving focus away. The rename popover's Save is on
+  `insertNewline` in the delegate for that reason; a popover that closes itself the
+  instant it opens was this.
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on

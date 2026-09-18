@@ -10,12 +10,18 @@ final class HoverCard {
     private var panel: NSPanel?
     private var pending: DispatchWorkItem?
     private weak var anchor: NSView?
+    /// While a popover is up over the list: a card ordering itself front
+    /// would close a transient popover, so hovering shows nothing.
+    var isSuspended = false {
+        didSet { if isSuspended { hide() } }
+    }
 
     /// Show `rows` beneath `view` after a short delay (cancelled by `hide`).
     /// `alignedTo` is the view whose left edge the card lines up with (the
     /// host name), so the card reads as belonging to that text.
     func schedule(rows: [(label: String, value: String)], for view: NSView, alignedTo leading: NSView) {
         cancel()
+        guard !isSuspended else { return }
         anchor = view
         let work = DispatchWorkItem { [weak self, weak view, weak leading] in
             guard let self, let view, let leading, view.window != nil else { return }

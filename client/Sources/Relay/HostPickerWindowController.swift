@@ -8,7 +8,7 @@ protocol HostPickerDelegate: AnyObject {
     func picker(_ p: HostPickerWindowController, didChoose host: DiscoveredHost)
     /// The user wants to drop the pairing with this host (context menu / Delete).
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost)
-    /// The user renamed this host in place; empty means "use the PC's own name".
+    /// The user gave this host a nickname; empty means "use the PC's own name".
     func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String)
     /// Cancel pressed while a connection started from this picker is still in progress.
     func pickerDidCancelConnect(_ p: HostPickerWindowController)
@@ -57,8 +57,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         didSet { updateConnectButton() }
     }
     /// Row list that arrived while a name was being edited; applied afterwards.
-    private var pendingRows: [PickerRow]?
-    private var editingRow: Int?
 
     init() {
         let window = NSWindow(
@@ -360,11 +358,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     }
 
     private func apply(_ newRows: [PickerRow]) {
-        if editingRow != nil {
-            // Don't tear the editor out from under the user; catch up afterwards.
-            pendingRows = newRows
-            return
-        }
         let selectedName = selectedHost?.name
         let diff = PickerRows.diff(old: rows, new: newRows)
         let visible = window?.isVisible ?? false
@@ -460,9 +453,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             pickerDelegate?.pickerDidCancelConnect(self)
             return
         }
-        if let editingRow, let view = table.view(atColumn: 0, row: editingRow, makeIfNecessary: false) as? HostRowView {
-            view.commitEditingName()
-        }
         guard let host = selectedHost else { return }
         pickerDelegate?.picker(self, didChoose: host)
     }
@@ -499,8 +489,14 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         guard let r = hostRow(at: row), r.host.publicKey != nil,
               let view = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? HostRowView else { return }
         table.selectRowIndexes([row], byExtendingSelection: false)
-        editingRow = row
-        view.beginEditingName()
+        HoverCard.shared.isSuspended = true
+        let host = r.host
+        RenamePopover.show(from: view.renameAnchor, hostName: host.name, nickname: r.nickname, onSave: { [weak self] name in
+            guard let self else { return }
+            self.pickerDelegate?.picker(self, rename: host, to: name)
+        }, onClose: {
+            HoverCard.shared.isSuspended = false
+        })
     }
 
     // MARK: context menu
@@ -614,15 +610,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             view.onRename = { [weak self, weak view] in
                 guard let self, let view else { return }
                 self.beginRename(row: self.table.row(for: view))
-            }
-            view.onRenameEnded = { [weak self] typed in
-                guard let self else { return }
-                self.editingRow = nil
-                if let typed { self.pickerDelegate?.picker(self, rename: host, to: typed) }
-                if let pending = self.pendingRows {
-                    self.pendingRows = nil
-                    self.apply(pending)
-                }
             }
             view.onForget = { [weak self] in
                 guard let self else { return }

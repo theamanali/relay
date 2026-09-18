@@ -30,7 +30,7 @@ final class SectionHeaderView: NSTableCellView {
     }
 }
 
-final class HostRowView: NSTableCellView, NSTextFieldDelegate {
+final class HostRowView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("host-row")
 
     private let pcIcon = NSImageView()
@@ -41,13 +41,10 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
     /// Row actions, set by the controller on each configure.
     var onRename: (() -> Void)?
     var onForget: (() -> Void)?
-    /// In-place rename finished: the new text (empty = use the PC's own name), or nil if cancelled.
-    var onRenameEnded: ((String?) -> Void)?
-    private var hostName = ""
+    /// Where the rename popover attaches.
+    var renameAnchor: NSView { renameButton }
     private var hoverRows: [(label: String, value: String)] = []
     private var tracking: NSTrackingArea?
-    private var displayedName = ""
-    private(set) var isEditingName = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -59,18 +56,11 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         nameLabel.font = Style.Font.body
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.alignment = .left
-        nameLabel.delegate = self
-        nameLabel.isEditable = false
-        nameLabel.isSelectable = false
-        nameLabel.isBordered = false
-        nameLabel.drawsBackground = false
-        nameLabel.focusRingType = .default
         detailLabel.font = Style.Font.caption
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingTail
         detailLabel.alignment = .left
-        // Name over detail, both spanning the column so truncation and the
-        // in-place editor use the full width.
+        // Name over detail, both spanning the column so truncation uses the full width.
         let text = NSView()
         for label in [nameLabel, detailLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
@@ -137,7 +127,6 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard !isEditingName else { return }
         HoverCard.shared.schedule(rows: hoverRows, for: self, alignedTo: nameLabel)
     }
 
@@ -153,70 +142,17 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
     @objc private func renameTapped() { onRename?() }
     @objc private func forgetTapped() { onForget?() }
 
-    // MARK: in-place rename
-
-    /// Turn the name into an editor, Finder-style: white field, text selected.
-    func beginEditingName() {
-        guard !isEditingName, let window else { return }
-        isEditingName = true
-        nameLabel.isEditable = true
-        nameLabel.isSelectable = true
-        nameLabel.drawsBackground = true
-        nameLabel.backgroundColor = .textBackgroundColor
-        nameLabel.placeholderString = hostName
-        // Editing the nickname, not the PC's own name: start from an empty
-        // field when no nickname is set so the placeholder shows the default.
-        if displayedName == hostName { nameLabel.stringValue = "" }
-        window.makeFirstResponder(nameLabel)
-        nameLabel.currentEditor()?.selectAll(nil)
-    }
-
-    /// Finish a pending edit as if Return were pressed (e.g. Connect was clicked).
-    func commitEditingName() { endEditingName(commit: true) }
-
-    private func endEditingName(commit: Bool) {
-        guard isEditingName else { return }
-        isEditingName = false
-        let typed = nameLabel.stringValue
-        nameLabel.isEditable = false
-        nameLabel.isSelectable = false
-        nameLabel.drawsBackground = false
-        nameLabel.placeholderString = nil
-        nameLabel.stringValue = displayedName
-        window?.makeFirstResponder(superview) // back to the table
-        onRenameEnded?(commit ? typed : nil)
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) {
-        endEditingName(commit: true)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.cancelOperation(_:)) {
-            endEditingName(commit: false)
-            return true
-        }
-        if selector == #selector(NSResponder.insertNewline(_:)) {
-            // Return commits the name only; it must not also press Connect.
-            endEditingName(commit: true)
-            return true
-        }
-        return false
-    }
-
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(host: DiscoveredHost, state: HostPairState, nickname: String?) {
-        hostName = host.name
-        displayedName = nickname ?? host.name
-        nameLabel.stringValue = displayedName
+        nameLabel.stringValue = nickname ?? host.name
         // A renamed host's real name lives in the hover card, not the row.
         let link = host.connectLink
 
         // The section header carries the pairing state; the row only says
         // what differs per host.
-        detailLabel.stringValue = link
+        detailLabel.stringValue = link == "This MacBook" ? link : "via \(link)"
         pcIcon.contentTintColor = state == .paired ? .labelColor : .secondaryLabelColor
         renameButton.isHidden = host.publicKey == nil
         forgetButton.isHidden = state != .paired
@@ -230,7 +166,7 @@ final class HostRowView: NSTableCellView, NSTextFieldDelegate {
         let reachable = host.reachableAddresses
         for entry in reachable {
             // The link only needs naming when there is more than one to tell apart.
-            rows.append(("IP:", reachable.count > 1 ? "\(entry.address) (\(entry.link))" : entry.address))
+            rows.append(("Host IP:", reachable.count > 1 ? "\(entry.address) (\(entry.link))" : entry.address))
         }
         if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
         hoverRows = rows
