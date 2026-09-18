@@ -38,6 +38,7 @@ final class HostRowView: NSTableCellView {
     private let detailLabel = NSTextField(labelWithString: "")
     private let renameButton = NSButton()
     private let forgetButton = NSButton()
+    private let actions = NSStackView()
     /// Row actions, set by the controller on each configure.
     var onRename: (() -> Void)?
     var onForget: (() -> Void)?
@@ -81,7 +82,8 @@ final class HostRowView: NSTableCellView {
         Self.style(forgetButton, symbol: "xmark.circle", label: "Forget", action: #selector(forgetTapped))
         renameButton.target = self
         forgetButton.target = self
-        let actions = NSStackView(views: [renameButton, forgetButton])
+        actions.addArrangedSubview(renameButton)
+        actions.addArrangedSubview(forgetButton)
         actions.orientation = .horizontal
         actions.spacing = Style.Space.tight
         actions.setHuggingPriority(.required, for: .horizontal)
@@ -118,12 +120,21 @@ final class HostRowView: NSTableCellView {
 
     // MARK: hover card
 
+    /// The card is about the PC, so it belongs to the glyph and text, not to
+    /// the buttons on the right: those have tooltips of their own.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        var rect = bounds
+        rect.size.width = max(0, actions.frame.minX - Style.Space.xs)
+        let area = NSTrackingArea(rect: rect, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
         addTrackingArea(area)
         tracking = area
+    }
+
+    override func layout() {
+        super.layout()
+        updateTrackingAreas()
     }
 
     override func mouseEntered(with event: NSEvent) {

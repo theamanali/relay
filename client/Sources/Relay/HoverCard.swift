@@ -1,5 +1,5 @@
 // A tooltip that can align things: a two-column grid of label / value pairs
-// in a tooltip-material panel, shown after the usual hover delay. NSView's
+// in a tooltip-material panel, shown after a short hover delay. NSView's
 // string tooltips cannot line up columns, which is all this exists for.
 
 import AppKit
@@ -16,7 +16,15 @@ final class HoverCard {
         didSet { if isSuspended { hide() } }
     }
 
-    /// Show `rows` beneath `view` after a short delay (cancelled by `hide`).
+    /// Tooltips fade rather than pop; this is about AppKit's own fade.
+    static let fade: TimeInterval = 0.15
+
+    /// Shorter than AppKit's 1 s tooltip wait: the card is the row's main
+    /// detail, not an aside. It never races the buttons' tooltips because
+    /// the hover area stops before them.
+    static let delay: TimeInterval = 0.5
+
+    /// Show `rows` beneath `view` after `delay` (cancelled by `hide`).
     /// `alignedTo` is the view whose left edge the card lines up with (the
     /// host name), so the card reads as belonging to that text.
     func schedule(rows: [(label: String, value: String)], for view: NSView, alignedTo leading: NSView) {
@@ -28,14 +36,23 @@ final class HoverCard {
             self.show(rows: rows, for: view, alignedTo: leading)
         }
         pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.delay, execute: work)
     }
 
     func hide() {
         cancel()
-        panel?.orderOut(nil)
+        if let panel {
+            Self.fade(panel, to: 0) { panel.orderOut(nil) }
+        }
         panel = nil
         anchor = nil
+    }
+
+    private static func fade(_ panel: NSPanel, to alpha: CGFloat, then completion: (() -> Void)? = nil) {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = fade
+            panel.animator().alphaValue = alpha
+        }, completionHandler: completion)
     }
 
     /// Dismiss only when `view` owns the card. A fading table-row removal can
@@ -106,8 +123,12 @@ final class HoverCard {
             if origin.y < screen.minY { origin.y = rowOnScreen.maxY + Style.Space.xs }
         }
         panel.setFrameOrigin(origin)
-        self.panel?.orderOut(nil)
+        if let old = self.panel {
+            Self.fade(old, to: 0) { old.orderOut(nil) }
+        }
         self.panel = panel
+        panel.alphaValue = 0
         panel.orderFront(nil)
+        Self.fade(panel, to: 1)
     }
 }
