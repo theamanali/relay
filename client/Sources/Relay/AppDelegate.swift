@@ -86,7 +86,7 @@ struct LaunchOptions {
                                              (the picker offers both and remembers the last choice;
                                              these flags override it for this launch)
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
-                  --no-input                 view only
+                  --no-input                 view only (toggle control with ⌃⌥⌘K)
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
                   --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
                   --bitrate <1...1000>       request this video bitrate in Mbps (default 120)
@@ -164,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MainMenu.install()
         let screen = NSScreen.main ?? NSScreen.screens[0]
         view = StreamView(frame: screen.frame)
         view.delegate = self
@@ -215,6 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             if StreamView.isLatencyHotkey(event) {
                 self.view.latencyVisible.toggle()
                 self.refreshLatencyOverlay()
+                return nil
+            }
+            if StreamView.isControlHotkey(event) {
+                self.toggleControl()
                 return nil
             }
             guard StreamView.isExitHotkey(event) else { return event }
@@ -350,9 +355,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     private func applyPrefs() {
         view.keyMap = KeyMap(modifiers: prefs.modifiers)
-        view.forwardInput = prefs.forwardInput
+        view.setForwardInput(prefs.forwardInput)
         view.latencyVisible = prefs.showLatency
         refreshLatencyOverlay()
+    }
+
+    /// ⌃⌥⌘K anywhere: the same setting as the Advanced checkbox and View ▸
+    /// Control the PC, so it persists and the picker shows it; mid-session
+    /// it takes effect at once and the stream says which way it went.
+    private func toggleControl() {
+        prefs.forwardInput.toggle()
+        prefs.save()
+        applyPrefs()
+        picker?.prefs = prefs
+        if kioskActive {
+            flashStatus(prefs.forwardInput ? "Controlling \(currentHostLabel)" : "Observing \(currentHostLabel)")
+        }
+    }
+
+    /// A line over the stream that clears itself, unless something else
+    /// (a connection state) replaced it first.
+    private func flashStatus(_ text: String) {
+        view.status = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.view.status == text else { return }
+            self.view.status = ""
+        }
     }
 
     /// Nickname if the user gave one, else the PC's own name, clipped to fit a sentence.
@@ -493,6 +521,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         c.delegate = self
         connection = c
         c.start()
+    }
+
+    /// PC ▸ Close Window ⌘W, for whichever window is key.
+    @objc func closeKeyWindow(_ sender: Any?) {
+        NSApp.keyWindow?.performClose(sender)
+    }
+
+    /// Help ▸ Relay Help: the README is the manual.
+    @objc func openHelp(_ sender: Any?) {
+        NSWorkspace.shared.open(URL(string: "https://github.com/theamanali/relay#readme")!)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -3,6 +3,7 @@
 import AppKit
 
 let options = LaunchOptions.parse(CommandLine.arguments)
+MainMenu.registerDefaults()
 let app = NSApplication.shared
 let delegate = AppDelegate(options: options)
 app.delegate = delegate

@@ -184,9 +184,12 @@ remembered; the matching command-line flags override it for one launch. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record); a host that advertises no key, or an unknown
-one, is listed as available. The pencil on a row **renames** the PC on this Mac (its
-own name moves to the hover); the ⊗ on a paired PC (or Delete with it
-selected) **forgets** it: the Mac tells the PC to
+one, is listed as available. A row's context menu has **Connect** (paired) or
+**Pair** (available), **Rename** (in place, like Finder: a nickname on this Mac;
+the PC's own name moves to the hover), **Revert Name to “‹PC name›”** while a
+nickname is set, and, on a paired PC, **Forget** (or press Delete with it
+selected); the same actions sit in the PC menu for the selected row, and the View menu
+mirrors the footer's resolution and refresh rate: the Mac tells the PC to
 drop the pairing too, then removes it locally either way — if the PC was
 unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
 to run on it. Pair and forget still work while another Mac is using the display;
@@ -198,7 +201,8 @@ Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
 `--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`
 (override the remembered mode for one launch; ¾ or ½ the pixels is softer on
 the panel but much cheaper to encode — the gaming modes), `--bitrate 500`,
-`--modifiers physical`, `--no-input`,
+`--modifiers physical`, `--no-input` (observe only; **⌃⌥⌘K toggles control** of
+the PC at any time, in the list or mid-stream, and remembers it),
 and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
 **⌃⌥⌘Q leaves the stream** and returns to the host list (it quits in `--host`
 mode, and from the list itself). By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as

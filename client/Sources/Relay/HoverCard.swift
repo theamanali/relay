@@ -20,8 +20,7 @@ final class HoverCard {
     static let fade: TimeInterval = 0.15
 
     /// Shorter than AppKit's 1 s tooltip wait: the card is the row's main
-    /// detail, not an aside. It never races the buttons' tooltips because
-    /// the hover area stops before them.
+    /// detail, not an aside.
     static let delay: TimeInterval = 0.5
 
     /// Show `rows` beneath `view` after `delay` (cancelled by `hide`).

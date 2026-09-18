@@ -27,7 +27,7 @@ private final class PickerTableView: NSTableView {
     }
 }
 
-final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate {
+final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate, NSMenuItemValidation {
     weak var pickerDelegate: HostPickerDelegate?
 
     private let table = PickerTableView()
@@ -39,6 +39,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     private let optionsButton = NSButton(title: "", target: nil, action: nil)
     private weak var bitrateSlider: NSSlider?
     private weak var bitrateField: NSTextField?
+    /// The row whose name is being edited in place, if any.
+    private weak var renamingRow: HostRowView?
     /// Session options shown in the gear popover; set by the app, saved by it.
     var prefs = SessionPrefs()
     var onPrefsChange: ((SessionPrefs) -> Void)?
@@ -58,7 +60,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     var connecting = false {
         didSet { updateConnectButton() }
     }
-    /// Row list that arrived while a name was being edited; applied afterwards.
 
     init() {
         let window = NSWindow(
@@ -265,8 +266,7 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
         resolutionPopup.removeAllItems()
         for (i, s) in StreamMode.sizes(native: nativePixelSize).enumerated() {
-            let name = s.scale == 1.0 ? "Native" : "\(Int(s.scale * 100))%"
-            resolutionPopup.addItem(withTitle: "\(name) (\(s.width) × \(s.height))")
+            resolutionPopup.addItem(withTitle: Self.resolutionTitle(s))
             resolutionPopup.lastItem?.tag = i
         }
 
@@ -279,6 +279,13 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         refreshSegment.isHidden = rates.count < 2
 
         mode = keep.clamped(toMaxRefresh: maxRefresh)
+    }
+
+    /// "Native (3024 × 1964)", "75% (2268 × 1474)": the footer popup and the
+    /// View menu say the same thing.
+    private static func resolutionTitle(_ s: (scale: Double, width: Int, height: Int)) -> String {
+        let name = s.scale == 1.0 ? "Native" : "\(Int(s.scale * 100))%"
+        return "\(name) (\(s.width) × \(s.height))"
     }
 
     var mode: StreamMode {
@@ -365,6 +372,16 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let diff = PickerRows.diff(old: rows, new: newRows)
         let visible = window?.isVisible ?? false
         let wasListVisible = listVisible
+        // A reload would pull the field editor out from under an in-place
+        // rename; Finder commits in that case, so do the same. Rows animating
+        // in and out around the edit leave it alone.
+        if let editing = renamingRow {
+            let index = table.row(for: editing)
+            if diff.needsFullReload || !visible || !wasListVisible
+                || diff.removed.contains(index) || diff.reloaded.contains(index) {
+                editing.endRename()
+            }
+        }
         if diff.needsFullReload || !visible || !wasListVisible {
             // `reloadData` removes row views without a mouse-exited event.
             HoverCard.shared.hide()
@@ -480,50 +497,193 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         return (h, state, nickname)
     }
 
-    private func forgetSelected() {
-        guard let r = hostRow(at: table.selectedRow), r.state == .paired else { return }
+    private func forget(row: Int) {
+        guard let r = hostRow(at: row), r.state == .paired else { return }
         pickerDelegate?.picker(self, forget: r.host)
     }
 
-    @objc private func forgetClicked() {
-        guard let r = hostRow(at: table.clickedRow), r.state == .paired else { return }
-        pickerDelegate?.picker(self, forget: r.host)
+    /// The PC's own name is what "no nickname" shows, so this is a rename to it.
+    private func revertName(row: Int) {
+        guard let r = hostRow(at: row), r.nickname != nil else { return }
+        pickerDelegate?.picker(self, rename: r.host, to: r.host.name)
     }
 
-    @objc private func renameClicked() {
-        beginRename(row: table.clickedRow)
+    private func forgetSelected() { forget(row: table.selectedRow) }
+    @objc private func forgetClicked() { forget(row: table.clickedRow) }
+    @objc private func renameClicked() { beginRename(row: table.clickedRow) }
+    @objc private func revertNameClicked() { revertName(row: table.clickedRow) }
+
+    // MARK: menu bar (File / View / Settings…), reached through the responder
+    // chain while this window is key; validated per selection below.
+
+    @objc func connectSelected(_ sender: Any?) { connect() }
+    @objc func renameSelected(_ sender: Any?) { beginRename(row: table.selectedRow) }
+    @objc func revertNameSelected(_ sender: Any?) { revertName(row: table.selectedRow) }
+    @objc func forgetSelected(_ sender: Any?) { forgetSelected() }
+    @objc func showSettings(_ sender: Any?) { showOptions() }
+
+    @objc func toggleLatencyStats(_ sender: Any?) {
+        prefs.showLatency.toggle()
+        onPrefsChange?(prefs)
     }
 
+    @objc func toggleControl(_ sender: Any?) {
+        prefs.forwardInput.toggle()
+        onPrefsChange?(prefs)
+    }
+
+    @objc func selectResolution(_ sender: NSMenuItem) {
+        guard StreamMode.scales.indices.contains(sender.tag) else { return }
+        var m = mode
+        m.scale = StreamMode.scales[sender.tag]
+        mode = m
+        modeChanged()
+    }
+
+    @objc func selectBitrate(_ sender: NSMenuItem) {
+        prefs.bitrateMbps = VideoBitrate.clamp(sender.tag)
+        syncBitrateControls() // the Advanced popover, if it is open
+        onPrefsChange?(prefs)
+    }
+
+    @objc func selectRefresh(_ sender: NSMenuItem) {
+        var m = mode
+        m.refresh = sender.tag
+        mode = m
+        modeChanged()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let selected = hostRow(at: table.selectedRow)
+        switch item.action {
+        case #selector(connectSelected(_:)):
+            let unpaired = selected?.state == .unpaired
+            item.title = unpaired ? "Pair" : "Connect"
+            item.image = NSImage(systemSymbolName: unpaired ? "link" : "display", accessibilityDescription: nil)
+            return selected != nil && !connecting
+        case #selector(renameSelected(_:)):
+            return selected?.host.publicKey != nil && renamingRow == nil
+        case #selector(revertNameSelected(_:)):
+            if let r = selected, let _ = r.nickname {
+                item.title = "Revert Name to “\(r.host.name)”"
+                return true
+            }
+            item.title = "Revert Name"
+            return false
+        case #selector(forgetSelected(_:)):
+            return selected?.state == .paired
+        case #selector(showSettings(_:)):
+            return selected?.state == .paired // like the footer's Advanced button
+        case #selector(toggleLatencyStats(_:)):
+            item.state = prefs.showLatency ? .on : .off
+            return true
+        case #selector(toggleControl(_:)):
+            item.state = prefs.forwardInput ? .on : .off
+            return true
+        // The mode items mirror the footer: shown always, usable once a
+        // paired PC is selected (the mode describes its session).
+        case #selector(selectResolution(_:)):
+            let sizes = StreamMode.sizes(native: nativePixelSize)
+            guard sizes.indices.contains(item.tag) else { return false }
+            item.title = Self.resolutionTitle(sizes[item.tag])
+            item.state = mode.scale == sizes[item.tag].scale ? .on : .off
+            return selected?.state == .paired
+        case #selector(selectRefresh(_:)):
+            item.state = mode.refresh == item.tag ? .on : .off
+            return selected?.state == .paired && StreamMode.refreshRates(max: maxRefresh).contains(item.tag)
+        case #selector(selectBitrate(_:)):
+            return selected?.state == .paired
+        default:
+            return true
+        }
+    }
+
+    /// Finder-style in-place rename of the row's name. Return has to reach
+    /// the field editor, so the footer's default button gives up its key
+    /// equivalent for the duration.
     private func beginRename(row: Int) {
-        guard let r = hostRow(at: row), r.host.publicKey != nil,
+        guard renamingRow == nil, let r = hostRow(at: row), r.host.publicKey != nil,
               let view = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? HostRowView else { return }
         table.selectRowIndexes([row], byExtendingSelection: false)
+        renamingRow = view
         HoverCard.shared.isSuspended = true
+        connectButton.keyEquivalent = ""
         let host = r.host
-        RenamePopover.show(from: view.renameAnchor, hostName: host.name, nickname: r.nickname, onSave: { [weak self] name in
+        view.onRenameEnd = { [weak self, weak view] name in
             guard let self else { return }
-            self.pickerDelegate?.picker(self, rename: host, to: name)
-        }, onClose: {
+            view?.onRenameEnd = nil
+            self.renamingRow = nil
+            self.connectButton.keyEquivalent = "\r"
             HoverCard.shared.isSuspended = false
-        })
+            // This runs while the field editor is still resigning, so the
+            // window's first responder is decided only afterwards: give the
+            // list keyboard focus back unless a click took it somewhere.
+            DispatchQueue.main.async {
+                guard let window = self.window, window.firstResponder === window || window.firstResponder == nil else { return }
+                window.makeFirstResponder(self.table)
+            }
+            guard let name else { return }
+            // `apply` commits a rename before reloading; the delegate's
+            // reload must not run inside that `apply`.
+            DispatchQueue.main.async { self.pickerDelegate?.picker(self, rename: host, to: name) }
+        }
+        view.beginRename()
     }
 
     // MARK: context menu
 
+    /// The hover card is scheduled on mouse-enter and a right-click does not
+    /// cancel it, so it would open over the menu half a second later.
+    func menuWillOpen(_ menu: NSMenu) {
+        HoverCard.shared.isSuspended = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        // A rename in progress keeps the card suspended until it ends.
+        if renamingRow == nil { HoverCard.shared.isSuspended = false }
+    }
+
+    /// Symbol images on menu items are the system's own: AppKit sizes and
+    /// places them the way Finder's context menu does, so no configuration.
+    private func menuItem(_ title: String, symbol: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        item.target = self
+        return item
+    }
+
+    /// Three sections, like Finder's Open / edit / Move to Trash: Connect
+    /// (paired) or Pair (available) alone at the top, as the footer button
+    /// would; the name items; Forget alone at the bottom.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         guard let r = hostRow(at: table.clickedRow) else { return }
-        let shown = r.nickname ?? r.host.name
+        if !connecting {
+            menu.addItem(r.state == .paired
+                ? menuItem("Connect", symbol: "display", action: #selector(connectClicked))
+                : menuItem("Pair", symbol: "link", action: #selector(connectClicked)))
+            if r.host.publicKey != nil { menu.addItem(.separator()) }
+        }
         if r.host.publicKey != nil {
-            menu.addItem(withTitle: "Rename…", action: #selector(renameClicked), keyEquivalent: "").target = self
+            menu.addItem(menuItem("Rename", symbol: "pencil", action: #selector(renameClicked)))
+        }
+        if r.nickname != nil {
+            // Says what changes and what it becomes; "Revert to X" on a PC's
+            // row reads as reverting the PC.
+            menu.addItem(menuItem("Revert Name to “\(r.host.name)”", symbol: "arrow.uturn.backward", action: #selector(revertNameClicked)))
         }
         if r.state == .paired {
-            menu.addItem(withTitle: "Forget “\(shown)”…", action: #selector(forgetClicked), keyEquivalent: "").target = self
-        } else {
-            let item = NSMenuItem(title: "Not paired — connect to pair with its PIN", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Forget", symbol: "xmark.circle", action: #selector(forgetClicked)))
         }
+    }
+
+    /// The clicked row becomes the selection first so the footer and status
+    /// line describe the host being dialled.
+    @objc private func connectClicked() {
+        guard !connecting, let r = hostRow(at: table.clickedRow) else { return }
+        table.selectRowIndexes([table.clickedRow], byExtendingSelection: false)
+        pickerDelegate?.picker(self, didChoose: r.host)
     }
 
     @objc private func showOptions() {
@@ -582,10 +742,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         modifiers.action = #selector(optionChanged(_:))
         modifiers.identifier = .init("modifiers")
 
-        let input = NSButton(checkboxWithTitle: "Send keyboard and mouse to the PC", target: self, action: #selector(optionChanged(_:)))
+        // Same words as View ▸ Native Keyboard and Pointer Control, in the
+        // sentence case checkboxes use; shortcuts belong in the menu, not here.
+        let input = NSButton(checkboxWithTitle: "Native keyboard and pointer control", target: self, action: #selector(optionChanged(_:)))
         input.state = prefs.forwardInput ? .on : .off
         input.identifier = .init("input")
-        let latency = NSButton(checkboxWithTitle: "Show latency stats (⌃⌥⌘L)", target: self, action: #selector(optionChanged(_:)))
+        let latency = NSButton(checkboxWithTitle: "Show latency stats", target: self, action: #selector(optionChanged(_:)))
         latency.state = prefs.showLatency ? .on : .off
         latency.identifier = .init("latency")
 
@@ -684,14 +846,6 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
             let view = tableView.makeView(withIdentifier: HostRowView.identifier, owner: nil) as? HostRowView
                 ?? HostRowView(frame: .zero)
             view.configure(host: host, state: state, nickname: nickname)
-            view.onRename = { [weak self, weak view] in
-                guard let self, let view else { return }
-                self.beginRename(row: self.table.row(for: view))
-            }
-            view.onForget = { [weak self] in
-                guard let self else { return }
-                self.pickerDelegate?.picker(self, forget: host)
-            }
             return view
         }
     }

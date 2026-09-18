@@ -88,7 +88,10 @@ PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier
-mapping, send input, latency HUD — `SessionPrefs`), all remembered in UserDefaults and
+mapping, "Native keyboard and pointer control", latency HUD — `SessionPrefs`; the
+control one is also View ▸ Native Keyboard and Pointer Control / ⌃⌥⌘K, which mid-session goes through the
+local event monitor, saves the pref, releases held keys when turning off, and flashes
+"Controlling/Observing <PC>"), all remembered in UserDefaults and
 overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
 then it moves to Paired without streaming); a paired host connects from within the picker
 (footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. A PC already in a session with another Mac
@@ -98,10 +101,22 @@ A rate-limited PIN reopens the sheet with "Too many wrong PINs. Try again in N m
 (minutes rounded up); a wrong one keeps "That PIN wasn't correct…". `--host` skips the picker and re-dials on
 drops (every 5 s instead of 1 s after a busy answer). Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
 `--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
-`--host` mode). Each row has a rename (pencil: a popover with the nickname, Return saves, "Use PC's name" clears) and, when paired, a forget (⊗) button; forget removes
+`--host` mode). A row's context menu has Connect (paired) or Pair (available) — the same `didChoose` as the footer button — then Rename, `Revert Name to “<PC name>”` while a nickname is set, and, when paired, a separator and Forget (Delete does the same); the menu items carry SF Symbols with no configuration so AppKit sizes them like Finder's. Rename edits in place like Finder: the name becomes a bezeled field with its text selected, sized to the text (measured — a truncating NSTextField has no intrinsic width), Return or any loss of focus commits, Escape restores, an emptied name means the PC's own. Forget removes
 the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is the
 host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
-`hosts.txt` — there is no name-based fallback.
+`hosts.txt` — there is no name-based fallback. The menu bar (`MainMenu.swift`, built in
+code) has the standard Relay/Edit/Window/Help menus plus **PC** in File's slot (the
+selected row's Connect ⌘↩ / Pair, Rename, Revert Name, Forget ⌘⌫, Close Window) and
+**View** (Resolution submenu, 120/60 Hz checkmarks — the footer's mode, kept in sync —
+a Bitrate submenu of presets rebuilt on open so an off-preset slider value appears checked
+in sorted place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the
+picker controller, so they disable themselves while the kiosk window is key, and
+`StreamView.performKeyEquivalent` swallows ⌘-shortcuts before the menu bar sees them
+during a session. Without a main menu ⌘Q/⌘W/⌘H and ⌘A/⌘C/⌘V in text fields do nothing.
+AppKit's automatic items: "Close All" is paired with any `performClose:` item (Close
+Window uses its own selector to avoid it) and "Enter Full Screen" is added to any View
+menu unless `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.shared`
+(`main.swift`, not the menu code).
 
 ## Hard-won facts — do not relearn these
 
@@ -151,10 +166,19 @@ host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paire
   carries the last key/facts forward. A picker row is re-rendered on every
   `NWPathMonitor` update too: a freshly plugged cable is seen by Bonjour (IPv6
   link-local) seconds before it has an IPv4, and Bonjour never fires for the latter.
-- NSTextField sends its action when editing ends for *any* reason, including
-  `makeFirstResponder` moving focus away. The rename popover's Save is on
-  `insertNewline` in the delegate for that reason; a popover that closes itself the
-  instant it opens was this.
+- `StreamView.flagsChanged` decides press vs release from its own held-key record
+  **and** the event's flags: the record alone tells left from right, but forwards the
+  release of a modifier it never sent down (control turned on by ⌃⌥⌘K with ⌃⌥⌘ still
+  held) as a press, which sticks on Windows.
+- NSTextField ends editing (and sends its action) for *any* reason, including
+  `makeFirstResponder` moving focus away. The in-place rename leans on that —
+  Finder commits on focus loss too — and cancels only through Escape's
+  `cancelOperation` + `abortEditing`. While the field editor is up, the footer's
+  default button gives up its `\r` key equivalent or Return would Connect;
+  `isBezeled = true` switches `drawsBackground` on and `false` does not switch it
+  off; and `apply` commits an in-progress rename before any reload that touches
+  its row (the delegate's own reload is dispatched async so it never runs inside
+  that `apply`).
 - **The PIN sheet belongs to one connection attempt.** Current hosts allow PAIR while
   the display is busy, but older hosts can send STREAM_STOP(BUSY) with the sheet up;
   the host's 120 s PAIR_TIMEOUT can also close the socket under a sheet left open. A

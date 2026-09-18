@@ -200,6 +200,7 @@ final class StreamView: NSView {
 
     private static let exitHotkeyKeyCode: UInt16 = 12 // Q
     private static let latencyHotkeyKeyCode: UInt16 = 37 // L
+    private static let controlHotkeyKeyCode: UInt16 = 40 // K
     private static let exitHotkeyFlags: NSEvent.ModifierFlags = [.control, .option, .command]
 
     static func isExitHotkey(_ event: NSEvent) -> Bool {
@@ -212,6 +213,33 @@ final class StreamView: NSView {
         event.keyCode == latencyHotkeyKeyCode
             && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .isSuperset(of: exitHotkeyFlags)
+    }
+
+    /// ⌃⌥⌘K: keyboard and pointer control of the PC on or off.
+    static func isControlHotkey(_ event: NSEvent) -> Bool {
+        event.keyCode == controlHotkeyKeyCode
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .isSuperset(of: exitHotkeyFlags)
+    }
+
+    /// Turning control off first releases everything the PC believes is
+    /// down — the hotkey's own ⌃⌥⌘ included, whose key-ups would otherwise
+    /// never be forwarded and leave Ctrl+Alt+Win stuck on Windows.
+    func setForwardInput(_ on: Bool) {
+        if !on { releaseAllInput() }
+        forwardInput = on
+    }
+
+    /// The modifier flag a modifier key code reports through.
+    private static func flag(forModifierKeyCode code: UInt16) -> NSEvent.ModifierFlags {
+        switch code {
+        case 54, 55: return .command
+        case 58, 61: return .option
+        case 59, 62: return .control
+        case 56, 60: return .shift
+        case 63: return .function
+        default: return []
+        }
     }
 
     private func sendKey(code: UInt16, down: Bool) {
@@ -244,9 +272,12 @@ final class StreamView: NSView {
             sendKey(code: code, down: false)
             return
         }
-        // flagsChanged fires once per physical modifier press or release; toggle
-        // against our own record so left/right pairs are tracked independently.
-        let down = !heldKeys.contains(usage)
+        // flagsChanged fires once per physical modifier press or release and
+        // does not say which. Our own record tells left from right; the
+        // event's flags catch a release of a key we never sent down (control
+        // turned on by ⌃⌥⌘K while those modifiers were still held), which
+        // a record alone would forward as a press and leave stuck.
+        let down = !heldKeys.contains(usage) && event.modifierFlags.contains(Self.flag(forModifierKeyCode: code))
         sendKey(code: code, down: down)
     }
 
