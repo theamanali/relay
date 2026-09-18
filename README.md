@@ -72,7 +72,7 @@ small encrypted protocol between them.
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
-| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (the checked-in `.ico` files are placeholders until the Mac renders the real glyph with `--render-icons`). Auto-start via the installer's `-AutoStart` task. Headless boot and DPI pending |
+| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (icons rendered on the Mac from the picker glyph). Auto-start via the installer's `-AutoStart` task. Headless boot and DPI pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
 
 ## Setup

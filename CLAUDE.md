@@ -41,9 +41,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   tray reads). The PIN rotates after every successful pairing and is never logged.
 - Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
   and chosen by `SystemUsesLightTheme`. They are rendered **on the Mac** from the
-  picker's glyph: `swift run Relay --render-icons ../host/assets`. The files checked in
-  on 2026-09-17 are PC-drawn placeholders; the Mac session should overwrite them (and
-  first compile `IconExport.swift`, written blind).
+  picker's glyph: `swift run Relay --render-icons ../host/assets` (done 2026-09-17;
+  rerun after any change to `Glyphs.swift`).
 
 ## Running it
 

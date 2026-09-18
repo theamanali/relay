@@ -15,11 +15,8 @@ itself so both apps share one drawing. To regenerate, **on the Mac**:
 cd client && swift run Relay --render-icons ../host/assets
 ```
 
-then commit the two files and rebuild the host.
-
-> **Placeholder notice (2026-09-17):** the files checked in right now were drawn by a
-> throwaway script on the PC to the same rough geometry so the host would build; they
-> are not the Swift render. Run the command above on the Mac and overwrite them.
+then commit the two files and rebuild the host. The checked-in files are that render
+(2026-09-17).
 
 Not covered: the exe's own file icon (Explorer, taskbar while a dialog is up). That
 needs a non-tintable colour version and a resource-compiler step; out of scope for now.
