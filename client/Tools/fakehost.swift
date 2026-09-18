@@ -1,6 +1,6 @@
 // A fake Relay host for testing the client's connect and pairing paths on a
 // Mac with no PC around (the mirror of host/src/bin/probe.rs). Speaks the
-// real v2 handshake and encrypted framing with CryptoKit, then acts out one
+// real v2 cryptographic handshake and v3 session framing with CryptoKit, then acts out one
 // host answer per run:
 //
 //   busy          allow PAIR/UNPAIR; reject CLIENT_HELLO with STREAM_STOP(6)
@@ -15,7 +15,7 @@
 //
 //   swiftc -O -o fakehost Tools/fakehost.swift
 //   ./fakehost 8470 busy                      # prints the dns-sd line to run
-//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=2 pk=<hex>
+//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=3 pk=<hex>
 //
 // Then `swift run Relay` shows "Fake PC" in the picker, or
 // `swift run Relay --host 127.0.0.1:8470` dials it directly.
@@ -42,7 +42,7 @@ if let raw = try? Data(contentsOf: keyFile), let k = try? Curve25519.KeyAgreemen
 }
 let pkHex = identity.publicKey.rawRepresentation.map { String(format: "%02x", $0) }.joined()
 print("pk=\(pkHex)")
-print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=2 pk=\(pkHex)")
+print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=3 pk=\(pkHex)")
 
 extension Data {
     func be16(at o: Int) -> UInt16 { UInt16(self[startIndex + o]) << 8 | UInt16(self[startIndex + o + 1]) }
@@ -103,7 +103,7 @@ func serve(_ fd: Int32) {
     let tx = Channel(SymmetricKey(data: okm.subdata(in: 32..<64)))
     let fpBytes = SHA256.hash(data: sC.rawRepresentation).prefix(4).map { String(format: "%02X", $0) }.joined()
     print("-- handshake done with client \(fpBytes) (paired=\(claimPaired))")
-    var hello = Data(); hello.appendBE16(2); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
+    var hello = Data(); hello.appendBE16(3); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
     guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("no first message"); return }

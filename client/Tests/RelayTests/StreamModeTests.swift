@@ -43,5 +43,10 @@ final class StreamModeTests: XCTestCase {
         let o = LaunchOptions.parse(["Relay", "--scale", "0.5", "--max-fps", "60"])
         XCTAssertTrue(o.scaleGiven); XCTAssertEqual(o.scale, 0.5)
         XCTAssertTrue(o.maxFPSGiven); XCTAssertEqual(o.maxFPS, 60)
+
+        XCTAssertFalse(LaunchOptions.parse(["Relay"]).bitrateGiven)
+        let bitrate = LaunchOptions.parse(["Relay", "--bitrate", "500"])
+        XCTAssertTrue(bitrate.bitrateGiven)
+        XCTAssertEqual(bitrate.bitrateMbps, 500)
     }
 }

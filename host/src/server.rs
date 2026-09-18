@@ -1,6 +1,7 @@
 //! TCP server and per-connection session: hello exchange, virtual display
 //! lifecycle, encoder pump, input reader, keep-alive pings.
 
+use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +37,11 @@ const FRAME_TIMING_INTERVAL: u64 = 4;
 /// Longest a single encrypted frame write may block before the client is
 /// treated as stalled. Bounds `pump` so a wedged client cannot freeze it.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// A selected bitrate is unsustainable when the sender spends nearly all of
+/// this interval writing yet cannot deliver frames at the requested rate.
+const CONGESTION_WINDOW: Duration = Duration::from_secs(5);
+const CONGESTION_MIN_FPS_RATIO: f64 = 0.95;
+const CONGESTION_MIN_SEND_UTILIZATION: f64 = 0.80;
 const ENCODER_RESTART_DELAY: Duration = Duration::from_millis(250);
 const ENCODER_RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Between capture attempts while the desktop refuses us (locked). The
@@ -51,7 +57,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub name: String,
     pub ffmpeg: PathBuf,
-    pub bitrate_mbps: u32,
+    /// Explicit administrator override. Without it, CLIENT_HELLO owns bitrate.
+    pub bitrate_override_mbps: Option<u16>,
     pub fps: Option<u32>,
     pub codec: Codec,
     pub gop_seconds: u32,
@@ -583,12 +590,13 @@ fn handle_session(
     }
     let hello = ClientHello::parse(&payload).ok_or_else(|| anyhow!("malformed CLIENT_HELLO"))?;
     log::info!(
-        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz, codecs 0b{:03b}, input={}",
+        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz at {} Mbps, codecs 0b{:03b}, input={}",
         hello.name,
         hello.version,
         hello.width,
         hello.height,
         hello.refresh,
+        hello.bitrate_mbps,
         hello.codecs,
         hello.wants_input
     );
@@ -637,16 +645,21 @@ fn handle_session(
     let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
     let placement = source.placement;
     let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));
+    let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
     log::info!(
-        "capturing {} at {fps} fps, {} {} Mbps via {}",
+        "capturing {} at {fps} fps, {} {bitrate_mbps} Mbps via {}{}",
         source.monitor().device_name,
         if codec == Codec::Hevc {
             "HEVC"
         } else {
             "H.264"
         },
-        cfg.bitrate_mbps,
-        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg)
+        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg),
+        if cfg.bitrate_override_mbps.is_some() {
+            " (host override)"
+        } else {
+            ""
+        }
     );
 
     tx.send(
@@ -656,6 +669,7 @@ fn handle_session(
             placement.width as u16,
             placement.height as u16,
             fps as u16,
+            bitrate_mbps as u16,
             codec,
         ),
     )?;
@@ -678,7 +692,7 @@ fn handle_session(
         encode_adapter_idx: cfg.gpu.adapter_index,
         output_idx: source.location.output_index,
         fps,
-        bitrate_mbps: cfg.bitrate_mbps,
+        bitrate_mbps,
         codec,
         gop: cfg.gop_seconds.max(1) * fps,
         quality: cfg.quality,
@@ -783,6 +797,7 @@ fn pump(
     let mut restart_attempts = 0u32;
     let mut last_reassert: Option<Instant> = None;
     let mut frame_sequence = 0u64;
+    let mut congestion = CongestionWindow::new();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -909,6 +924,15 @@ fn pump(
         let flags = if au.keyframe { FLAG_KEYFRAME } else { 0 };
         tx.send_nals(msg::FRAME, flags, &au.nals)?;
         let frame_send = send_at.elapsed();
+        if congestion.observe(frame_send, recovery.encoder_config.fps) {
+            let bitrate = recovery.encoder_config.bitrate_mbps;
+            log::warn!(
+                "connection could not sustain {bitrate} Mbps at {} fps; ending the session",
+                recovery.encoder_config.fps
+            );
+            let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::BANDWIDTH_EXCEEDED]);
+            bail!("connection could not sustain the selected {bitrate} Mbps bitrate");
+        }
         if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
             let (capture_us, encode_us) = au
                 .timing
@@ -1045,6 +1069,56 @@ fn duration_us(duration: Duration) -> u32 {
     duration.as_micros().min(u128::from(u32::MAX - 1)) as u32
 }
 
+fn selected_bitrate(requested: u16, override_mbps: Option<u16>) -> u32 {
+    u32::from(override_mbps.unwrap_or(requested))
+}
+
+/// A rolling five-second window distinguishes a slow encoder from a sender
+/// that is consuming the whole frame budget. An isolated keyframe or scheduler
+/// stall ages out instead of accumulating toward failure.
+struct CongestionWindow {
+    samples: VecDeque<(Instant, Duration)>,
+    send_time: Duration,
+}
+
+impl CongestionWindow {
+    fn new() -> Self {
+        Self {
+            samples: VecDeque::new(),
+            send_time: Duration::ZERO,
+        }
+    }
+
+    fn observe(&mut self, frame_send: Duration, target_fps: u32) -> bool {
+        let now = Instant::now();
+        self.samples.push_back((now, frame_send));
+        self.send_time += frame_send;
+        while self.samples.len() > 1 && now.duration_since(self.samples[1].0) >= CONGESTION_WINDOW {
+            if let Some((_, removed_send)) = self.samples.pop_front() {
+                self.send_time = self.send_time.saturating_sub(removed_send);
+            }
+        }
+        let elapsed = now.duration_since(self.samples.front().expect("sample just added").0);
+        if elapsed < CONGESTION_WINDOW {
+            return false;
+        }
+        is_congested(
+            elapsed,
+            self.samples.len() as u64,
+            self.send_time,
+            target_fps,
+        )
+    }
+}
+
+fn is_congested(elapsed: Duration, frames: u64, send_time: Duration, target_fps: u32) -> bool {
+    let seconds = elapsed.as_secs_f64();
+    let achieved_fps = frames as f64 / seconds;
+    let send_utilization = send_time.as_secs_f64() / seconds;
+    achieved_fps < f64::from(target_fps) * CONGESTION_MIN_FPS_RATIO
+        && send_utilization >= CONGESTION_MIN_SEND_UTILIZATION
+}
+
 #[cfg(test)]
 mod display_claim_tests {
     use super::*;
@@ -1068,5 +1142,34 @@ mod display_claim_tests {
         assert!(!claimed.load(Ordering::Acquire));
         assert!(status.lock().unwrap().session.is_none());
         assert!(DisplayClaim::acquire(&claimed, &status).is_some());
+    }
+
+    #[test]
+    fn client_bitrate_wins_without_an_override() {
+        assert_eq!(selected_bitrate(1, None), 1);
+        assert_eq!(selected_bitrate(1_000, None), 1_000);
+    }
+
+    #[test]
+    fn explicit_host_bitrate_overrides_the_client() {
+        assert_eq!(selected_bitrate(120, Some(500)), 500);
+    }
+
+    #[test]
+    fn congestion_requires_both_underproduction_and_network_bound_send_time() {
+        let elapsed = Duration::from_secs(5);
+        assert!(is_congested(
+            elapsed,
+            500,
+            Duration::from_millis(4_500),
+            120
+        ));
+        assert!(!is_congested(
+            elapsed,
+            600,
+            Duration::from_millis(4_500),
+            120
+        ));
+        assert!(!is_congested(elapsed, 500, Duration::from_secs(2), 120));
     }
 }

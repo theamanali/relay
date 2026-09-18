@@ -2,10 +2,13 @@
 
 use std::io::{self, Read, Write};
 
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const DEFAULT_PORT: u16 = 8468;
 pub const SERVICE_TYPE: &str = "_relay._tcp.local.";
 pub const MAX_PAYLOAD: u32 = 64 * 1024 * 1024;
+pub const DEFAULT_BITRATE_MBPS: u16 = 120;
+pub const MIN_BITRATE_MBPS: u16 = 1;
+pub const MAX_BITRATE_MBPS: u16 = 1_000;
 
 #[allow(dead_code)] // the full table documents the protocol even where the host has no use yet
 pub mod msg {
@@ -97,6 +100,8 @@ pub mod stop_reason {
     pub const UNPAIRED: u8 = 5;
     /// Another client owns the display; sent in reply to CLIENT_HELLO.
     pub const BUSY: u8 = 6;
+    /// The connection could not carry encoded frames at the requested bitrate.
+    pub const BANDWIDTH_EXCEEDED: u8 = 7;
 }
 
 /// PAIR_RESULT payload: `u8 result`, followed by `u16 seconds` until pairing
@@ -113,6 +118,7 @@ pub struct ClientHello {
     pub width: u16,
     pub height: u16,
     pub refresh: u16,
+    pub bitrate_mbps: u16,
     pub wants_input: bool,
     pub codecs: u8,
     pub name: String,
@@ -120,18 +126,23 @@ pub struct ClientHello {
 
 impl ClientHello {
     pub fn parse(p: &[u8]) -> Option<Self> {
-        if p.len() < 11 {
+        if p.len() < 13 {
             return None;
         }
-        let name_len = p[10] as usize;
-        let name = p.get(11..11 + name_len)?;
+        let bitrate_mbps = u16::from_be_bytes([p[8], p[9]]);
+        if !(MIN_BITRATE_MBPS..=MAX_BITRATE_MBPS).contains(&bitrate_mbps) {
+            return None;
+        }
+        let name_len = p[12] as usize;
+        let name = p.get(13..13 + name_len)?;
         Some(ClientHello {
             version: u16::from_be_bytes([p[0], p[1]]),
             width: u16::from_be_bytes([p[2], p[3]]),
             height: u16::from_be_bytes([p[4], p[5]]),
             refresh: u16::from_be_bytes([p[6], p[7]]),
-            wants_input: p[8] & 0x01 != 0,
-            codecs: p[9],
+            bitrate_mbps,
+            wants_input: p[10] & 0x01 != 0,
+            codecs: p[11],
             name: String::from_utf8_lossy(name).into_owned(),
         })
     }
@@ -177,11 +188,12 @@ pub fn server_hello(name: &str) -> Vec<u8> {
     p
 }
 
-pub fn stream_start(width: u16, height: u16, fps: u16, codec: Codec) -> Vec<u8> {
-    let mut p = Vec::with_capacity(8);
+pub fn stream_start(width: u16, height: u16, fps: u16, bitrate_mbps: u16, codec: Codec) -> Vec<u8> {
+    let mut p = Vec::with_capacity(10);
     p.extend_from_slice(&width.to_be_bytes());
     p.extend_from_slice(&height.to_be_bytes());
     p.extend_from_slice(&fps.to_be_bytes());
+    p.extend_from_slice(&bitrate_mbps.to_be_bytes());
     p.push(codec as u8);
     p.push(0);
     p
@@ -205,7 +217,7 @@ pub fn read_msg(r: &mut impl Read) -> io::Result<(u8, u8, Vec<u8>)> {
 
 #[cfg(test)]
 mod timing_tests {
-    use super::FrameTiming;
+    use super::*;
 
     #[test]
     fn frame_timing_round_trips() {
@@ -218,5 +230,49 @@ mod timing_tests {
         };
         assert_eq!(FrameTiming::parse(&timing.payload()), Some(timing));
         assert_eq!(FrameTiming::parse(&timing.payload()[..23]), None);
+    }
+
+    fn hello(bitrate_mbps: u16) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&VERSION.to_be_bytes());
+        payload.extend_from_slice(&3024u16.to_be_bytes());
+        payload.extend_from_slice(&1964u16.to_be_bytes());
+        payload.extend_from_slice(&120u16.to_be_bytes());
+        payload.extend_from_slice(&bitrate_mbps.to_be_bytes());
+        payload.push(1);
+        payload.push(Codec::H264.bit() | Codec::Hevc.bit());
+        payload.push(3);
+        payload.extend_from_slice(b"Mac");
+        payload
+    }
+
+    #[test]
+    fn client_hello_accepts_bitrate_boundaries() {
+        assert_eq!(
+            ClientHello::parse(&hello(MIN_BITRATE_MBPS))
+                .unwrap()
+                .bitrate_mbps,
+            MIN_BITRATE_MBPS
+        );
+        assert_eq!(
+            ClientHello::parse(&hello(MAX_BITRATE_MBPS))
+                .unwrap()
+                .bitrate_mbps,
+            MAX_BITRATE_MBPS
+        );
+    }
+
+    #[test]
+    fn client_hello_rejects_invalid_bitrates() {
+        assert!(ClientHello::parse(&hello(0)).is_none());
+        assert!(ClientHello::parse(&hello(MAX_BITRATE_MBPS + 1)).is_none());
+    }
+
+    #[test]
+    fn stream_start_reports_selected_bitrate() {
+        assert_eq!(
+            stream_start(3024, 1964, 120, 500, Codec::Hevc),
+            [0x0b, 0xd0, 0x07, 0xac, 0, 120, 0x01, 0xf4, 2, 0]
+        );
     }
 }

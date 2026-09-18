@@ -3,7 +3,7 @@
 import Foundation
 
 enum Proto {
-    static let version: UInt16 = 2
+    static let version: UInt16 = 3
     static let defaultPort: UInt16 = 8468
     static let serviceType = "_relay._tcp"
     static let headerSize = 8
@@ -65,13 +65,17 @@ enum Proto {
         let width: Int
         let height: Int
         let fps: Int
+        let bitrateMbps: Int
         let codec: Codec
 
         init?(_ p: Data) {
-            guard p.count >= 8, let codec = Codec(rawValue: p[p.startIndex + 6]) else { return nil }
+            guard p.count >= 10, let codec = Codec(rawValue: p[p.startIndex + 8]) else { return nil }
+            let bitrateMbps = Int(p.be16(at: 6))
+            guard (VideoBitrate.minimum...VideoBitrate.maximum).contains(bitrateMbps) else { return nil }
             width = Int(p.be16(at: 0))
             height = Int(p.be16(at: 2))
             fps = Int(p.be16(at: 4))
+            self.bitrateMbps = bitrateMbps
             self.codec = codec
         }
     }
@@ -142,12 +146,14 @@ enum Proto {
         return d
     }
 
-    static func clientHello(width: Int, height: Int, refresh: Int, wantsInput: Bool, codecs: UInt8, name: String) -> Data {
+    static func clientHello(width: Int, height: Int, refresh: Int, bitrateMbps: Int,
+                            wantsInput: Bool, codecs: UInt8, name: String) -> Data {
         var p = Data()
         p.appendBE16(version)
         p.appendBE16(UInt16(clamping: width))
         p.appendBE16(UInt16(clamping: height))
         p.appendBE16(UInt16(clamping: refresh))
+        p.appendBE16(UInt16(VideoBitrate.clamp(bitrateMbps)))
         p.append(wantsInput ? 0x01 : 0x00)
         p.append(codecs)
         let nameBytes = Array(name.utf8.prefix(255))

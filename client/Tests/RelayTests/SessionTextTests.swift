@@ -18,6 +18,14 @@ final class SessionTextTests: XCTestCase {
         XCTAssertEqual(SessionText.ended("host stopped the stream (reason 6)", streamed: false), "The PC is in another session")
         XCTAssertEqual(SessionText.ended("the PC didn't answer", streamed: false), "The PC didn't answer")
         XCTAssertEqual(
+            SessionText.ended("host stopped the stream (reason 7)", streamed: true, bitrateMbps: 500),
+            "Connection couldn't sustain 500 Mbps — choose a lower bitrate."
+        )
+        XCTAssertEqual(
+            SessionText.ended("read error: connection reset", streamed: true, bitrateMbps: 500),
+            "Lost connection at 500 Mbps — try a lower bitrate."
+        )
+        XCTAssertEqual(
             SessionText.ended("too many wrong PINs — the host accepts none for 599 s", streamed: false),
             "Too many wrong PINs — try again later"
         )
@@ -31,7 +39,7 @@ final class SessionTextTests: XCTestCase {
         XCTAssertEqual(SessionText.retryWait(seconds: 0), "1 min")
     }
 
-    func testEveryMessageFitsTheFooter() {
+    func testCompactMessagesFitTheFooter() {
         let reasons = ["the host rejected the PIN", "pairing cancelled", "handshake failed: host identity changed",
                        "too many wrong PINs — the host accepts none for 599 s", "the PC is in another session",
                        "the PC didn't answer",

@@ -27,7 +27,7 @@ private final class PickerTableView: NSTableView {
     }
 }
 
-final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+final class HostPickerWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate {
     weak var pickerDelegate: HostPickerDelegate?
 
     private let table = PickerTableView()
@@ -37,6 +37,8 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
     private let statusLabel = NSTextField(labelWithString: "")
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
     private let optionsButton = NSButton(title: "", target: nil, action: nil)
+    private weak var bitrateSlider: NSSlider?
+    private weak var bitrateField: NSTextField?
     /// Session options shown in the gear popover; set by the app, saved by it.
     var prefs = SessionPrefs()
     var onPrefsChange: ((SessionPrefs) -> Void)?
@@ -528,6 +530,48 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let popover = NSPopover()
         popover.behavior = .transient
 
+        let videoLabel = NSTextField(labelWithString: "Video")
+        videoLabel.font = Style.Font.section
+        videoLabel.textColor = .secondaryLabelColor
+
+        let slider = NSSlider(
+            value: VideoBitrate.sliderPosition(for: prefs.bitrateMbps),
+            minValue: 0,
+            maxValue: 1,
+            target: self,
+            action: #selector(optionChanged(_:))
+        )
+        slider.identifier = .init("bitrateSlider")
+        slider.isContinuous = true
+        slider.setAccessibilityLabel("Video bitrate")
+        slider.toolTip = "Video bitrate from 1 to 1,000 Mbps"
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+
+        let bitrate = NSTextField(string: String(prefs.bitrateMbps))
+        bitrate.identifier = .init("bitrateField")
+        bitrate.alignment = .right
+        bitrate.delegate = self
+        bitrate.target = self
+        bitrate.action = #selector(optionChanged(_:))
+        bitrate.setAccessibilityLabel("Video bitrate in megabits per second")
+        bitrate.translatesAutoresizingMaskIntoConstraints = false
+        bitrate.widthAnchor.constraint(equalToConstant: 58).isActive = true
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.allowsFloats = false
+        bitrate.formatter = formatter
+
+        let unit = NSTextField(labelWithString: "Mbps")
+        unit.font = Style.Font.body
+        let bitrateRow = NSStackView(views: [slider, bitrate, unit])
+        bitrateRow.orientation = .horizontal
+        bitrateRow.alignment = .centerY
+        bitrateRow.spacing = Style.Space.s
+        bitrateSlider = slider
+        bitrateField = bitrate
+        syncBitrateControls()
+
         let modifiers = NSPopUpButton(frame: .zero, pullsDown: false)
         modifiers.addItem(withTitle: "⌘ acts as Ctrl (Mac shortcuts work)")
         modifiers.lastItem?.representedObject = ModifierMapping.mac.rawValue
@@ -548,10 +592,12 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let keyboardLabel = NSTextField(labelWithString: "Keyboard")
         keyboardLabel.font = Style.Font.section
         keyboardLabel.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [keyboardLabel, modifiers, input, latency])
+        let stack = NSStackView(views: [videoLabel, bitrateRow, keyboardLabel, modifiers, input, latency])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = Style.Space.s
+        stack.setCustomSpacing(Style.Space.xs, after: videoLabel)
+        stack.setCustomSpacing(Style.Space.l, after: bitrateRow)
         stack.setCustomSpacing(Style.Space.xs, after: keyboardLabel)
         stack.edgeInsets = NSEdgeInsets(top: Style.Space.l, left: Style.Space.l, bottom: Style.Space.l, right: Style.Space.l)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -571,6 +617,11 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
 
     @objc private func optionChanged(_ sender: NSControl) {
         switch sender.identifier?.rawValue {
+        case "bitrateSlider":
+            prefs.bitrateMbps = VideoBitrate.bitrate(forSliderPosition: (sender as? NSSlider)?.doubleValue ?? 0)
+            syncBitrateControls()
+        case "bitrateField":
+            commitBitrateField(sender as? NSTextField)
         case "modifiers":
             if let raw = (sender as? NSPopUpButton)?.selectedItem?.representedObject as? String,
                let m = ModifierMapping(rawValue: raw) {
@@ -581,6 +632,25 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         default: return
         }
         onPrefsChange?(prefs)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField,
+              field.identifier?.rawValue == "bitrateField" else { return }
+        commitBitrateField(field)
+        onPrefsChange?(prefs)
+    }
+
+    private func commitBitrateField(_ field: NSTextField?) {
+        let entered = Int(field?.stringValue ?? "") ?? prefs.bitrateMbps
+        prefs.bitrateMbps = VideoBitrate.clamp(entered)
+        syncBitrateControls()
+    }
+
+    private func syncBitrateControls() {
+        bitrateSlider?.doubleValue = VideoBitrate.sliderPosition(for: prefs.bitrateMbps)
+        bitrateField?.stringValue = String(prefs.bitrateMbps)
+        bitrateSlider?.setAccessibilityValue("\(prefs.bitrateMbps) Mbps")
     }
 
     // MARK: table

@@ -30,6 +30,13 @@ struct Args {
     height: u16,
     #[arg(long, default_value_t = 60)]
     hz: u16,
+    /// Video bitrate to request, in Mbps
+    #[arg(
+        long,
+        default_value_t = protocol::DEFAULT_BITRATE_MBPS,
+        value_parser = clap::value_parser!(u16).range(1..=1_000)
+    )]
+    bitrate: u16,
     /// How long to stay connected
     #[arg(long, default_value_t = 5)]
     seconds: u64,
@@ -116,6 +123,7 @@ fn main() -> Result<()> {
     hello.extend_from_slice(&args.width.to_be_bytes());
     hello.extend_from_slice(&args.height.to_be_bytes());
     hello.extend_from_slice(&args.hz.to_be_bytes());
+    hello.extend_from_slice(&args.bitrate.to_be_bytes());
     hello.push(0x01); // wants input
     hello.push(Codec::H264.bit() | Codec::Hevc.bit());
     hello.push(5);
@@ -171,7 +179,11 @@ fn main() -> Result<()> {
                 let w = u16::from_be_bytes([p[0], p[1]]);
                 let h = u16::from_be_bytes([p[2], p[3]]);
                 let fps = u16::from_be_bytes([p[4], p[5]]);
-                println!("STREAM_START {w}x{h} @ {fps} fps, codec {}", p[6]);
+                let bitrate = u16::from_be_bytes([p[6], p[7]]);
+                println!(
+                    "STREAM_START {w}x{h} @ {fps} fps, {bitrate} Mbps, codec {}",
+                    p[8]
+                );
             }
             msg::CODEC_CONFIG => {
                 configs += 1;
@@ -245,6 +257,7 @@ fn stop_name(reason: Option<u8>) -> String {
         Some(r::NOT_PAIRED) => "not paired".into(),
         Some(r::UNPAIRED) => "unpaired".into(),
         Some(r::BUSY) => "busy with another client".into(),
+        Some(r::BANDWIDTH_EXCEEDED) => "selected bitrate exceeds connection bandwidth".into(),
         Some(other) => format!("reason {other}"),
         None => "no reason given".into(),
     }

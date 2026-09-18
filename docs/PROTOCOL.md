@@ -1,4 +1,4 @@
-# Relay wire protocol (v2)
+# Relay wire protocol (v3)
 
 One TCP connection, one client at a time. Host (Windows PC) listens on **TCP 8468**
 and advertises itself over mDNS as `_relay._tcp.local.`. The client
@@ -178,11 +178,11 @@ another session" rather than retry in a loop.
 | type | name           | payload |
 |------|----------------|---------|
 | 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8) |
-| 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u8 codec`, `u8 reserved` |
+| 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 reserved` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
 | 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
-| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request, 6 = busy with another client) |
+| 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request, 6 = busy with another client, 7 = selected bitrate exceeded the connection's sustained bandwidth) |
 | 0x07 | PING           | `u64 host_time_us` |
 | 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
 
@@ -202,11 +202,19 @@ cannot associate an encoded access unit with the originating capture. The client
 estimates one-way network latency as half the measured ping round trip. Existing
 clients can ignore this message and continue decoding the preceding FRAME normally.
 
+The host bounds encoded output waiting behind the socket. If, for a continuous
+five-second window, frame delivery stays below 95% of the selected frame rate
+while encryption and writes consume at least 80% of wall time, the connection
+cannot sustain the selected bitrate. The host stops capture, best-effort sends
+STREAM_STOP reason 7, closes the connection and restores the display. It never
+silently changes the requested bitrate, and the client must not automatically
+retry reason 7 without a lower user-selected value.
+
 ## Client → host
 
 | type | name         | payload |
 |------|--------------|---------|
-| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name` |
+| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name` |
 | 0x87 | PONG         | echo of the PING payload |
 | 0x90 | MOUSE_MOVE   | `u16 x`, `u16 y` — position normalised to 0..65535 across the streamed frame |
 | 0x91 | MOUSE_BUTTON | `u8 button` (0 left, 1 right, 2 middle, 3 back, 4 forward), `u8 down` |
@@ -218,6 +226,9 @@ bit 0 = H.264, bit 1 = HEVC, bit 2 = AV1. `width_px`/`height_px` are the
 client's native **pixel** size; the host uses them to pick the virtual display
 mode (falling back to the closest mode the driver offers). `refresh_hz` is a
 request; the host may answer with a lower `fps` in STREAM_START.
+`bitrate_mbps` is the requested CBR video bitrate and must be 1 through 1000.
+The host uses it unless it was started with an explicit `--bitrate` override;
+`STREAM_START` reports the bitrate actually selected.
 
 Keys are sent as HID usages so the protocol is platform-neutral; the client
 decides how macOS modifiers map (default: ⌘→Ctrl, ⌥→Alt, ⌃→Win) and the host
@@ -228,6 +239,6 @@ translates HID usages to PS/2 scan codes for `SendInput`.
 - With the ffmpeg-based encoder (milestone 1) the host learns an access unit is
   complete only when the next AU's delimiter arrives, which costs one frame
   interval of latency. The in-process encoder (milestone 5) removes that.
-- Version negotiation: both sides send `proto_version` (currently 2) inside the
+- Version negotiation: both sides send `proto_version` (currently 3) inside the
   hellos; the handshake carries its own version in msg1/msg2. A host that
   doesn't support the client's version sends STREAM_STOP and closes.

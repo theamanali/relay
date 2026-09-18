@@ -23,8 +23,9 @@ enum SessionText {
 
     /// The footer line after a session or attempt ends. `streamed` says
     /// whether a picture was ever shown, which decides "couldn't connect"
-    /// against "disconnected". Every result fits `footerLimit`.
-    static func ended(_ reason: String, streamed: Bool) -> String {
+    /// against "disconnected". The picker clips longer actionable messages
+    /// to `footerLimit` while preserving the full text in its tooltip.
+    static func ended(_ reason: String, streamed: Bool, bitrateMbps: Int? = nil) -> String {
         let r = reason.lowercased()
         func has(_ needle: String) -> Bool { r.contains(needle) }
 
@@ -32,6 +33,12 @@ enum SessionText {
         if has("rejected the pin") { return "Wrong PIN — try again" }
         if has("pairing cancelled") { return "Pairing cancelled" }
         if has("another session") || has("reason 6") { return "The PC is in another session" }
+        if has("couldn't sustain") || has("reason 7") {
+            if let bitrateMbps {
+                return "Connection couldn't sustain \(bitrateMbps) Mbps — choose a lower bitrate."
+            }
+            return "Connection couldn't sustain the selected bitrate — choose a lower bitrate."
+        }
         if has("host identity changed") { return "PC identity changed — forget it, pair again" }
         if has("does not know this macbook") || has("reason 4") { return "PC doesn't know this MacBook — pair again" }
         if has("speaks protocol") || has("reason 3") { return "The PC runs a different Relay version" }
@@ -42,6 +49,9 @@ enum SessionText {
         }
         if has("no output") || has("waiting") || has("didn't answer") { return "The PC didn't answer" }
         if has("connection failed") || has("read error") || has("send failed") {
+            if streamed, let bitrateMbps {
+                return "Lost connection at \(bitrateMbps) Mbps — try a lower bitrate."
+            }
             return streamed ? "Lost the connection to the PC" : "Couldn't reach the PC"
         }
         if has("handshake failed") || has("secure channel") || has("encryption failed") {

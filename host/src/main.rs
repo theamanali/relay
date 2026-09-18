@@ -99,9 +99,14 @@ struct ServeArgs {
     #[arg(long, default_value = "ffmpeg")]
     ffmpeg: PathBuf,
 
-    /// Video bitrate in Mbps (CBR). A direct GbE link takes 100-300 comfortably.
-    #[arg(long, default_value_t = 120)]
-    bitrate: u32,
+    /// Override the client's requested video bitrate in Mbps (CBR).
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(u16).range(
+            i64::from(protocol::MIN_BITRATE_MBPS)..=i64::from(protocol::MAX_BITRATE_MBPS)
+        )
+    )]
+    bitrate: Option<u16>,
 
     /// Force a capture/encode frame rate instead of the display's refresh rate
     #[arg(long)]
@@ -582,7 +587,7 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         port: args.port,
         name,
         ffmpeg: args.ffmpeg,
-        bitrate_mbps: args.bitrate,
+        bitrate_override_mbps: args.bitrate,
         fps: args.fps,
         codec: args.codec.into(),
         gop_seconds: args.gop,

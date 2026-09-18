@@ -8,7 +8,7 @@ use std::ffi::{c_void, CStr};
 use std::mem::{size_of, zeroed, MaybeUninit};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -49,6 +49,7 @@ pub struct NativeNvenc {
     api: NvApi,
     encoder: *mut c_void,
     events_rx: Option<Receiver<OutputEvent>>,
+    free_tx: Sender<usize>,
     capture: Option<JoinHandle<CaptureLoop>>,
     worker: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
@@ -185,7 +186,7 @@ struct CaptureLoop {
     sleeper: HighResSleeper,
     worker_tx: Option<Sender<(PendingOutput, CaptureInfo)>>,
     free_rx: Receiver<usize>,
-    events_tx: Sender<OutputEvent>,
+    events_tx: SyncSender<OutputEvent>,
     stop: Arc<AtomicBool>,
 }
 
@@ -304,7 +305,10 @@ impl NativeNvenc {
 
         let (pending_tx, pending_rx) = mpsc::channel();
         let (free_tx, free_rx) = mpsc::channel();
-        let (events_tx, events_rx) = mpsc::channel();
+        // Completed access units must not accumulate without bound when TCP is
+        // slower than the encoder. Backpressure reaches the two NVENC slots
+        // instead of retaining an ever-growing queue of encoded frames.
+        let (events_tx, events_rx) = mpsc::sync_channel(PIPELINE_DEPTH);
         let stop = Arc::new(AtomicBool::new(false));
 
         let worker_context = OutputWorkerContext {
@@ -313,9 +317,10 @@ impl NativeNvenc {
             codec: cfg.codec,
         };
         let worker_events = events_tx.clone();
+        let worker_free = free_tx.clone();
         let worker = match thread::Builder::new()
             .name("nvenc-output".into())
-            .spawn(move || output_worker(worker_context, pending_rx, worker_events, free_tx))
+            .spawn(move || output_worker(worker_context, pending_rx, worker_events, worker_free))
         {
             Ok(worker) => worker,
             Err(error) => {
@@ -400,6 +405,7 @@ impl NativeNvenc {
             api: session.api,
             encoder: session.encoder,
             events_rx: Some(events_rx),
+            free_tx,
             capture: Some(capture),
             worker: Some(worker),
             stop,
@@ -436,6 +442,7 @@ impl NativeNvenc {
     /// Fold a finished picture's timings into the rolling stats (logging a line
     /// every `STAT_INTERVAL` frames) and hand its access unit to the caller.
     fn record_and_return(&mut self, mut completed: CompletedOutput) -> Result<Option<AccessUnit>> {
+        let slot_index = completed.slot_index;
         self.stat_capture += completed.capture.work;
         self.stat_encode += completed.encode_latency;
         self.stat_frames += 1;
@@ -475,7 +482,11 @@ impl NativeNvenc {
                 encode: completed.encode_latency,
             });
         }
-        completed.result.map(Some)
+        let result = completed.result.map(Some);
+        // The completion has left the bounded queue and its copied bitstream
+        // belongs to the server now, so this input slot may be reused.
+        let _ = self.free_tx.send(slot_index);
+        result
     }
 }
 
@@ -746,11 +757,17 @@ impl CaptureLoop {
                 Ok(true) => {}
                 Ok(false) => {
                     log::warn!("Desktop Duplication access lost; recreating native capture");
-                    let _ = self.events_tx.send(OutputEvent::CaptureLost);
+                    let _ = self.events_tx.try_send(OutputEvent::CaptureLost);
                     break;
                 }
                 Err(error) => {
-                    let _ = self.events_tx.send(OutputEvent::CaptureFailed(error));
+                    match self.events_tx.try_send(OutputEvent::CaptureFailed(error)) {
+                        Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+                        Err(TrySendError::Full(_)) => {
+                            // A full completion queue already guarantees the
+                            // server will either drain it or hit congestion.
+                        }
+                    }
                     break;
                 }
             }
@@ -1036,8 +1053,8 @@ fn raise_thread_priority(name: &str) {
 fn output_worker(
     context: OutputWorkerContext,
     pending_rx: Receiver<(PendingOutput, CaptureInfo)>,
-    events_tx: Sender<OutputEvent>,
-    free_tx: Sender<usize>,
+    events_tx: SyncSender<OutputEvent>,
+    cleanup_free_tx: Sender<usize>,
 ) {
     raise_thread_priority("nvenc-output");
     while let Ok((pending, capture)) = pending_rx.recv() {
@@ -1045,8 +1062,6 @@ fn output_worker(
         let submitted_at = pending.submitted_at;
         let result = read_worker_output(&context, pending);
         let encode_latency = submitted_at.elapsed();
-        // Free the slot first so the next capture never waits on the server.
-        let _ = free_tx.send(slot_index);
         if events_tx
             .send(OutputEvent::Completed(CompletedOutput {
                 slot_index,
@@ -1056,15 +1071,36 @@ fn output_worker(
             }))
             .is_err()
         {
+            // read_worker_output already unmapped it; let teardown clear the
+            // capture loop's bookkeeping even though no event can be queued.
+            let _ = cleanup_free_tx.send(slot_index);
             break;
         }
+        // The server returns the slot after consuming this completion. Until
+        // then a full queue applies bounded backpressure to capture.
     }
 }
 
 impl Drop for NativeNvenc {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let capture_loop = self.capture.take().and_then(|capture| capture.join().ok());
+        let mut capture_loop = self.capture.take().and_then(|capture| capture.join().ok());
+
+        // A bounded completion channel may have the output worker blocked in
+        // send(). Drain it while the worker exits; joining first would deadlock.
+        if let (Some(worker), Some(events), Some(capture_loop)) = (
+            self.worker.as_ref(),
+            self.events_rx.as_ref(),
+            capture_loop.as_mut(),
+        ) {
+            while !worker.is_finished() {
+                match events.recv_timeout(Duration::from_millis(10)) {
+                    Ok(event) => mark_completed_unmapped(event, &mut capture_loop.slots),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -1077,9 +1113,7 @@ impl Drop for NativeNvenc {
             }
             if let Some(events) = self.events_rx.take() {
                 while let Ok(event) = events.try_recv() {
-                    if let OutputEvent::Completed(output) = event {
-                        capture_loop.slots[output.slot_index].mapped = ptr::null_mut();
-                    }
+                    mark_completed_unmapped(event, &mut capture_loop.slots);
                 }
             }
             release_slots(&self.api, self.encoder, &mut capture_loop.slots);
@@ -1097,6 +1131,12 @@ impl Drop for NativeNvenc {
                 let _ = timeEndPeriod(1);
             }
         }
+    }
+}
+
+fn mark_completed_unmapped(event: OutputEvent, slots: &mut [EncodeSlot]) {
+    if let OutputEvent::Completed(output) = event {
+        slots[output.slot_index].mapped = ptr::null_mut();
     }
 }
 

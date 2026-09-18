@@ -17,7 +17,7 @@ small encrypted protocol between them.
  │ MTT VDD ────┐ virtual monitor│                        │ Bonjour: find host        │
  │             ▼                │  TCP 8468              │ TCP: hello, frames, input │
  │ DXGI Desktop Duplication     │ ───────────────────▶   │ VideoToolbox HEVC decode  │
- │ GPU HEVC enc (120 Mbps CBR)  │ ◀───────────────────   │ VT decode → display layer │
+ │ GPU HEVC enc (1–1000M CBR)   │ ◀───────────────────   │ VT decode → display layer │
  │ SendInput ◀─ mouse/keys      │  (mDNS over IPv6 LL)   │ trackpad + keys → host    │
  └──────────────────────────────┘                        └──────────────────────────┘
 ```
@@ -129,7 +129,8 @@ host\target\release\relay-host.exe --no-vdd   # dev: stream the primary monitor
 Useful flags: `--gpu 4090` (substring of the adapter name; default is the
 adapter with the most dedicated VRAM, i.e. the discrete card on a PC that also
 has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (speed is the low-latency default),
-`--bitrate 200` (Mbps), `--codec h264`, `--fps 60`, `--intra-refresh` (NVIDIA),
+`--bitrate 200` (explicitly override the client's Mbps request), `--codec h264`,
+`--fps 60`, `--intra-refresh` (NVIDIA),
 `--no-native` (fall back to the ffmpeg capture path instead of the in-process
 NVENC one), `--no-input`, `-v`.
 
@@ -176,8 +177,9 @@ first decoded frame. When the session ends the list comes back with the
 same host selected. In the footer a popup chooses the resolution — native,
 75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
 control chooses 120 or 60 Hz (shown only where the panel supports both). The **Advanced**
-button opens the options: keyboard mapping (⌘ as Ctrl, or physical positions), whether
-keyboard and mouse are sent to the PC, and the latency overlay. All of it is
+button opens the options: a logarithmic **Video bitrate** slider from 1–1000 Mbps
+with exact numeric entry (120 Mbps by default), keyboard mapping (⌘ as Ctrl, or
+physical positions), whether keyboard and mouse are sent to the PC, and the latency overlay. All of it is
 remembered; the matching command-line flags override it for one launch. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
@@ -195,7 +197,8 @@ PC will refuse them.
 Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
 `--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`
 (override the remembered mode for one launch; ¾ or ½ the pixels is softer on
-the panel but much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
+the panel but much cheaper to encode — the gaming modes), `--bitrate 500`,
+`--modifiers physical`, `--no-input`,
 and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
 **⌃⌥⌘Q leaves the stream** and returns to the host list (it quits in `--host`
 mode, and from the list itself). By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as

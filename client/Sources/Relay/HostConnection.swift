@@ -40,6 +40,7 @@ final class HostConnection {
         var requestedWidth = 0
         var requestedHeight = 0
         var requestedRefresh = 60
+        var requestedBitrateMbps = VideoBitrate.defaultValue
         var wantsInput: Bool = true
         var clientName = ""
         /// PIN to use without asking (e.g. from the command line).
@@ -79,6 +80,9 @@ final class HostConnection {
     /// The host answered our CLIENT_HELLO with STREAM_STOP(BUSY): another
     /// client owns the display. Older hosts may send this before our request.
     private(set) var hostBusy = false
+    /// Actual bitrate returned by STREAM_START; requested value before that.
+    private(set) var activeBitrateMbps: Int
+    private var bitrateExceeded = false
     private var stopped = true
     private var attempt: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
@@ -86,6 +90,7 @@ final class HostConnection {
     init(options: Options) throws {
         self.options = options
         self.serviceName = options.serviceName
+        self.activeBitrateMbps = options.requestedBitrateMbps
         self.identity = try ClientState.identity()
     }
 
@@ -215,7 +220,7 @@ final class HostConnection {
         ready = false
         receiving = false
         delegate?.connectionDidEnd(self, reason: reason)
-        guard options.reconnects else { return }
+        guard options.reconnects, !bitrateExceeded else { return }
         // Fixed-host mode: the host is probably just restarting, re-dial. A
         // busy host answers every attempt with a full handshake, so those
         // are spaced out; it may be our own session still being torn down.
@@ -318,6 +323,7 @@ final class HostConnection {
             width: options.requestedWidth,
             height: options.requestedHeight,
             refresh: options.requestedRefresh,
+            bitrateMbps: options.requestedBitrateMbps,
             wantsInput: options.wantsInput,
             codecs: Proto.Codec.hevc.bit | Proto.Codec.h264.bit,
             name: options.clientName
@@ -438,6 +444,7 @@ final class HostConnection {
 
         case .streamStart:
             guard let start = Proto.StreamStart(payload) else { return finish("malformed STREAM_START") }
+            activeBitrateMbps = start.bitrateMbps
             delegate?.connection(self, didStart: start)
 
         case .codecConfig:
@@ -476,6 +483,9 @@ final class HostConnection {
                 // while our PIN prompt was open, so keep handling it anywhere.
                 hostBusy = true
                 finish("the PC is in another session")
+            case 7:
+                bitrateExceeded = true
+                finish("connection couldn't sustain \(activeBitrateMbps) Mbps — choose a lower bitrate")
             default: finish("host stopped the stream (reason \(reason))")
             }
 

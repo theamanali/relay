@@ -25,6 +25,8 @@ struct LaunchOptions {
     var showLatency = false
     var renderer = "metal"
     var metalVSync = false
+    var bitrateMbps = VideoBitrate.defaultValue
+    var bitrateGiven = false
 
     static func parse(_ args: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -52,6 +54,14 @@ struct LaunchOptions {
                 if let v = it.next() { o.pin = v }
             case "--latency-stats":
                 o.showLatency = true
+            case "--bitrate":
+                guard let value = it.next(), let bitrate = Int(value),
+                      (VideoBitrate.minimum...VideoBitrate.maximum).contains(bitrate) else {
+                    print("--bitrate requires a whole number from 1 through 1000 Mbps")
+                    exit(2)
+                }
+                o.bitrateMbps = bitrate
+                o.bitrateGiven = true
             case "--renderer":
                 guard let value = it.next(), ["metal", "avsbdl"].contains(value) else {
                     print("--renderer requires metal or avsbdl")
@@ -79,6 +89,7 @@ struct LaunchOptions {
                   --no-input                 view only
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
                   --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
+                  --bitrate <1...1000>       request this video bitrate in Mbps (default 120)
                   --renderer metal|avsbdl    presentation backend (default metal)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
                   --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
@@ -454,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         opts.requestedHeight = h
         opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
         opts.wantsInput = prefs.forwardInput
+        opts.requestedBitrateMbps = prefs.bitrateMbps
         opts.clientName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         opts.pin = options.pin
         let c: HostConnection
@@ -653,7 +665,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             self.view.status = "Disconnected: \(reason)"
             guard self.options.fixedHost == nil else { return }
             if self.kioskActive {
-                self.leaveKiosk(reason: SessionText.ended(reason, streamed: true))
+                self.leaveKiosk(reason: SessionText.ended(
+                    reason,
+                    streamed: true,
+                    bitrateMbps: c.activeBitrateMbps
+                ))
             } else if let p = self.picker {
                 self.pendingSession = nil
                 p.connecting = false
@@ -670,7 +686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                     p.flash("Paired with \(self.currentHostLabel)")
                     if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }
                 } else {
-                    p.flash(SessionText.ended(reason, streamed: false))
+                    p.flash(SessionText.ended(reason, streamed: false, bitrateMbps: c.activeBitrateMbps))
                 }
                 // Pairing (or a host that re-paired us mid-connect) changes the split.
                 p.reloadPairing()
