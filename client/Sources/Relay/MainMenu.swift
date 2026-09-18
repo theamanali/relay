@@ -132,7 +132,7 @@ enum MainMenu {
         item(menu, "Bitrate", nil, symbol: "speedometer").submenu = bitrate
         menu.addItem(.separator())
         item(menu, "Show Latency Stats", #selector(HostPickerWindowController.toggleLatencyStats(_:)), "l",
-             [.control, .option, .command], symbol: "stopwatch")
+             [.control, .option, .command], symbol: "chart.xyaxis.line")
         return menu
     }
 
