@@ -178,6 +178,9 @@ fn main() -> Result<()> {
     let mut logger =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
     logger.format_timestamp_millis();
+    // mdns-sd logs its routine goodbye retransmission at ERROR; everything
+    // that matters from it comes back as a Result and is logged by `discovery`.
+    logger.filter_module("mdns_sd", log::LevelFilter::Off);
     if !has_console {
         // No console and no file either: nothing to say it to. Keep going anyway.
         if let Ok(file) = open_log_file() {
