@@ -330,10 +330,12 @@ fn shut_down(
     advertisement: &discovery::AdSlot,
 ) -> ! {
     log::info!("{why}");
+    // Goodbye first: the Mac's picker should not wait on the monitors
+    // coming back, which can take a couple of seconds with the driver attached.
+    discovery::withdraw(advertisement);
     if let Some(drv) = driver {
         put_displays_back(drv);
     }
-    discovery::withdraw(advertisement);
     std::process::exit(0);
 }
 
