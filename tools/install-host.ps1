@@ -57,7 +57,7 @@ if (-not $isAdmin) {
 }
 
 if ($Uninstall) {
-    $exe = Join-Path $env:ProgramFiles "Relayelay-host.exe"
+    $exe = Join-Path $env:ProgramFiles "Relay\relay-host.exe"
     if (Get-Service Relay -ErrorAction SilentlyContinue) {
         & $exe service uninstall
         if ($LASTEXITCODE -ne 0) { throw "relay-host service uninstall failed ($LASTEXITCODE)" }
@@ -259,6 +259,25 @@ if (-not (Test-Path $built)) {
 $installDir = Join-Path $env:ProgramFiles "Relay"
 $exe = Join-Path $installDir "relay-host.exe"
 $stateDir = Join-Path $env:ProgramData "Relay"
+
+# Retire the previous logon-task host before migrating its state or starting
+# the service. Removing a scheduled task does not stop its already-running
+# supervisor or child; either one can keep the single-instance mutex and make
+# the new service worker treat startup as a clean "Quit until next sign-in".
+Unregister-ScheduledTask -TaskName "Relay host" -Confirm:$false -ErrorAction SilentlyContinue
+if (Get-Service Relay -ErrorAction SilentlyContinue) {
+    Stop-Service Relay -Force -ErrorAction SilentlyContinue
+}
+$runningHosts = @(Get-Process relay-host -ErrorAction SilentlyContinue)
+if ($runningHosts.Count -gt 0) {
+    Write-Host "Stopping $($runningHosts.Count) previous Relay host process(es) ..."
+    $runningHosts | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    if (Get-Process relay-host -ErrorAction SilentlyContinue) {
+        throw "could not stop every previous Relay host process"
+    }
+}
+
 New-Item -ItemType Directory -Force $installDir, $stateDir | Out-Null
 
 # State that used to be per user: the host's identity is what the Mac has
@@ -279,12 +298,7 @@ if (Test-Path $identity) {
     & icacls.exe $identity /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" | Out-Null
 }
 
-# The service's own copy of the exe. A running service holds it, so stop first.
-if (Get-Service Relay -ErrorAction SilentlyContinue) {
-    Stop-Service Relay -Force -ErrorAction SilentlyContinue
-    Get-Process relay-host -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-}
+# Install the service's own copy of the exe.
 Copy-Item $built $exe -Force
 & $exe service install
 if ($LASTEXITCODE -ne 0) { throw "relay-host service install failed ($LASTEXITCODE)" }
