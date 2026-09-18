@@ -32,6 +32,13 @@ final class HoverCard {
         anchor = nil
     }
 
+    /// Dismiss only when `view` owns the card. A fading table-row removal can
+    /// arrive after the pointer has already moved onto another host.
+    func hide(ifAnchoredTo view: NSView) {
+        guard anchor === view else { return }
+        hide()
+    }
+
     private func cancel() {
         pending?.cancel()
         pending = nil

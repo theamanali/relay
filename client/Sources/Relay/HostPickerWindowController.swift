@@ -369,6 +369,18 @@ final class HostPickerWindowController: NSWindowController, NSTableViewDataSourc
         let diff = PickerRows.diff(old: rows, new: newRows)
         let visible = window?.isVisible ?? false
         let wasListVisible = listVisible
+        if diff.needsFullReload || !visible || !wasListVisible {
+            // `reloadData` removes row views without a mouse-exited event.
+            HoverCard.shared.hide()
+        } else {
+            // Hide a card whose host is about to animate out; cards belonging
+            // to surviving rows stay visible.
+            for index in diff.removed {
+                if let row = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? HostRowView {
+                    HoverCard.shared.hide(ifAnchoredTo: row)
+                }
+            }
+        }
         rows = newRows
         setListVisible(!newRows.isEmpty, animated: visible)
         if diff.needsFullReload || !visible || !wasListVisible {

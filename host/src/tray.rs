@@ -27,13 +27,14 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetSystemMetrics,
-    MsgWaitForMultipleObjects, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW,
-    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
-    LR_DEFAULTCOLOR, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    PM_REMOVE, QS_ALLINPUT, SM_CXSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_NULL,
-    WM_QUIT, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
+    DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetSystemMetrics, KillTimer,
+    ModifyMenuW, MsgWaitForMultipleObjects, PeekMessageW, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TrackPopupMenuEx,
+    TranslateMessage, HICON, HMENU, LR_DEFAULTCOLOR, MF_BYCOMMAND, MF_CHECKED, MF_DISABLED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PM_REMOVE, QS_ALLINPUT, SM_CXSMICON,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP,
+    WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_NULL, WM_QUIT, WM_SETTINGCHANGE, WM_TIMER,
+    WNDCLASSW, WS_OVERLAPPED,
 };
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
@@ -47,6 +48,10 @@ const ICON_DARK: &[u8] = include_bytes!("../assets/relay-dark.ico");
 /// Notification callback from the shell; `LOWORD(lParam)` carries the event.
 const WM_TRAY: u32 = WM_APP + 1;
 const ICON_ID: u32 = 1;
+const ICON_RETRY_TIMER_ID: usize = 1;
+const ICON_RETRY_MS: u32 = 1_000;
+const MENU_REFRESH_TIMER_ID: usize = 2;
+const MENU_REFRESH_MS: u32 = 100;
 /// The icon was activated from the keyboard (shellapi.h has no name for it).
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
@@ -66,8 +71,13 @@ struct Tray {
     on_quit: Box<dyn Fn()>,
     /// Explorer broadcasts this when it (re)starts: the icon must be re-added.
     taskbar_created: u32,
+    /// `NIM_ADD` succeeded for the current Explorer instance.
+    icon_added: bool,
     /// A popup menu's modal loop is running on this thread.
     menu_open: bool,
+    /// The live popup and PIN text, present only during `TrackPopupMenuEx`.
+    open_menu: Option<HMENU>,
+    open_menu_pin: String,
 }
 
 /// Show the icon and run the message loop on the calling thread until the
@@ -118,7 +128,10 @@ pub fn run(
             paired,
             on_quit: Box::new(on_quit),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+            icon_added: false,
             menu_open: false,
+            open_menu: None,
+            open_menu_pin: String::new(),
         });
         let tray = Box::into_raw(tray);
         set_user_data(hwnd, tray as isize);
@@ -126,6 +139,7 @@ pub fn run(
         // Explorer): not an error, the icon is added on TaskbarCreated.
         if let Err(e) = (*tray).add_icon() {
             log::info!("no notification area yet ({e:#}); the icon appears once Explorer is up");
+            (*tray).start_icon_retry();
         }
 
         // Started by the service: it asks us to quit through this event
@@ -178,7 +192,7 @@ impl Tray {
         data
     }
 
-    fn add_icon(&self) -> Result<()> {
+    fn add_icon(&mut self) -> Result<()> {
         let data = self.notify_data();
         unsafe {
             if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
@@ -187,15 +201,27 @@ impl Tray {
             // Version 4 delivers NIN_SELECT/NIN_KEYSELECT and the cursor
             // position in wParam instead of the legacy mouse messages alone.
             let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
+            let _ = KillTimer(self.hwnd, ICON_RETRY_TIMER_ID);
         }
+        self.icon_added = true;
         Ok(())
     }
 
-    fn remove_icon(&self) {
+    fn start_icon_retry(&self) {
+        unsafe {
+            if SetTimer(self.hwnd, ICON_RETRY_TIMER_ID, ICON_RETRY_MS, None) == 0 {
+                log::warn!("could not start the tray icon retry timer");
+            }
+        }
+    }
+
+    fn remove_icon(&mut self) {
         let data = self.notify_data();
         unsafe {
+            let _ = KillTimer(self.hwnd, ICON_RETRY_TIMER_ID);
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
         }
+        self.icon_added = false;
     }
 
     /// The taskbar theme changed: swap to the icon drawn for it.
@@ -234,6 +260,11 @@ impl Tray {
                     return;
                 }
             };
+            self.open_menu = Some(menu);
+            self.open_menu_pin = self.status.lock().unwrap().pin.clone();
+            if SetTimer(self.hwnd, MENU_REFRESH_TIMER_ID, MENU_REFRESH_MS, None) == 0 {
+                log::warn!("could not start the tray menu refresh timer");
+            }
             // Anchor above the icon itself, not at the cursor: bottom-aligned
             // at the cursor puts the last item (Quit) under the pointer, and a
             // double-click or a click-to-dismiss then quits the host.
@@ -256,10 +287,37 @@ impl Tray {
                 self.hwnd,
                 None,
             );
+            let _ = KillTimer(self.hwnd, MENU_REFRESH_TIMER_ID);
+            self.open_menu = None;
+            self.open_menu_pin.clear();
             let _ = PostMessageW(self.hwnd, WM_NULL, WPARAM(0), LPARAM(0));
             let _ = DestroyMenu(menu);
             self.menu_open = false;
             self.command(cmd.0 as u32);
+        }
+    }
+
+    /// Popup menu strings are snapshots. Keep the visible PIN current when a
+    /// successful pairing rotates it on the server thread.
+    fn refresh_open_menu(&mut self) {
+        let Some(menu) = self.open_menu else { return };
+        let pin = self.status.lock().unwrap().pin.clone();
+        if pin == self.open_menu_pin {
+            return;
+        }
+        let text = format!("PIN {}", spaced_pin(&pin));
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        match unsafe {
+            ModifyMenuW(
+                menu,
+                CMD_COPY_PIN,
+                MF_BYCOMMAND | MF_STRING,
+                CMD_COPY_PIN as usize,
+                PCWSTR(wide.as_ptr()),
+            )
+        } {
+            Ok(()) => self.open_menu_pin = pin,
+            Err(e) => log::warn!("updating the open tray PIN failed: {e:#}"),
         }
     }
 
@@ -412,6 +470,16 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == ICON_RETRY_TIMER_ID => {
+            if !tray.icon_added && tray.add_icon().is_ok() {
+                log::info!("notification area is ready; tray icon added");
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == MENU_REFRESH_TIMER_ID => {
+            tray.refresh_open_menu();
+            LRESULT(0)
+        }
         WM_ENDSESSION => {
             // Logoff or shutdown while streaming: put the displays back now,
             // there is no next start to do it.
@@ -428,8 +496,10 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         m if m == tray.taskbar_created => {
+            tray.icon_added = false;
             if let Err(e) = tray.add_icon() {
                 log::warn!("re-adding the tray icon failed: {e:#}");
+                tray.start_icon_retry();
             }
             LRESULT(0)
         }
