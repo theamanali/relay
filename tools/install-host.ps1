@@ -13,8 +13,8 @@
     3. Opens the firewall for the host's TCP port and for mDNS.
     4. Installs the Relay service (LocalSystem): it runs the host inside the signed-in
        session as SYSTEM, so the lock and login screens stream and the PC can boot
-       headless. State lives in %ProgramData%Relay (migrated from your
-       %LOCALAPPDATA%Relay on first install).
+       headless. State lives in %ProgramData%\Relay (migrated from your
+       %LOCALAPPDATA%\Relay on first install).
 
   -Driver parsec installs parsec-vdd instead (fallback: no GPU choice, at most five
   fixed modes given with -Resolutions).
@@ -31,8 +31,8 @@
 .PARAMETER Resolutions
   parsec only: up to five "WxH@Hz" modes to register. MTT modes are created on demand.
 .PARAMETER Uninstall
-  Stop and remove the service, the old tasks and %ProgramFiles%Relay. Keeps the
-  driver and %ProgramData%Relay (identity and pairings).
+  Stop and remove the service, the old tasks and %ProgramFiles%\Relay. Keeps the
+  driver and %ProgramData%\Relay (identity and pairings).
 .PARAMETER SkipDriver
   Don't (re)install the driver, only settings/firewall/service.
 #>
