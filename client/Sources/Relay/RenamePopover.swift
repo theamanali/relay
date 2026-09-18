@@ -6,6 +6,10 @@
 import AppKit
 
 final class RenamePopover: NSViewController, NSTextFieldDelegate, NSPopoverDelegate {
+    /// Windows' own limit on a computer name (NetBIOS); a nickname stands in
+    /// for one, so it gets the same room and the row never has to truncate.
+    static let maxLength = 15
+
     private let hostName: String
     private let field = NSTextField(string: "")
     private let onSave: (String) -> Void
@@ -47,21 +51,18 @@ final class RenamePopover: NSViewController, NSTextFieldDelegate, NSPopoverDeleg
         // The PC's own name is what an empty field means, so it is the placeholder.
         field.placeholderString = hostName
         field.font = Style.Font.body
+        field.formatter = LengthFormatter(limit: Self.maxLength)
         field.delegate = self
         // Return is handled in `control(_:textView:doCommandBy:)`, not through
         // the field's action: NSTextField also sends its action when editing
         // ends for any reason, and losing focus must not count as Save.
 
+        // Same buttons as the footer's Connect and Advanced: regular, rounded.
         let clear = NSButton(title: "Use PC's name", target: self, action: #selector(clearNickname))
         clear.bezelStyle = .rounded
-        clear.controlSize = .small
-        clear.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .small))
         clear.isEnabled = !field.stringValue.isEmpty
-        clear.identifier = .init("clear")
         let save = NSButton(title: "Save", target: self, action: #selector(save))
         save.bezelStyle = .rounded
-        save.controlSize = .small
-        save.font = clear.font
         save.keyEquivalent = "\r"
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -84,14 +85,23 @@ final class RenamePopover: NSViewController, NSTextFieldDelegate, NSPopoverDeleg
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -2 * Style.Space.l),
+            // An explicit width, like the Advanced popover: NSPopover sizes its
+            // window from the view's frame, and left to a fitting size the
+            // stack's insets get squeezed out.
+            view.widthAnchor.constraint(equalToConstant: Self.fieldWidth + 2 * Style.Space.l),
+            field.widthAnchor.constraint(equalToConstant: Self.fieldWidth),
             buttons.widthAnchor.constraint(equalTo: field.widthAnchor),
-            view.widthAnchor.constraint(equalToConstant: 280),
         ])
         clearButton = clear
     }
 
     private var clearButton: NSButton?
+
+    /// Room for `maxLength` of the widest glyph plus the field's own inset.
+    private static var fieldWidth: CGFloat {
+        let widest = String(repeating: "W", count: maxLength) as NSString
+        return ceil(widest.size(withAttributes: [.font: Style.Font.body]).width) + Style.Space.m
+    }
 
     /// Start with the text selected. The popover usually makes the field
     /// first responder by itself when its window becomes key; asking again
@@ -135,5 +145,38 @@ final class RenamePopover: NSViewController, NSTextFieldDelegate, NSPopoverDeleg
     private func finish(with name: String) {
         popover?.close()
         onSave(name.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
+/// Refuses the character that would exceed `limit`; a longer paste is cut.
+private final class LengthFormatter: Formatter {
+    let limit: Int
+
+    init(limit: Int) {
+        self.limit = limit
+        super.init()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func string(for obj: Any?) -> String? { obj as? String }
+
+    override func getObjectValue(_ obj: AutoreleasingUnsafeMutablePointer<AnyObject?>?, for string: String,
+                                 errorDescription: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
+        obj?.pointee = string as NSString
+        return true
+    }
+
+    override func isPartialStringValid(_ partialStringPtr: AutoreleasingUnsafeMutablePointer<NSString>,
+                                       proposedSelectedRange: NSRangePointer?,
+                                       originalString: String, originalSelectedRange: NSRange,
+                                       errorDescription: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
+        let proposed = partialStringPtr.pointee as String
+        guard proposed.count > limit else { return true }
+        let cut = String(proposed.prefix(limit))
+        partialStringPtr.pointee = cut as NSString
+        proposedSelectedRange?.pointee = NSRange(location: (cut as NSString).length, length: 0)
+        return false
     }
 }
