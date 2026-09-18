@@ -13,13 +13,13 @@ small encrypted protocol between them.
 
 ```
  Windows PC (host, Rust)                                  MacBook (client, Swift)
- ┌──────────────────────────────┐   direct GbE cable    ┌──────────────────────────┐
- │ MTT VDD ────┐ virtual monitor│                        │ Bonjour: find host        │
- │             ▼                │  TCP 8468              │ TCP: hello, frames, input │
- │ DXGI Desktop Duplication     │ ───────────────────▶   │ VideoToolbox HEVC decode  │
- │ GPU HEVC enc (120 Mbps CBR)  │ ◀───────────────────   │ VT decode → display layer │
- │ SendInput ◀─ mouse/keys      │  (mDNS over IPv6 LL)   │ trackpad + keys → host    │
- └──────────────────────────────┘                        └──────────────────────────┘
+ ââââââââââââââââââââââââââââââââ   direct GbE cable    ââââââââââââââââââââââââââââ
+ â MTT VDD âââââ virtual monitorâ                        â Bonjour: find host        â
+ â             â¼                â  TCP 8468              â TCP: hello, frames, input â
+ â DXGI Desktop Duplication     â ââââââââââââââââââââ¶   â VideoToolbox HEVC decode  â
+ â GPU HEVC enc (120 Mbps CBR)  â ââââââââââââââââââââ   â VT decode â display layer â
+ â SendInput ââ mouse/keys      â  (mDNS over IPv6 LL)   â trackpad + keys â host    â
+ ââââââââââââââââââââââââââââââââ                        ââââââââââââââââââââââââââââ
 ```
 
 1. **Virtual monitor.** Windows only believes in monitors that come from a
@@ -27,8 +27,8 @@ small encrypted protocol between them.
    [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver).
    Between sessions its device is disabled, so no virtual monitor exists at all.
    When a Mac connects the host saves your display layout, enables the device
-   (its settings file already lists every Apple laptop panel size at native, ¾
-   and ½, rendered on the GPU you chose) and makes the virtual monitor the
+   (its settings file already lists every Apple laptop panel size at native, Â¾
+   and Â½, rendered on the GPU you chose) and makes the virtual monitor the
    **only** active display at the Mac's exact pixel size. It also temporarily
    disables the physical monitor device nodes, preventing fullscreen games from
    reactivating them. On disconnect those exact devices are re-enabled, the saved
@@ -38,12 +38,12 @@ small encrypted protocol between them.
    [parsec-vdd](https://github.com/nomi-san/parsec-vdd) remains available as a
    fallback (`--driver parsec`) with neither of those two properties.
 2. **Capture + encode.** The new monitor is captured with DXGI Desktop
-   Duplication and encoded by the GPU's own encoder — NVENC, AMD AMF or Intel
-   Quick Sync, chosen from the adapter's vendor id — without leaving the GPU.
-   NVIDIA uses an in-process D3D11 → NVENC path with a GPU-composited Windows
+   Duplication and encoded by the GPU's own encoder â NVENC, AMD AMF or Intel
+   Quick Sync, chosen from the adapter's vendor id â without leaving the GPU.
+   NVIDIA uses an in-process D3D11 â NVENC path with a GPU-composited Windows
    cursor and a fixed output cadence; `--no-native` falls back to the `ffmpeg`
    child. AMD, Intel, software and cross-adapter configurations use `ffmpeg`.
-3. **Transport.** TCP with 8-byte framed messages, encrypted end to end — see
+3. **Transport.** TCP with 8-byte framed messages, encrypted end to end â see
    [docs/PROTOCOL.md](docs/PROTOCOL.md). On a dedicated cable there is no loss
    and no contention, so WebRTC-style machinery would only add latency. Discovery
    is Bonjour over the link-local IPv6 addresses both OSes assign the instant a
@@ -67,13 +67,13 @@ small encrypted protocol between them.
 | milestone | state |
 |-----------|-------|
 | 0. Toolchain, repo, protocol spec | done |
-| 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024×1964@120 HEVC stream to the `probe` tool. parsec path untested |
+| 1. Host: driver control (MTT + parsec), GPU selection, exclusive display mode with layout restore, vendor-aware ffmpeg capture/encode, TCP server, mDNS, input injection | done; verified on this PC: virtual display becomes the only display and the layout comes back on disconnect, Ctrl-C and a hard kill; 3024Ã1964@120 HEVC stream to the `probe` tool. parsec path untested |
 | 2. Mac client: Bonjour, pairing, decode, fullscreen, input | verified on the Mac: pairing, native decode, keyboard, pointer input and quit shortcut work |
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons. Bonjour goodbye handling verified on the hardware (2026-09-17): quitting the host from its tray removes the row within ~1 s with no intermediate Available state; restarting it returns the row to Paired |
-| Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
+| Mac Metal presentation | default renderer, VSync off; direct YCbCrâRGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
-| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (icons rendered on the Mac from the picker glyph). Auto-start via the installer's `-AutoStart` task. Headless boot and DPI pending |
-| 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
+| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done and verified on this PC: windowless host, status / PIN / paired-Macs menu, PIN rotates after each pairing, icon survives an Explorer restart and follows the taskbar theme (icons rendered on the Mac from the picker glyph). Start at login done and verified on this PC: unelevated logon task, exe copy in `%LOCALAPPDATA%Relaybin`, supervisor restarts a crashed host in 5 s, tray toggle, single-instance guard. Headless boot and DPI pending |
+| 5. In-process DXGI â NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024Ã1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
 
 ## Setup
 
@@ -96,14 +96,14 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet -
 cd host
 cargo build --release
 
-# driver, settings file, firewall — needs an elevated PowerShell
+# driver, settings file, firewall â needs an elevated PowerShell
 .\tools\install-host.ps1
 ```
 
 The script installs the driver, creates `C:\VirtualDisplayDriver\vdd_settings.xml`
 (writable by your account), registers the elevated helper task, opens the
 firewall, and leaves the driver device disabled. A session enables it and uses
-whatever size the connecting Mac reports (its native pixels, or ¾/½ of them with
+whatever size the connecting Mac reports (its native pixels, or Â¾/Â½ of them with
 the client's `--scale`); an unknown size is merged into the settings file first.
 Nothing is tied to one MacBook.
 `-Driver parsec` installs parsec-vdd instead; then the modes are fixed and come
@@ -129,13 +129,11 @@ adapter with the most dedicated VRAM, i.e. the discrete card on a PC that also
 has an iGPU), `--driver mtt|parsec|auto`, `--quality speed|balanced|quality` (speed is the low-latency default),
 `--bitrate 200` (Mbps), `--codec h264`, `--fps 60`, `--intra-refresh` (NVIDIA),
 `--no-native` (fall back to the ffmpeg capture path instead of the in-process
-NVENC one), `--no-input`, `-v`. Add
-`-AutoStart` to the install script to launch the host at
-logon (needed for a headless PC).
+NVENC one), `--no-input`, `-v`.
 
 The host has no window. Serving puts a Relay icon in the notification area; click it
-for the status line (`Idle` or `Streaming to <Mac> — WxH @ Hz`), the pairing PIN
-(click to copy), **New PIN**, the list of paired Macs and **Quit Relay**. The PIN
+for the status line (`Idle` or `Streaming to <Mac> â WxH @ Hz`), the pairing PIN
+(click to copy), **New PIN**, **Start at login**, the list of paired Macs and **Quit Relay**. The PIN
 changes by itself after every successful pairing, so a PIN only ever admits one Mac
 (`--pin` pins it). Started from a terminal the log goes to that terminal; started by
 the logon task or a double-click it goes to `%LOCALAPPDATA%\Relay\host.log`
@@ -145,6 +143,14 @@ shutdown restore your displays and remove the
 virtual monitor; if the host is killed, the helper task disables the virtual
 monitor and Windows brings the physical ones back, and the next host start (or
 `restore`) re-applies the saved layout.
+
+**Start at login** (tray item, `relay-host autostart --on|--off|--status`, or the
+installer's `-AutoStart`) registers a logon task for your user — no elevation —
+that runs a copy of the exe from `%LOCALAPPDATA%Relayin` under a small supervisor,
+so the host comes back within seconds if it crashes (Quit stays quit). Whenever you
+run a newer build by hand, that copy is refreshed, so the last build you ran is the one
+that starts at login. Launching a second host while one is running just shows a
+"Relay is already running" box.
 
 ### macOS client
 
@@ -156,39 +162,39 @@ swift run Relay            # dev
 
 The app opens with a host list: PCs found over Bonjour, split into **Paired** and
 **Available**, each with the link the connection will use. Hovering a PC shows a card with what it
-advertises about itself — Windows edition and version, CPU, RAM (with DDR type and speed), GPU (with VRAM) — plus its address on each link this Mac
-shares with it, labelled Ethernet, Wi-Fi or — when the wire had no DHCP and the PC self-assigned
-a 169.254 address — Direct cable (a Tailscale address is never shown),
+advertises about itself â Windows edition and version, CPU, RAM (with DDR type and speed), GPU (with VRAM) â plus its address on each link this Mac
+shares with it, labelled Ethernet, Wi-Fi or â when the wire had no DHCP and the PC self-assigned
+a 169.254 address â Direct cable (a Tailscale address is never shown),
 and its key fingerprint. For an available PC the button reads **Pair**: it
 asks for the PIN (a sheet on the list), exchanges keys and moves the PC to
-*Paired* — nothing is streamed yet. For a paired PC, Return, double-click or
+*Paired* â nothing is streamed yet. For a paired PC, Return, double-click or
 **Connect** starts the session: progress shows in the list's footer, the button
 reads *Cancel* until then, and the full-screen kiosk window appears with the
 first decoded frame. When the session ends the list comes back with the
-same host selected. In the footer a popup chooses the resolution — native,
-75% or 50% of the panel the window is on (labelled in pixels) — and a segmented
+same host selected. In the footer a popup chooses the resolution â native,
+75% or 50% of the panel the window is on (labelled in pixels) â and a segmented
 control chooses 120 or 60 Hz (shown only where the panel supports both). The **Advanced**
-button opens the options: keyboard mapping (⌘ as Ctrl, or physical positions), whether
+button opens the options: keyboard mapping (â as Ctrl, or physical positions), whether
 keyboard and mouse are sent to the PC, and the latency overlay. All of it is
 remembered; the matching command-line flags override it for one launch. This
 works on any Mac: the sizes and rates come from the screen at runtime.
 Paired status comes from the host's advertised identity key
 (`pk` in its Bonjour TXT record); a host that advertises no key, or an unknown
 one, is listed as available. The pencil on a row **renames** the PC on this Mac (its
-own name moves to the hover); the ⊗ on a paired PC (or Delete with it
+own name moves to the hover); the â on a paired PC (or Delete with it
 selected) **forgets** it: the Mac tells the PC to
-drop the pairing too, then removes it locally either way — if the PC was
+drop the pairing too, then removes it locally either way â if the PC was
 unreachable the footer shows the `relay-host paired --forget <fingerprint>` command
 to run on it.
 
 Flags: `--host 169.254.x.y` (skip the list and Bonjour; re-dials on drops),
 `--pin 123456` (otherwise a dialog asks the first time), `--scale 0.75`/`--max-fps 60`
-(override the remembered mode for one launch; ¾ or ½ the pixels is softer on
-the panel but much cheaper to encode — the gaming modes), `--modifiers physical`, `--no-input`,
-and `--latency-stats` (live host/network/client estimate; toggle with ⌃⌥⌘L).
-**⌃⌥⌘Q leaves the stream** and returns to the host list (it quits in `--host`
-mode, and from the list itself). By default ⌘ acts as Ctrl, ⌥ as Alt and ⌃ as
-Win so ⌘C/⌘V behave like Mac shortcuts.
+(override the remembered mode for one launch; Â¾ or Â½ the pixels is softer on
+the panel but much cheaper to encode â the gaming modes), `--modifiers physical`, `--no-input`,
+and `--latency-stats` (live host/network/client estimate; toggle with ââ¥âL).
+**ââ¥âQ leaves the stream** and returns to the host list (it quits in `--host`
+mode, and from the list itself). By default â acts as Ctrl, â¥ as Alt and â as
+Win so âC/âV behave like Mac shortcuts.
 
 ## Testing without a Mac
 
@@ -202,7 +208,7 @@ ffplay -f hevc capture.hevc
 ## Known limitations
 
 - The in-process NVIDIA path is the default and is verified stable at
-  3024×1964@120 in exclusive-fullscreen games (Valorant, FC 26). An earlier
+  3024Ã1964@120 in exclusive-fullscreen games (Valorant, FC 26). An earlier
   build hard-hung the GPU during a game's mode switch because the shared
   capture/encode D3D11 device lacked multithread protection; that is fixed.
   `--no-native` falls back to the ffmpeg path if a future case misbehaves.
@@ -224,12 +230,12 @@ ffplay -f hevc capture.hevc
 - On fallback paths, a completely static screen can stream at ~100 fps instead
   of the display's 120 because of ffmpeg's ddagrab pacing; moving games are the
   useful frame-rate test.
-- macOS keeps ⌘Tab, ⌘Space and the Fn media keys for itself; everything else is
+- macOS keeps âTab, âSpace and the Fn media keys for itself; everything else is
   forwarded.
 - Windows DPI scaling for the virtual monitor is a per-monitor setting Windows
-  remembers; set it once in Settings → Display (200% for a Retina-native mode).
+  remembers; set it once in Settings â Display (200% for a Retina-native mode).
 - Headless boot works once the host runs at logon; the BIOS and the login screen
-  are not visible (a $20 HDMI→USB capture dongle is still the answer for those).
+  are not visible (a $20 HDMIâUSB capture dongle is still the answer for those).
 - Pairing is PIN-based, not a PAKE: someone actively in the middle of the *first*
   pairing could brute-force the PIN. Pair on the cable or at home; afterwards the
   pinned keys make impersonation impossible, and hotel Wi-Fi is fine. Both sides

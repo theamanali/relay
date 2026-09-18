@@ -7,7 +7,8 @@
 #![windows_subsystem = "windows"]
 
 use relay_host::{
-    crypto, discovery, display, driver, encoder, gpu, protocol, server, status, topology, tray,
+    autostart, crypto, discovery, display, driver, encoder, gpu, protocol, server, status,
+    topology, tray,
 };
 
 use std::path::PathBuf;
@@ -62,6 +63,21 @@ enum Command {
         #[arg(long)]
         reapply: bool,
     },
+    /// Start the host at login (a logon task running a copy of this exe under %LOCALAPPDATA%\Relay\bin)
+    Autostart {
+        /// Register the logon task (also refreshes the exe copy)
+        #[arg(long, conflicts_with_all = ["off", "status"])]
+        on: bool,
+        /// Remove the logon task
+        #[arg(long, conflicts_with = "status")]
+        off: bool,
+        /// Print enabled/disabled; exit code 1 when disabled
+        #[arg(long)]
+        status: bool,
+    },
+    /// What the logon task runs: serve in a child process and start it again if it dies
+    #[command(hide = true)]
+    Supervise,
     /// Run a full session's display dance at a given mode — other displays go dark for a few seconds
     AttachTest {
         #[arg(long, default_value_t = 3024)]
@@ -196,6 +212,33 @@ fn main() -> Result<()> {
     result
 }
 
+/// One serving host per session. A second launch (a double-click after
+/// auto-start, say) would otherwise fail to bind the port and die silently,
+/// being windowless; tell the user where the running one is instead. The
+/// mutex handle is deliberately kept for the life of the process.
+fn claim_single_instance() {
+    use windows::core::w;
+    use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+    unsafe {
+        let handle = CreateMutexW(None, false, w!("Local\\Relay.host"));
+        let already =
+            windows::core::Error::from_win32().code() == ERROR_ALREADY_EXISTS.to_hresult();
+        if handle.is_ok() && already {
+            log::info!("another Relay host is already running in this session");
+            MessageBoxW(
+                None,
+                w!("Relay is already running \u{2014} look for its icon in the notification area."),
+                w!("Relay"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            std::process::exit(0);
+        }
+        std::mem::forget(handle);
+    }
+}
+
 /// Join the parent's console, if it has one, without losing a redirect:
 /// `AttachConsole` points every standard handle at the console, including
 /// ones the shell had already pointed at a file or pipe.
@@ -269,6 +312,25 @@ fn run(cli: Cli) -> Result<()> {
         Some(Command::Restore) => restore_displays(cli.serve.driver),
         Some(Command::Pin { new }) => show_pin(new),
         Some(Command::Paired { forget }) => paired_clients(forget),
+        Some(Command::Supervise) => autostart::supervise(),
+        Some(Command::Autostart { on, off, status: _ }) => {
+            if on {
+                autostart::enable()?;
+                println!(
+                    "start at login: enabled ({})",
+                    autostart::bin_path()?.display()
+                );
+            } else if off {
+                autostart::disable()?;
+                println!("start at login: disabled");
+            } else if autostart::is_enabled() {
+                println!("start at login: enabled");
+            } else {
+                println!("start at login: disabled");
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Some(Command::Layout { reapply }) => {
             let snap = topology::Snapshot::take()?;
             println!("active displays: {}", snap.describe());
@@ -464,6 +526,8 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
 }
 
 fn serve(args: ServeArgs) -> Result<()> {
+    claim_single_instance();
+    autostart::refresh_copy();
     let name = args
         .name
         .or_else(|| std::env::var("COMPUTERNAME").ok())

@@ -28,7 +28,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   kill, in-process DXGI → NVENC at 3024x1964@120 (stable in exclusive-fullscreen
   games), PIN pairing + encryption, real sessions over the cable from the Mac client
   (Metal presenter).
-- Milestone 4 in progress: **tray icon done** (see below). Still to do: headless boot,
+- Milestone 4 in progress: **tray icon and start-at-login done** (see below). Still to do: headless boot,
   DPI, installers/signing. Open measurement items live in `docs/HOST-LATENCY.md` and
   `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers, `--scale 0.75`, mode changes).
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
@@ -39,6 +39,17 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   windows never get `TaskbarCreated`, `WM_SETTINGCHANGE` or `WM_ENDSESSION`, all of which
   it relies on. Menu is built on each click from `status::HostStatus` (server writes,
   tray reads). The PIN rotates after every successful pairing and is never logged.
+- Start at login (`host/src/autostart.rs`): a logon task the host registers itself with
+  `schtasks /Create /XML` (UTF-16 + BOM, or schtasks chokes) — no elevation needed for a
+  task that runs as the creating user. **Task Scheduler's `RestartOnFailure` does not
+  restart a process that crashes or is killed** — it only covers a task that failed to
+  *launch* (verified: killed host, `LastTaskResult 0xFFFFFFFF`, task back to Ready, no
+  restart). So the task runs `relay-host supervise`, a parent that respawns the child on
+  a non-zero exit (5 s; 60 s backoff when it dies within 30 s) and exits with it on 0.
+  Task priority must be set to 4 explicitly; the scheduler's default 7 runs the host
+  below normal. The task runs a copy in `%LOCALAPPDATA%\Relay\bin`, refreshed whenever a
+  build from elsewhere is run while the task exists. One serving host per session is
+  enforced with the `Local\Relay.host` mutex + a message box.
 - Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
   and chosen by `SystemUsesLightTheme`. They are rendered **on the Mac** from the
   picker's glyph: `swift run Relay --render-icons ../host/assets` (done 2026-09-17;
@@ -46,8 +57,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Running it
 
-PC: `host\target\release\relay-host.exe` (tray icon with the PIN and status; `pin`,
-`paired`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
+PC: `host\target\release\relay-host.exe` (tray icon with the PIN, status and Start at login; `pin`,
+`paired`, `autostart`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
 of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier

@@ -11,7 +11,7 @@
     2. Downloads nefcon + the driver-only release zip, trusts the driver's certificate,
        creates the Root\MttVDD device node and installs the INF.
     3. Opens the firewall for the host's TCP port and for mDNS.
-    4. Optionally registers a logon task so the host starts automatically (-AutoStart),
+    4. Optionally enables start at login (-AutoStart; same as the tray's "Start at login"),
        which matters when the PC runs headless and the Mac is its only display.
 
   -Driver parsec installs parsec-vdd instead (fallback: no GPU choice, at most five
@@ -28,7 +28,7 @@
 .PARAMETER Resolutions
   parsec only: up to five "WxH@Hz" modes to register. MTT modes are created on demand.
 .PARAMETER AutoStart
-  Register a scheduled task that runs the release host binary at logon.
+  Enable start at login (runs `relay-host autostart --on`; the tray menu can toggle it later).
 .PARAMETER SkipDriver
   Don't (re)install the driver, only settings/firewall/task.
 #>
@@ -253,12 +253,12 @@ if ($AutoStart) {
     if (-not (Test-Path $exe)) {
         throw "build the release host first: cd host; cargo build --release"
     }
-    $taskName = "Relay host"
-    $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited -Force | Out-Null
-    Write-Host "Scheduled task '$taskName' registered (runs at logon, restarts if it exits)."
+    # The host registers its own logon task (a copy of the exe under
+    # %LOCALAPPDATA%\Relay\bin, run through its supervisor); the same thing the
+    # tray's "Start at login" item does. No elevation needed for that part.
+    & $exe autostart --on
+    if ($LASTEXITCODE -ne 0) { throw "relay-host autostart --on failed ($LASTEXITCODE)" }
+    Write-Host "Start at login enabled (tray menu > Start at login toggles it; 'relay-host autostart --off' removes it)."
 }
 
 Write-Host ""

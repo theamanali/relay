@@ -52,6 +52,7 @@ const CMD_COPY_PIN: u32 = 2;
 const CMD_NEW_PIN: u32 = 3;
 const CMD_PAIRED: u32 = 4;
 const CMD_QUIT: u32 = 5;
+const CMD_AUTOSTART: u32 = 6;
 
 /// Everything the window procedure needs; stored in the window's user data.
 struct Tray {
@@ -64,6 +65,9 @@ struct Tray {
     taskbar_created: u32,
     /// A popup menu's modal loop is running on this thread.
     menu_open: bool,
+    /// Whether the logon task exists. Read at startup and after each toggle,
+    /// not per menu open: a schtasks spawn costs ~100 ms.
+    autostart: bool,
 }
 
 /// Show the icon and run the message loop on the calling thread until the
@@ -115,6 +119,7 @@ pub fn run(
             on_quit: Box::new(on_quit),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             menu_open: false,
+            autostart: crate::autostart::is_enabled(),
         });
         let tray = Box::into_raw(tray);
         set_user_data(hwnd, tray as isize);
@@ -264,6 +269,12 @@ impl Tray {
         if !status.pin_fixed {
             append(menu, MF_STRING, CMD_NEW_PIN, "New PIN")?;
         }
+        let flags = if self.autostart {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        append(menu, flags, CMD_AUTOSTART, "Start at login")?;
         append(menu, MF_SEPARATOR, 0, "")?;
 
         let paired = CreatePopupMenu().context("CreatePopupMenu")?;
@@ -301,7 +312,7 @@ impl Tray {
         Ok(menu)
     }
 
-    fn command(&self, cmd: u32) {
+    fn command(&mut self, cmd: u32) {
         match cmd {
             CMD_COPY_PIN => {
                 let pin = self.status.lock().unwrap().pin.clone();
@@ -314,6 +325,25 @@ impl Tray {
                 Ok(false) => {}
                 Err(e) => log::warn!("could not rotate the pairing PIN: {e:#}"),
             },
+            CMD_AUTOSTART => {
+                let result = if self.autostart {
+                    crate::autostart::disable()
+                } else {
+                    crate::autostart::enable()
+                };
+                if let Err(e) = result {
+                    log::warn!("changing start at login failed: {e:#}");
+                }
+                self.autostart = crate::autostart::is_enabled();
+                log::info!(
+                    "start at login {}",
+                    if self.autostart {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+            }
             CMD_QUIT => (self.on_quit)(),
             _ => {}
         }

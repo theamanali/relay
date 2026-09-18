@@ -1,5 +1,6 @@
 //! Relay host library: virtual display control, capture/encode, wire protocol.
 
+pub mod autostart;
 pub mod crypto;
 mod cursor_overlay;
 pub mod discovery;
