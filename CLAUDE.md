@@ -99,9 +99,10 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   (`HostConnection` forgets it itself, next to where it `remember`s; an explicit Pair
   still gets the PIN sheet) and from STREAM_STOP 4 mid-session; `--host` mode forgets
   and the re-dial then asks for the PIN as for an unknown host. Verified 2026-09-19 against `fakehost --forget` / `--pg` / `notpaired`
-  (all four paths) and the launch-time check against the real PC over the cable
-  (`paired` 1, digest stored); the tray-Forget round trip on the hardware is still to
-  be watched. Each check shows up in `host.log` as `connection with … ended with
+  (all four paths) and on the hardware over the cable: the launch-time check stored the
+  PC's digest, a tray Forget on the PC moved the row to Available within seconds with
+  nothing touched on the Mac, and Pair from the picker brought it back (same digest as
+  before, since the PC's list held the same one key). Each check shows up in `host.log` as `connection with … ended with
   error: waiting for the first message` (the client hangs up after SERVER_HELLO);
   a quieter line is the host's to add. Spec: PROTOCOL.md Discovery + Forgetting.
 - The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
