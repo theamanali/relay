@@ -75,19 +75,35 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   (`windows_service::change_config` would rewrite the binary path); while it is off the
   service also skips the `SessionLogon`/`ConsoleConnect` respawn, `Start-Service Relay`
   is the manual way in, and so is a **double-click on the exe**: `main.rs::hand_off_to_service` — no console, no `--no-vdd`, service installed but stopped → relaunch elevated as `relay-host service start` (`ShellExecuteW runas`; `service::start`) and exit, instead of a user-session dev run. From a terminal a dev run still happens (that is how `Stop-Service Relay` + `relay-host` is used). Greyed in a dev run (`under_service` = the quit event exists).
-- **Pairing digest `pg` in the TXT record (host + spec done 2026-09-20; Mac side
-  open).** `PeerList::digest()` = first 4 bytes of SHA-256 over `DIGEST_LABEL` + the sorted paired keys (the label keeps a lone client's digest from being its fingerprint),
+- **Pairing digest `pg` in the TXT record (host + spec done 2026-09-20; Mac side done
+  2026-09-19).** `PeerList::digest()` = first 4 bytes of SHA-256 over `DIGEST_LABEL` + the sorted paired keys (the label keeps a lone client's digest from being its fingerprint),
   hex; renames do not move it. The `readvertise` thread in `server.rs` ticks every
   second: `PeerList::reload_if_changed()` (mtime; picks up `relay-host paired --forget`
   from another process, which the running host used to overwrite on its next save),
   then re-registers the record when the digest or (every 5th tick) the IPv4 set moved.
-  A tray Forget is on the air in about 1.5 s. Mac follow-up: after a PC-side Forget the
-  Mac still lists the PC under *Paired* (= key in `hosts.txt`; only the Mac's own Forget
-  removes it) and Connect re-prompts for the PIN because the handshake's `paired` byte
-  is 0. The client should keep the last verified `pg` per known host; when the
-  advertised one differs, run the handshake alone (no CLIENT_HELLO) and read `paired`;
-  0, or STREAM_STOP 4 mid-session, means "the PC forgot me": drop it from `hosts.txt`
-  and move the row to *Available*. Spec: PROTOCOL.md Discovery + Forgetting.
+  A tray Forget is on the air in about 1.5 s. Mac side: `DiscoveredHost.pairingDigest`
+  (carried forward by `HostListDebouncer` on a TXT-less report like `pk`, and not part of
+  `PickerRows.Appearance`, so a digest change alone redraws nothing);
+  `verified-digests.txt` next to `hosts.txt` holds the last digest the handshake
+  confirmed per host key (cleared by `ClientState.forget`). `AppDelegate.checkPairings`
+  (on every browse update, at launch, and after a session, cancel, forget or check
+  ends) picks the next known host whose advertised digest is neither verified nor
+  already attempted this run (`PairingVerifier`, pure; one attempt per digest value so
+  an unreachable host is not re-dialled on every update) and runs one `VerifyTask`
+  (`HostConnection.verifyOnly`: msg1, msg2, read `paired`, close; never CLIENT_HELLO, so
+  it never touches the display or another Mac's session). `paired` 1 stores the digest;
+  0 forgets the host locally, reloads the picker and flashes "PC forgot this MacBook".
+  Checks only run while no connection or unpair is in flight, one host at a time, and
+  an answer that lands after a Connect/Pair/Forget started is dropped (`retract`).
+  Same outcome from a plain Connect whose handshake says `paired` 0 for a known host
+  (`HostConnection` forgets it itself, next to where it `remember`s; an explicit Pair
+  still gets the PIN sheet) and from STREAM_STOP 4 mid-session; `--host` mode forgets
+  and the re-dial then asks for the PIN as for an unknown host. Verified 2026-09-19 against `fakehost --forget` / `--pg` / `notpaired`
+  (all four paths) and the launch-time check against the real PC over the cable
+  (`paired` 1, digest stored); the tray-Forget round trip on the hardware is still to
+  be watched. Each check shows up in `host.log` as `connection with … ended with
+  error: waiting for the first message` (the client hangs up after SERVER_HELLO);
+  a quieter line is the host's to add. Spec: PROTOCOL.md Discovery + Forgetting.
 - The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
   `relay-host worker` into the **console session as SYSTEM**: duplicate our token,
   `SetTokenInformation(TokenSessionId)` (needs SE_TCB — only LocalSystem has it),

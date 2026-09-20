@@ -159,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     private var latencyTimer: Timer?
     /// In-flight "forget this host" request from the picker.
     private var unpairTask: UnpairTask?
+    /// What Bonjour last showed, for the pairing check below.
+    private var latestHosts: [DiscoveredHost] = []
+    /// Which known host to ask whether it still knows this Mac, and the
+    /// one such connection in flight. See `checkPairings`.
+    private var verifier = PairingVerifier()
+    private var verifyTask: VerifyTask?
     /// Session started from the picker that has not shown a frame yet: the
     /// kiosk window opens on the first decoded picture, not before.
     private var pendingSession: (screen: NSScreen, mode: StreamMode)?
@@ -253,7 +259,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             startSession(.init(endpoint: fixed, reconnects: true), screen: screen, mode: mode)
         } else {
             showPicker()
-            browser.onChange = { [weak self] hosts in self?.picker?.update(hosts: hosts) }
+            browser.onChange = { [weak self] hosts in
+                guard let self else { return }
+                self.latestHosts = hosts
+                self.picker?.update(hosts: hosts)
+                self.checkPairings()
+            }
             browser.onStatus = { [weak self] s in self?.picker?.status = s }
             browser.start()
         }
@@ -412,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         renderer.reset()
         p.connecting = false
         p.status = ""
+        checkPairings()
     }
 
     func picker(_ p: HostPickerWindowController, rename host: DiscoveredHost, to name: String) {
@@ -448,6 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 guard let self else { return }
                 self.unpairTask = nil
                 p.reloadPairing()
+                self.checkPairings()
                 switch outcome {
                 case .confirmed:
                     p.flash("Forgot \(shown)")
@@ -472,6 +485,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         alert.informativeText = "Your MacBook has forgotten this PC, but the PC still remembers your MacBook. To remove the pairing there, run this on the PC:\n\nrelay-host paired --forget \(fingerprint)"
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
+    }
+
+    /// Ask one known host at a time whether it still has this Mac paired,
+    /// when the pairing digest it advertises is not the one last verified
+    /// (or none was yet, as at the first launch after an update). The PC's
+    /// tray Forget is how a pairing goes away without the Mac's say; without
+    /// this the row would sit under Paired until a Connect found out. Runs
+    /// between sessions only: the verify never touches the display, but its
+    /// answer must not race a Connect, Pair or Forget of the same host.
+    private func checkPairings() {
+        guard verifyTask == nil, connection == nil, unpairTask == nil, options.fixedHost == nil else { return }
+        guard let (host, key, digest) = verifier.next(
+            among: latestHosts, known: ClientState.knownHosts(), verified: ClientState.verifiedDigests()
+        ) else { return }
+        var opts = HostConnection.Options(
+            endpoint: host.endpoint,
+            interface: host.wiredInterface,
+            serviceName: host.name
+        )
+        opts.expectedHostKey = key
+        guard let task = try? VerifyTask(options: opts) else { return }
+        verifyTask = task
+        NSLog("Relay: checking the pairing with %@ (pg %@)", host.name, digest)
+        task.run(timeout: 6) { [weak self] outcome in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.verifyTask = nil
+                if self.connection != nil || self.unpairTask != nil {
+                    // Something started for this host meanwhile owns the
+                    // answer; ask again once it is over.
+                    self.verifier.retract(key)
+                } else {
+                    switch outcome {
+                    case .paired:
+                        ClientState.setVerifiedDigest(digest, for: key)
+                    case .forgotten:
+                        NSLog("Relay: %@ forgot this MacBook", host.name)
+                        ClientState.forget(host: key)
+                        self.picker?.reloadPairing()
+                        self.picker?.flash(SessionText.ended("the PC forgot this MacBook", streamed: false))
+                    case .unreachable:
+                        break
+                    }
+                }
+                self.checkPairings()
+            }
+        }
     }
 
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
@@ -515,6 +575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         picker?.reloadPairing()
         if reason.isEmpty { picker?.status = "" } else { picker?.flash(reason) }
         if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
+        checkPairings()
     }
 
     private func startSession(_ base: HostConnection.Options, screen: NSScreen, mode: StreamMode) {
@@ -752,6 +813,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                     bitrateMbps: c.activeBitrateMbps
                 ))
             } else if let p = self.picker {
+                // The attempt is over: nothing below sends on `c` again.
+                self.connection = nil
                 self.pendingSession = nil
                 p.connecting = false
                 if c.pinRejected, self.options.pin == nil, let host = self.currentHost {
@@ -769,8 +832,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 } else {
                     p.flash(SessionText.ended(reason, streamed: false, bitrateMbps: c.activeBitrateMbps))
                 }
-                // Pairing (or a host that re-paired us mid-connect) changes the split.
+                // Pairing, or a host that forgot us, changes the split.
                 p.reloadPairing()
+                self.checkPairings()
             }
         }
     }

@@ -12,6 +12,11 @@ struct DiscoveredHost {
     let interfaces: [NWInterface]
     /// From TXT `pk`, when the host advertises it.
     var publicKey: Data?
+    /// From TXT `pg`: the host's pairing digest, which moves whenever it
+    /// pairs or forgets a client. A known host advertising a digest other
+    /// than the one last verified is asked, over the handshake alone,
+    /// whether it still knows this Mac (see `PairingVerifier`).
+    var pairingDigest: String?
     /// False when Bonjour reported the service with no TXT record at all —
     /// the shape of a goodbye (the TXT is flushed a beat before the PTR), and
     /// also of a link going away (see `HostListDebouncer`).
@@ -206,6 +211,7 @@ struct HostListDebouncer {
             if !host.hasTXT, let previous, previous.publicKey != nil {
                 // A link change (or a report after one): keep what the TXT said.
                 host.publicKey = previous.publicKey
+                host.pairingDigest = previous.pairingDigest
                 host.facts = previous.facts
             }
             saidGoodbye.remove(host.name)
@@ -305,14 +311,17 @@ final class HostBrowser {
     static func host(from result: NWBrowser.Result) -> DiscoveredHost? {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
         var key: Data?
+        var digest: String?
         var facts = HostFacts()
         var hasTXT = false
         if case .bonjour(let txt) = result.metadata {
             hasTXT = true
             if let hex = txt["pk"], let data = Data(hex: hex), data.count == 32 { key = data }
+            if let pg = txt["pg"], !pg.isEmpty { digest = pg }
             facts = HostFacts(txt: txt)
         }
         var host = DiscoveredHost(name: name, endpoint: result.endpoint, interfaces: result.interfaces, publicKey: key)
+        host.pairingDigest = digest
         host.hasTXT = hasTXT
         host.links = Set(result.interfaces.map(\.name))
         host.facts = facts

@@ -8,14 +8,33 @@
 //   wrong         PAIR -> PAIR_RESULT 0
 //   accept        PAIR -> PAIR_RESULT 1 (then closes; use `hang` to stay up)
 //   hang          like accept, then waits for the next message forever
+//   notpaired     like accept, but CLIENT_HELLO gets STREAM_STOP(4): the PC
+//                 forgot the Mac between the handshake and the stream
+//
+// After a PAIR_RESULT 1 the process answers later handshakes with paired = 1,
+// as a real host would, so a Mac that just paired verifies as still paired.
 //
 // `--paired` makes msg2 claim the client is already paired, so a host the
 // Mac has in hosts.txt connects without a PIN. The identity key is kept in
 // ./fakehost.key so the advertised `pk` (and the Paired row) survive restarts.
 //
+// The printed dns-sd line also carries `pg`, the pairing digest a real host
+// derives from its paired keys. Here it is a stand-in that only has to differ
+// between runs: one value for `--paired`, another for `--forget` (msg2 says
+// not paired), a third for neither, or `--pg <8 hex>` to pick one. The Mac
+// checks a known host's pairing over the handshake alone whenever the digest
+// it advertises is not the one last verified, so:
+//
+//   ./fakehost 8470 hang --paired      # the Mac verifies once, row stays Paired
+//   ./fakehost 8470 accept --forget    # re-run dns-sd with the new pg: the row
+//                                      # moves to Available, "PC forgot this
+//                                      # MacBook"; Pair (any PIN) brings it back
+//   ./fakehost 8470 hang --paired --pg 0badf00d   # a moved digest with paired = 1
+//                                      # only updates the stored one
+//
 //   swiftc -O -o fakehost Tools/fakehost.swift
 //   ./fakehost 8470 busy                      # prints the dns-sd line to run
-//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=3 pk=<hex>
+//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=3 pk=<hex> pg=<hex>
 //
 // Then `swift run Relay` shows "Fake PC" in the picker, or
 // `swift run Relay --host 127.0.0.1:8470` dials it directly.
@@ -25,11 +44,12 @@ setbuf(stdout, nil)
 
 let args = CommandLine.arguments
 guard args.count >= 3, let port = UInt16(args[1]) else {
-    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang [--paired]"); exit(2)
+    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--paired | --forget] [--pg <8 hex>]"); exit(2)
 }
 let mode = args[2]
 let limitSecs = mode == "ratelimit" ? UInt16(args[3]) ?? 599 : 0
-let claimPaired = args.contains("--paired")
+let forgot = args.contains("--forget")
+var claimPaired = args.contains("--paired") && !forgot
 
 // Stable identity so a paired host stays the same key across runs.
 let keyFile = URL(fileURLWithPath: "fakehost.key")
@@ -41,8 +61,22 @@ if let raw = try? Data(contentsOf: keyFile), let k = try? Curve25519.KeyAgreemen
     try! identity.rawRepresentation.write(to: keyFile)
 }
 let pkHex = identity.publicKey.rawRepresentation.map { String(format: "%02x", $0) }.joined()
-print("pk=\(pkHex)")
-print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=3 pk=\(pkHex)")
+
+// The real digest is SHA-256("relay-pairing-digest-v1" || sorted paired keys)[..4];
+// this one hashes the same label over a stand-in for the list.
+func pairingDigest(_ list: String) -> String {
+    var input = Data("relay-pairing-digest-v1".utf8)
+    input.append(Data(list.utf8))
+    return SHA256.hash(data: input).prefix(4).map { String(format: "%02x", $0) }.joined()
+}
+let pgHex: String
+if let i = args.firstIndex(of: "--pg"), i + 1 < args.count {
+    pgHex = args[i + 1]
+} else {
+    pgHex = pairingDigest(forgot ? "forgot" : claimPaired ? "paired" : "")
+}
+print("pk=\(pkHex) pg=\(pgHex)")
+print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=3 pk=\(pkHex) pg=\(pgHex)")
 
 extension Data {
     func be16(at o: Int) -> UInt16 { UInt16(self[startIndex + o]) << 8 | UInt16(self[startIndex + o + 1]) }
@@ -141,11 +175,14 @@ func serve(_ fd: Int32) {
         writeAll(fd, tx.seal(type: 0xA1, payload: p)); print("-- PAIR_RESULT rate-limited \(limitSecs) s")
     case ("wrong", 0xA0):
         writeAll(fd, tx.seal(type: 0xA1, payload: Data([0]))); print("-- PAIR_RESULT wrong PIN")
-    case ("accept", 0xA0), ("hang", 0xA0):
+    case ("accept", 0xA0), ("hang", 0xA0), ("notpaired", 0xA0):
         writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
+        claimPaired = true
         if mode == "hang" { _ = readFrame(fd) }
     case (_, 0xA2):
         writeAll(fd, tx.seal(type: 0x06, payload: Data([5]))); print("-- UNPAIRED")
+    case ("notpaired", 0x81):
+        writeAll(fd, tx.seal(type: 0x06, payload: Data([4]))); print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
     case (_, 0x81):
         print("-- CLIENT_HELLO; \(mode == "hang" ? "hanging" : "closing")")
         if mode == "hang" { _ = readFrame(fd) }

@@ -51,6 +51,16 @@ final class PickerRowsTests: XCTestCase {
         XCTAssertTrue(d.removed.isEmpty && d.inserted.isEmpty)
     }
 
+    func testDigestChangeAloneRedrawsNothing() {
+        var before = host("A", key: keyA)
+        before.pairingDigest = "11111111"
+        var after = before
+        after.pairingDigest = "22222222"
+        let d = PickerRows.diff(old: PickerRows.build(hosts: [before], known: [keyA: "A"]),
+                                new: PickerRows.build(hosts: [after], known: [keyA: "A"]))
+        XCTAssertEqual(d, PickerRowDiff())
+    }
+
     func testDiffFallsBackWhenHostMovesSection() {
         let old = PickerRows.build(hosts: [host("A", key: keyA), host("B", key: keyB)], known: [:])
         let new = PickerRows.build(hosts: [host("A", key: keyA), host("B", key: keyB)], known: [keyB: "B"])

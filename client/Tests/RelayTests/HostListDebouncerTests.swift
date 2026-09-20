@@ -33,12 +33,14 @@ final class HostListDebouncerTests: XCTestCase {
         facts.ips = ["10.0.0.46"]
         var both = host("PC", pk: key, links: ["en7", "en0"])
         both.facts = facts
+        both.pairingDigest = "0badf00d"
         XCTAssertEqual(d.update(seen: [both], now: t0).map(\.publicKey), [key])
         // Cable unplugged: mDNSResponder purged the TXT with the cable, the
         // PTR survives on Wi-Fi. Same shape as a goodbye, but the links changed.
         let onWiFi = d.update(seen: [host("PC", hasTXT: false, links: ["en0"])], now: t0.addingTimeInterval(0.1))
         XCTAssertEqual(onWiFi.map(\.name), ["PC"])
         XCTAssertEqual(onWiFi[0].publicKey, key)
+        XCTAssertEqual(onWiFi[0].pairingDigest, "0badf00d")
         XCTAssertEqual(onWiFi[0].facts.ips, ["10.0.0.46"])
         XCTAssertFalse(onWiFi[0].hasTXT)
         XCTAssertFalse(d.hasPendingRemovals)

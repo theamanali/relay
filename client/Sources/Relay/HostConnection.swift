@@ -37,6 +37,11 @@ final class HostConnection {
         var unpairOnly = false
         /// Pair (PIN exchange) and then close without starting a stream.
         var pairOnly = false
+        /// Run the handshake and close: msg2 alone says whether the host
+        /// still has this Mac paired (`pairingVerified`). Nothing is sent
+        /// after it, no CLIENT_HELLO, so the host's display and any other
+        /// Mac's session are untouched.
+        var verifyOnly = false
         var requestedWidth = 0
         var requestedHeight = 0
         var requestedRefresh = 60
@@ -72,6 +77,8 @@ final class HostConnection {
     private(set) var hostConfirmedUnpair = false
     /// Pair-only mode finished with both sides knowing each other.
     private(set) var pairingCompleted = false
+    /// Verify-only mode read msg2: whether the host still knows this Mac.
+    private(set) var pairingVerified: Bool?
     /// The host answered the PIN with a refusal (wrong, or too many tries).
     private(set) var pinRejected = false
     /// With `pinRejected`: the host is not checking PINs at all for this many
@@ -276,15 +283,37 @@ final class HostConnection {
                     self.readMessage(c, attempt: attempt)
                     return
                 }
-                // Pair when the host does not know us, or we do not know the host
-                // (lost hosts.txt); a host we both know needs nothing more.
+                if self.options.verifyOnly {
+                    // The answer was msg2's `paired` byte; nothing else to say.
+                    self.pairingVerified = result.paired
+                    self.finish(result.paired ? "still paired" : "the PC forgot this MacBook", from: c, attempt: attempt)
+                    return
+                }
                 let known = ClientState.knownHosts()[result.hostKey] != nil
-                if !result.paired || !known {
+                if self.options.pairOnly {
+                    // An explicit Pair asks for the PIN when the host does not
+                    // know us or we do not know it (lost hosts.txt); a host
+                    // both sides know needs nothing more.
+                    if !result.paired || !known {
+                        self.pairing = true
+                        self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
+                    } else {
+                        self.pairingCompleted = true
+                        self.finish("already paired", from: c, attempt: attempt)
+                        return
+                    }
+                } else if !known {
+                    // Connect to a host we have no record of (--host, a lost
+                    // hosts.txt): pair first. The host takes a PIN from a
+                    // client it already knows too.
                     self.pairing = true
                     self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
-                } else if self.options.pairOnly {
-                    self.pairingCompleted = true
-                    self.finish("already paired", from: c, attempt: attempt)
+                } else if !result.paired {
+                    // The PC forgot us since we paired. A plain Connect does
+                    // not re-pair on its own: drop our half as well, so the
+                    // row moves to Available, where Pair asks for the PIN.
+                    ClientState.forget(host: result.hostKey)
+                    self.finish("the PC forgot this MacBook", from: c, attempt: attempt)
                     return
                 } else {
                     self.status("Secure channel to \(fp)")
@@ -473,7 +502,11 @@ final class HostConnection {
         case .streamStop:
             let reason = payload.first.map { Int($0) } ?? -1
             switch reason {
-            case 4: finish("the host does not know this MacBook (pair with its PIN)")
+            case 4:
+                // The PC forgot this Mac while it was streaming (its tray's
+                // Forget sends the Mac away as not paired): drop our half too.
+                ClientState.forget(host: hostKey)
+                finish("the host does not know this MacBook (pair with its PIN)")
             case 5:
                 hostConfirmedUnpair = true
                 finish("the host forgot this MacBook")

@@ -40,6 +40,7 @@ enum SessionText {
             return "Connection couldn't sustain the selected bitrate — choose a lower bitrate."
         }
         if has("host identity changed") { return "PC identity changed — forget it, pair again" }
+        if has("forgot this macbook") { return "PC forgot this MacBook" }
         if has("does not know this macbook") || has("reason 4") { return "PC doesn't know this MacBook — pair again" }
         if has("speaks protocol") || has("reason 3") { return "The PC runs a different Relay version" }
         if has("reason 1") { return "The PC's video encoder failed" }

@@ -74,6 +74,24 @@ enum ClientState {
         var hosts = knownHosts()
         if hosts.removeValue(forKey: key) != nil { save(hosts, to: "hosts.txt") }
         setNickname(nil, for: key)
+        setVerifiedDigest(nil, for: key)
+    }
+
+    /// The pairing digest (`pg`) each known host advertised when the
+    /// handshake last confirmed it still knows this Mac: public key (hex) ->
+    /// digest. A host advertising any other value is asked again.
+    static func verifiedDigests() -> [Data: String] {
+        load("verified-digests.txt")
+    }
+
+    static func setVerifiedDigest(_ digest: String?, for key: Data) {
+        var digests = verifiedDigests()
+        if let digest {
+            digests[key] = digest
+        } else {
+            guard digests.removeValue(forKey: key) != nil else { return }
+        }
+        save(digests, to: "verified-digests.txt")
     }
 
     /// Names the user gave hosts on this Mac (public key -> name). Kept apart

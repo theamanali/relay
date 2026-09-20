@@ -7,6 +7,7 @@ final class SessionTextTests: XCTestCase {
         XCTAssertEqual(SessionText.ended("host stopped the stream (reason 0)", streamed: true), "The PC ended the session")
         XCTAssertEqual(SessionText.ended("connection closed", streamed: false), "The PC closed the connection")
         XCTAssertEqual(SessionText.ended("host stopped the stream (reason 4)", streamed: false), "PC doesn't know this MacBook — pair again")
+        XCTAssertEqual(SessionText.ended("the PC forgot this MacBook", streamed: false), "PC forgot this MacBook")
         XCTAssertEqual(SessionText.ended("read error: Connection reset by peer", streamed: true), "Lost the connection to the PC")
         XCTAssertEqual(SessionText.ended("connection failed: Connection refused", streamed: false), "Couldn't reach the PC")
         XCTAssertEqual(
@@ -42,7 +43,7 @@ final class SessionTextTests: XCTestCase {
     func testCompactMessagesFitTheFooter() {
         let reasons = ["the host rejected the PIN", "pairing cancelled", "handshake failed: host identity changed",
                        "too many wrong PINs — the host accepts none for 599 s", "the PC is in another session",
-                       "the PC didn't answer",
+                       "the PC didn't answer", "the PC forgot this MacBook",
                        "reason 4", "reason 3", "reason 1", "reason 2", "reason 0", "reason 6", "connection closed",
                        "read error: x", "connection failed: x", "handshake failed: x", "protocol error: x",
                        String(repeating: "z", count: 200)]
