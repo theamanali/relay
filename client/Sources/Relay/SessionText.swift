@@ -49,7 +49,7 @@ enum SessionText {
             return streamed ? "The PC ended the session" : "The PC closed the connection"
         }
         if has("no output") || has("waiting") || has("didn't answer") { return "The PC didn't answer" }
-        if has("connection failed") || has("read error") || has("send failed") {
+        if has("connection failed") || has("couldn't reach") || has("read error") || has("send failed") {
             if streamed, let bitrateMbps {
                 return "Lost connection at \(bitrateMbps) Mbps — try a lower bitrate."
             }

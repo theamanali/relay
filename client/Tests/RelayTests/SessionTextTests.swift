@@ -10,6 +10,7 @@ final class SessionTextTests: XCTestCase {
         XCTAssertEqual(SessionText.ended("the PC forgot this MacBook", streamed: false), "PC forgot this MacBook")
         XCTAssertEqual(SessionText.ended("read error: Connection reset by peer", streamed: true), "Lost the connection to the PC")
         XCTAssertEqual(SessionText.ended("connection failed: Connection refused", streamed: false), "Couldn't reach the PC")
+        XCTAssertEqual(SessionText.ended("couldn't reach the PC in 12 s", streamed: false), "Couldn't reach the PC")
         XCTAssertEqual(
             SessionText.ended("handshake failed: host identity changed: expected A, got B. Remove it from hosts.txt to pair again.", streamed: false),
             "PC identity changed — forget it, pair again"

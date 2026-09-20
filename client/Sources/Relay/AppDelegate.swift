@@ -578,8 +578,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         checkPairings()
     }
 
+    /// How long a Connect or Pair from the picker waits for the PC to take
+    /// the socket at all: a pinned attempt on the cable plus its unpinned
+    /// retry, each with a 5 s SYN timeout, and some room for resolution.
+    static let pickerDialTimeout: TimeInterval = 12
+
     private func startSession(_ base: HostConnection.Options, screen: NSScreen, mode: StreamMode) {
         var opts = base
+        if options.fixedHost == nil { opts.dialTimeout = Self.pickerDialTimeout }
         let (w, h) = StreamMode.size(native: Self.nativePixelSize(of: screen), scale: mode.scale)
         opts.requestedWidth = w
         opts.requestedHeight = h
@@ -817,6 +823,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 self.connection = nil
                 self.pendingSession = nil
                 p.connecting = false
+                if !c.everConnected, let host = self.currentHost {
+                    // Nobody took the socket: the row may be a stale Bonjour
+                    // entry for a PC that went away without a goodbye. Have
+                    // mDNSResponder re-check it, so it leaves the list now
+                    // rather than when its TTL runs out.
+                    BonjourReconfirm.reconfirm(host)
+                }
                 if c.pinRejected, self.options.pin == nil, let host = self.currentHost {
                     // The host closes after a refusal, so trying again is a new
                     // connection; keep the sheet's flow, not the footer's.

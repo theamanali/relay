@@ -223,6 +223,21 @@ menu unless `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.sh
   when the host's IPv4 set changes (polled every 5 s) so the advertised `ip` facts follow
   a late 169.254 self-assignment or a switch↔cable move, and when the pairing digest
   `pg` changes (polled every 1 s).
+- **A PC that vanishes without a goodbye stays in Bonjour's cache until its TTL runs
+  out.** `mdns-sd` announces SRV/A with a 120 s TTL (PTR/TXT 75 min; the setters are
+  `pub(crate)`, even in 0.21, so the host cannot shorten them); mDNSResponder re-queries at
+  80-95 % of the TTL and, unanswered, flushes the SRV and then reconfirms the PTR, so the
+  row lives 24-120 s after a cable pull (measured 2026-09-20). A dial to such a row never
+  ends on its own (Network.framework only times out a SYN it has sent; the connection sits
+  preparing/waiting), so picker attempts carry `HostConnection.Options.dialTimeout`
+  (`AppDelegate.pickerDialTimeout`, 12 s, one deadline for the pinned attempt and its
+  unpinned retry; --host mode has none) and end "couldn't reach the PC"; when the attempt
+  never reached `.ready` (`everConnected`), `BonjourReconfirm.reconfirm(host)` sends
+  `DNSServiceReconfirmRecord` for the PTR (rdata = the instance's full name in wire
+  format) on every interface the host was seen on. mDNSResponder re-queries and flushes it
+  ~7 s later; the browse drops the row. Verified on the hardware: Pair on the unplugged
+  PC's row, footer at 12.6 s, PTR gone at +7 s. A record this Mac registered itself
+  (`dns-sd -P` proxies, `fakehost`) never flushes: this Mac answers its own re-query.
 - **Unplugging the Mac's cable makes mDNSResponder purge the TXT, not the host.** It
   drops everything learned on the vanished interface; the PTR usually survives on Wi-Fi
   but the TXT (with `pk`) was cached on the cable alone and is not re-fetched until its

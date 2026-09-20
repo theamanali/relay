@@ -32,6 +32,11 @@ final class HostConnection {
         var reconnects = false
         /// Previously paired identity expected for this discovered host.
         var expectedHostKey: Data? = nil
+        /// Give up if no attempt has connected this long after `start()`.
+        /// A PC that is gone leaves the dial preparing or waiting for ever
+        /// (Network.framework only times out a SYN it has sent); the picker
+        /// wants an answer, --host mode keeps waiting and re-dials.
+        var dialTimeout: TimeInterval? = nil
         /// Forget the pairing on the host instead of streaming: UNPAIR is the
         /// first encrypted message and the connection ends with the reply.
         var unpairOnly = false
@@ -79,6 +84,10 @@ final class HostConnection {
     private(set) var pairingCompleted = false
     /// Verify-only mode read msg2: whether the host still knows this Mac.
     private(set) var pairingVerified: Bool?
+    /// Some attempt reached the socket-connected state: the PC was there,
+    /// whatever happened next. Never set means it could not be reached at
+    /// all, and its Bonjour record may be stale.
+    private(set) var everConnected = false
     /// The host answered the PIN with a refusal (wrong, or too many tries).
     private(set) var pinRejected = false
     /// With `pinRejected`: the host is not checking PINs at all for this many
@@ -107,6 +116,14 @@ final class HostConnection {
         queue.async { [self] in
             stopped = false
             connect(to: options.endpoint, via: options.interface)
+            if let limit = options.dialTimeout {
+                // One deadline for the whole dial, pinned attempt and its
+                // unpinned retry together.
+                queue.asyncAfter(deadline: .now() + limit) { [weak self] in
+                    guard let self, !self.stopped, !self.everConnected else { return }
+                    self.finish("couldn't reach the PC in \(Int(limit)) s")
+                }
+            }
         }
     }
 
@@ -178,6 +195,7 @@ final class HostConnection {
             guard let self, self.isCurrent(c, attempt: thisAttempt) else { return }
             switch state {
             case .ready:
+                self.everConnected = true
                 if let path = c.currentPath {
                     let kind = path.usesInterfaceType(.wiredEthernet) ? "wired Ethernet"
                         : path.usesInterfaceType(.wifi) ? "Wi-Fi" : "other"
