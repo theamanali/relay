@@ -100,11 +100,17 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
         facts.os,
         facts.ips
     );
-    let ad =
-        crate::discovery::advertise(&cfg.name, cfg.port, cfg.identity.public.as_bytes(), &facts)?;
+    let digest = cfg.paired.lock().unwrap().digest();
+    let ad = crate::discovery::advertise(
+        &cfg.name,
+        cfg.port,
+        cfg.identity.public.as_bytes(),
+        &facts,
+        &digest,
+    )?;
     *cfg.advertisement.lock().unwrap() = Some(ad);
     log::info!("listening on [::]:{} (dual-stack)", cfg.port);
-    let _readvertiser = readvertise_on_address_change(facts, &cfg);
+    let _readvertiser = readvertise_on_change(facts, digest, &cfg);
 
     // Every connection gets its own control thread. Pairing and unpairing do
     // not touch the display and may overlap anything; a connection competes
@@ -137,40 +143,67 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
     })
 }
 
-/// Keep the advertised `ip` facts current: a cable plugged in after start
-/// (Windows takes a while to self-assign 169.254.x.x) or a move between
-/// switch and cable changes the addresses, and the TXT record is static
-/// once registered, so re-register when they differ. Polling every few
-/// seconds is plenty and avoids the IP Helper notification machinery.
-fn readvertise_on_address_change(
+/// Keep the advertised record current. The TXT record is static once
+/// registered, so re-register when something in it moves: the `ip` facts
+/// (a cable plugged in after start, Windows' late 169.254 self-assignment, a
+/// switch/cable move; checked every 5 s, which avoids the IP Helper
+/// notification machinery) or the pairing digest `pg` (checked every second,
+/// so a Forget from the tray is on the air about as fast as the Mac can
+/// notice). The same tick also picks up an edit of `paired-clients.txt` by
+/// another process (`relay-host paired --forget` in a terminal), which the
+/// running host would otherwise overwrite on its next save.
+fn readvertise_on_change(
     mut facts: crate::sysinfo::HostFacts,
+    mut digest: String,
     cfg: &ServerConfig,
 ) -> thread::JoinHandle<()> {
     let name = cfg.name.clone();
     let port = cfg.port;
     let public_key = *cfg.identity.public.as_bytes();
     let slot = Arc::clone(&cfg.advertisement);
+    let paired = Arc::clone(&cfg.paired);
     thread::Builder::new()
         .name("readvertise".into())
-        .spawn(move || loop {
-            thread::sleep(Duration::from_secs(5));
-            let ips = crate::sysinfo::ipv4_addresses();
-            if ips == facts.ips {
-                continue;
-            }
-            log::info!(
-                "addresses changed {:?} -> {:?}; re-advertising",
-                facts.ips,
-                ips
-            );
-            facts.ips = ips;
-            // Hold the slot across the swap so a quit in between cannot
-            // miss the new record.
-            let mut ad = slot.lock().unwrap();
-            drop(ad.take()); // unregisters the old record first
-            match crate::discovery::advertise(&name, port, &public_key, &facts) {
-                Ok(new_ad) => *ad = Some(new_ad),
-                Err(e) => log::warn!("re-advertising failed: {e:#}"),
+        .spawn(move || {
+            let mut tick: u32 = 0;
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                tick = tick.wrapping_add(1);
+                let mut why = Vec::new();
+
+                let now = {
+                    let mut list = paired.lock().unwrap();
+                    if list.reload_if_changed() {
+                        log::info!(
+                            "paired list changed on disk; reloaded ({} client(s))",
+                            list.len()
+                        );
+                    }
+                    list.digest()
+                };
+                if now != digest {
+                    why.push(format!("pairing digest {digest} -> {now}"));
+                    digest = now;
+                }
+                if tick.is_multiple_of(5) {
+                    let ips = crate::sysinfo::ipv4_addresses();
+                    if ips != facts.ips {
+                        why.push(format!("addresses {:?} -> {:?}", facts.ips, ips));
+                        facts.ips = ips;
+                    }
+                }
+                if why.is_empty() {
+                    continue;
+                }
+                log::info!("{}; re-advertising", why.join(", "));
+                // Hold the slot across the swap so a quit in between cannot
+                // miss the new record.
+                let mut ad = slot.lock().unwrap();
+                drop(ad.take()); // unregisters the old record first
+                match crate::discovery::advertise(&name, port, &public_key, &facts, &digest) {
+                    Ok(new_ad) => *ad = Some(new_ad),
+                    Err(e) => log::warn!("re-advertising failed: {e:#}"),
+                }
             }
         })
         .expect("spawn readvertise thread")

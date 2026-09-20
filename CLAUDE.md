@@ -12,6 +12,7 @@ piece of ceremony and it is intentional.
 |---|---|---|
 | `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
+| `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
 | `client/Tools/fakehost.swift` | fake host in Swift (CryptoKit, real handshake); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc`, advertise with `dns-sd -R`) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template, (no helper script any more: the service does the privileged work) | Windows |
@@ -74,12 +75,19 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   (`windows_service::change_config` would rewrite the binary path); while it is off the
   service also skips the `SessionLogon`/`ConsoleConnect` respawn, `Start-Service Relay`
   is the manual way in, and so is a **double-click on the exe**: `main.rs::hand_off_to_service` — no console, no `--no-vdd`, service installed but stopped → relaunch elevated as `relay-host service start` (`ShellExecuteW runas`; `service::start`) and exit, instead of a user-session dev run. From a terminal a dev run still happens (that is how `Stop-Service Relay` + `relay-host` is used). Greyed in a dev run (`under_service` = the quit event exists).
-- **Mac follow-up (open):** after a PC-side Forget the Mac still lists the PC under
-  *Paired* (that means "key in `hosts.txt`"; only the Mac's own Forget removes it) and
-  Connect re-prompts for the PIN because the handshake's `paired` byte is 0. The client
-  should treat `paired == 0` from a host that *is* in `hosts.txt`, and STREAM_STOP 4
-  mid-session, as "the PC forgot me": drop it from `hosts.txt` and move the row to
-  *Available*. No protocol change.
+- **Pairing digest `pg` in the TXT record (host + spec done 2026-09-20; Mac side
+  open).** `PeerList::digest()` = first 4 bytes of SHA-256 over `DIGEST_LABEL` + the sorted paired keys (the label keeps a lone client's digest from being its fingerprint),
+  hex; renames do not move it. The `readvertise` thread in `server.rs` ticks every
+  second: `PeerList::reload_if_changed()` (mtime; picks up `relay-host paired --forget`
+  from another process, which the running host used to overwrite on its next save),
+  then re-registers the record when the digest or (every 5th tick) the IPv4 set moved.
+  A tray Forget is on the air in about 1.5 s. Mac follow-up: after a PC-side Forget the
+  Mac still lists the PC under *Paired* (= key in `hosts.txt`; only the Mac's own Forget
+  removes it) and Connect re-prompts for the PIN because the handshake's `paired` byte
+  is 0. The client should keep the last verified `pg` per known host; when the
+  advertised one differs, run the handshake alone (no CLIENT_HELLO) and read `paired`;
+  0, or STREAM_STOP 4 mid-session, means "the PC forgot me": drop it from `hosts.txt`
+  and move the row to *Available*. Spec: PROTOCOL.md Discovery + Forgetting.
 - The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
   `relay-host worker` into the **console session as SYSTEM**: duplicate our token,
   `SetTokenInformation(TokenSessionId)` (needs SE_TCB — only LocalSystem has it),
@@ -196,7 +204,8 @@ menu unless `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.sh
   `--no-vdd` for pipeline tests; let the user run the exclusive ones.
 - The mDNS TXT record is static once registered: `server.rs` re-registers the service
   when the host's IPv4 set changes (polled every 5 s) so the advertised `ip` facts follow
-  a late 169.254 self-assignment or a switch↔cable move.
+  a late 169.254 self-assignment or a switch↔cable move, and when the pairing digest
+  `pg` changes (polled every 1 s).
 - **Unplugging the Mac's cable makes mDNSResponder purge the TXT, not the host.** It
   drops everything learned on the vanished interface; the PTR usually survives on Wi-Fi
   but the TXT (with `pk`) was cached on the cable alone and is not re-fetched until its

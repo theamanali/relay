@@ -614,10 +614,7 @@ impl Tray {
     /// is sent away as not paired.
     fn forget(&mut self, key: Key32, name: String) {
         let fp = fingerprint(&key);
-        let text = format!(
-            "Forget {name} ({fp})?\n\nThe MacBook will still list this PC as paired until it \
-             forgets it too; it will need the PIN to connect again."
-        );
+        let text = format!("Forget {name} ({fp})?\n\nIt will need the PIN to connect again.");
         let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
         let answer = unsafe {
             let _ = SetForegroundWindow(self.hwnd);

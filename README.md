@@ -121,6 +121,7 @@ host\target\release\relay-host.exe paired     # paired Macs (--forget <fingerpri
 host\target\release\relay-host.exe service start   # start the installed service (elevated; a double-click does this too)
 host\target\release\relay-host.exe gpus       # adapters and which one is used
 host\target\release\relay-host.exe displays   # what Windows/DXGI see
+host\target\release\browse.exe --seconds 5     # what this PC advertises over Bonjour (TXT: pk, pg, facts)
 host\target\release\relay-host.exe attach-test --width 3024 --height 1964 --hz 120
                                                       # full session dance for 10 s: your monitors go dark!
 host\target\release\relay-host.exe restore    # put the displays back if something went wrong
@@ -143,9 +144,11 @@ notification area once you are signed in. Hovering it says `Relay: Idle` or
 the taskbar) with the status line, **Disconnect** while a session is running
 (the Mac sees "The PC ended the session"), **PIN: 123 456** (click to copy), **Get new
 PIN** (the menu stays open and shows it), a **Forget paired MacBook** submenu (one entry per pairing; choosing one asks
-first, and a Mac that is streaming is sent away as not paired — it still shows the
-PC as paired on its side until it forgets it too, and needs the PIN to connect
-again), a **Start on system boot** checkbox and **Exit**. The PIN changes by itself
+first, and a Mac that is streaming is sent away as not paired; the Mac needs the
+PIN to connect again, and it learns of the forget within seconds while its picker
+is open because the host re-advertises a pairing digest, `pg`, in its Bonjour TXT
+record; the Mac side of that is pending), a **Start on system boot** checkbox and
+**Exit**. The PIN changes by itself
 after every successful pairing, so a PIN only ever admits one Mac (`--pin` pins it).
 Because the host runs as SYSTEM on the input desktop, connecting while the PC is
 locked or at the login screen shows that screen and lets you type the password from

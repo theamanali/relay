@@ -12,10 +12,23 @@ no congestion control. All integers are **big-endian**.
 ## Discovery
 
 The host advertises `_relay._tcp` over mDNS with a TXT record containing
-`v` (protocol version, decimal) and `pk` (the host's identity public key, 32
-bytes as 64 lowercase hex characters). Clients use `pk` to show whether a host
+`v` (protocol version, decimal), `pk` (the host's identity public key, 32
+bytes as 64 lowercase hex characters) and `pg` (the pairing digest: the first
+4 bytes of SHA-256 over the ASCII label `relay-pairing-digest-v1` followed by
+the host's paired client public keys, sorted and concatenated, as 8 lowercase
+hex characters; the label keeps a one-client digest from equalling that
+client's fingerprint). Clients use `pk` to show whether a host
 is already paired before connecting; it is informational and never trusted in
 place of the handshake.
+
+`pg` changes whenever the host pairs or forgets a client, and the host
+re-registers the record when it does. It is how a client learns that a host
+forgot it: a client that knows a host and sees its `pg` differ from the value
+it last verified runs the handshake alone (no CLIENT_HELLO, so it never
+touches the display or another client's session) and reads `paired` from
+msg2; 0 means the host forgot it, and the client removes the host locally. The
+digest says nothing about who is paired, and like `pk` it is informational: the
+handshake, not the digest, is the authority.
 
 The record may also carry facts about the PC for the client to show on hover,
 each omitted when unknown and truncated to fit a 255-byte TXT string:
@@ -114,6 +127,11 @@ closes. The client removes the host locally regardless of whether the host was
 reachable (the host side can then be cleaned up with `relay-host paired
 --forget <fingerprint>`). A client the host does not know that sends UNPAIR is
 answered the same way, not with `NOT_PAIRED`.
+
+The host forgets a client from its tray or with `relay-host paired --forget`.
+There is no message for it: the client learns of it through the `pg` TXT value
+(Discovery, above), or through STREAM_STOP reason 4 (`NOT_PAIRED`) if it was
+streaming at the time, and should forget the host locally in either case.
 
 This is not a PAKE: an attacker who sits in the middle of the *first* pairing
 can brute-force the 6-digit PIN offline. Pair on the cable or at home; after

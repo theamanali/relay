@@ -120,14 +120,30 @@ pub fn fingerprint(public: &Key32) -> String {
     hex::encode_upper(&digest[..4])
 }
 
+/// Domain separation for `PeerList::digest` (part of the wire contract, see
+/// docs/PROTOCOL.md).
+pub const DIGEST_LABEL: &[u8] = b"relay-pairing-digest-v1";
+
 /// The clients (or hosts) this side has paired with: key -> name.
 pub struct PeerList {
     path: PathBuf,
     peers: HashMap<Key32, String>,
+    /// The file's modification time as of our last read or write, so
+    /// `reload_if_changed` can tell another process's edit (`relay-host
+    /// paired --forget` from a terminal) from our own.
+    seen_mtime: Option<std::time::SystemTime>,
 }
 
 impl PeerList {
     pub fn load(path: &Path) -> Result<Self> {
+        Ok(PeerList {
+            path: path.to_path_buf(),
+            peers: Self::read(path),
+            seen_mtime: Self::mtime(path),
+        })
+    }
+
+    fn read(path: &Path) -> HashMap<Key32, String> {
         let mut peers = HashMap::new();
         if let Ok(text) = fs::read_to_string(path) {
             for line in text.lines() {
@@ -142,10 +158,40 @@ impl PeerList {
                 }
             }
         }
-        Ok(PeerList {
-            path: path.to_path_buf(),
-            peers,
-        })
+        peers
+    }
+
+    fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+        fs::metadata(path).and_then(|m| m.modified()).ok()
+    }
+
+    /// Pick up an edit made to the file by someone else since we last read
+    /// or wrote it. True when the list was replaced.
+    pub fn reload_if_changed(&mut self) -> bool {
+        let now = Self::mtime(&self.path);
+        if now == self.seen_mtime {
+            return false;
+        }
+        self.peers = Self::read(&self.path);
+        self.seen_mtime = now;
+        true
+    }
+
+    /// What is advertised as `pg`: the first 4 bytes of SHA-256 over
+    /// `DIGEST_LABEL` and the paired keys, sorted and concatenated, as hex.
+    /// It moves whenever a client is paired or forgotten (not renamed) and
+    /// says nothing about who is on the list (the label keeps a one-client
+    /// digest from being that client's `fingerprint`); a client that knows
+    /// this host re-checks its pairing when it changes.
+    pub fn digest(&self) -> String {
+        let mut keys: Vec<&Key32> = self.peers.keys().collect();
+        keys.sort();
+        let mut hasher = Sha256::new();
+        hasher.update(DIGEST_LABEL);
+        for key in keys {
+            hasher.update(key);
+        }
+        hex::encode(&hasher.finalize()[..4])
     }
 
     pub fn contains(&self, key: &Key32) -> bool {
@@ -179,7 +225,7 @@ impl PeerList {
         self.peers.is_empty()
     }
 
-    fn save(&self) -> Result<()> {
+    fn save(&mut self) -> Result<()> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
@@ -187,7 +233,9 @@ impl PeerList {
         for (key, name) in &self.peers {
             text.push_str(&format!("{} {}\n", hex::encode(key), name));
         }
-        fs::write(&self.path, text).with_context(|| format!("writing {}", self.path.display()))
+        fs::write(&self.path, text).with_context(|| format!("writing {}", self.path.display()))?;
+        self.seen_mtime = Self::mtime(&self.path);
+        Ok(())
     }
 }
 
@@ -683,6 +731,58 @@ mod tests {
         let again = PeerList::load(&path).unwrap();
         assert!(again.contains(&key));
         assert_eq!(again.name_of(&key), Some("Aman's MacBook "));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn digest_follows_the_key_set_only() {
+        let dir = std::env::temp_dir().join(format!("td-peers4-{}", std::process::id()));
+        let mut list = PeerList::load(&dir.join("paired.txt")).unwrap();
+        let empty = list.digest();
+        assert_eq!(empty.len(), 8);
+        list.add([1u8; 32], "a").unwrap();
+        list.add([2u8; 32], "b").unwrap();
+        let both = list.digest();
+        assert_ne!(both, empty);
+        // Renaming is not a pairing change.
+        list.add([1u8; 32], "renamed").unwrap();
+        assert_eq!(list.digest(), both);
+        // Order of insertion does not matter.
+        let mut other = PeerList::load(&dir.join("other.txt")).unwrap();
+        other.add([2u8; 32], "x").unwrap();
+        other.add([1u8; 32], "y").unwrap();
+        assert_eq!(other.digest(), both);
+        list.remove(&[2u8; 32]).unwrap();
+        assert_ne!(list.digest(), both);
+        // A lone client's digest must not be its fingerprint: `pg` is public.
+        assert_ne!(
+            list.digest().to_uppercase(),
+            fingerprint(&[1u8; 32]),
+            "digest leaks the fingerprint"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reload_sees_another_writer_but_not_itself() {
+        let dir = std::env::temp_dir().join(format!("td-peers5-{}", std::process::id()));
+        let path = dir.join("paired.txt");
+        let mut list = PeerList::load(&path).unwrap();
+        list.add([1u8; 32], "mine").unwrap();
+        assert!(!list.reload_if_changed(), "own save must not count");
+        // Another process (the CLI) forgets the peer; make sure the mtime
+        // differs even on a coarse filesystem clock.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        fs::write(&path, "").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(list.reload_if_changed());
+        assert!(list.is_empty());
+        assert!(!list.reload_if_changed());
         let _ = fs::remove_dir_all(dir);
     }
 

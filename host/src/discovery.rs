@@ -33,11 +33,20 @@ pub fn advertise(
     port: u16,
     public_key: &[u8; 32],
     facts: &HostFacts,
+    pairing_digest: &str,
 ) -> Result<Advertisement> {
     let daemon = ServiceDaemon::new().context("starting mDNS responder")?;
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "travelpc".into());
     let host = format!("{}.local.", hostname.to_lowercase());
-    let info = service_info(instance_name, &host, port, public_key, facts)?.enable_addr_auto();
+    let info = service_info(
+        instance_name,
+        &host,
+        port,
+        public_key,
+        facts,
+        pairing_digest,
+    )?
+    .enable_addr_auto();
     let fullname = info.get_fullname().to_string();
     daemon.register(info).context("registering mDNS service")?;
     log::info!("advertising {fullname} on port {port}");
@@ -46,7 +55,9 @@ pub fn advertise(
 
 /// Build the advertised service record: the protocol version, the host's
 /// identity public key as 64 lowercase hex chars (so a client can show whether
-/// it is already paired before connecting), and the PC facts the client shows
+/// it is already paired before connecting), the pairing digest `pg` (moves when a
+/// client is paired or forgotten; a client that knows us re-checks its pairing
+/// when it does), and the PC facts the client shows
 /// on hover. All of it is public and none of it is trusted in place of the
 /// handshake (see docs/PROTOCOL.md).
 fn service_info(
@@ -55,10 +66,12 @@ fn service_info(
     port: u16,
     public_key: &[u8; 32],
     facts: &HostFacts,
+    pairing_digest: &str,
 ) -> Result<ServiceInfo> {
     let mut props = HashMap::new();
     props.insert("v".to_string(), VERSION.to_string());
     props.insert("pk".to_string(), hex::encode(public_key));
+    props.insert("pg".to_string(), pairing_digest.to_string());
     for (k, v) in facts.txt_entries() {
         // A TXT string is at most 255 bytes including "key=".
         let room = 255 - k.len() - 1;
@@ -111,6 +124,7 @@ mod tests {
             8468,
             &key,
             &HostFacts::default(),
+            "0badf00d",
         )
         .unwrap();
         assert_eq!(info.get_property_val_str("v").unwrap(), VERSION.to_string());
@@ -119,6 +133,7 @@ mod tests {
         assert_eq!(pk, hex::encode(key));
         assert_eq!(pk, pk.to_lowercase());
         assert!(info.get_property_val_str("cpu").is_none());
+        assert_eq!(info.get_property_val_str("pg").unwrap(), "0badf00d");
     }
 
     #[test]
@@ -131,7 +146,15 @@ mod tests {
             ips: vec!["192.168.1.5".into(), "169.254.10.20".into()],
             ..Default::default()
         };
-        let info = service_info("Test PC", "test-pc.local.", 8468, &[0u8; 32], &facts).unwrap();
+        let info = service_info(
+            "Test PC",
+            "test-pc.local.",
+            8468,
+            &[0u8; 32],
+            &facts,
+            "0badf00d",
+        )
+        .unwrap();
         assert_eq!(info.get_property_val_str("ram").unwrap(), "64");
         assert!(info.get_property_val_str("ramtype").is_none());
         assert_eq!(
