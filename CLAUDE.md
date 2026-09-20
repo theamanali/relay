@@ -53,7 +53,33 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 - Tray (`host/src/tray.rs`): hidden **top-level** window, not `HWND_MESSAGE` — message-only
   windows never get `TaskbarCreated`, `WM_SETTINGCHANGE` or `WM_ENDSESSION`, all of which
   it relies on. Menu is built on each click from `status::HostStatus` (server writes,
-  tray reads). The PIN rotates after every successful pairing and is never logged.
+  tray reads): status line, `Disconnect` while streaming, separator, `PIN: 123 456` (copies),
+  `Get new PIN` (the menu **stays open**: a Win32 popup closes on any choice, so a `WH_MSGFILTER` hook on the tray thread swallows that item's click/Return, rotates the PIN and `ModifyMenuW`s the open item; the `#32768` popup window does not repaint on its own, `InvalidateRect` it), `Forget paired MacBook ▸` (one id per entry, Yes/No `MessageBoxW`,
+  `PeerList::remove`), `Start on system boot` checkbox, `Exit` (2026-09-19). The PIN
+  rotates after every successful pairing and is never logged. The tooltip follows the
+  session (1 s timer, `NIM_MODIFY` only when the text changes; `szTip` is 127 units, the
+  client name is clamped). The tray ends a session by storing a `stop_reason` in
+  `SessionInfo::end_request` (`AtomicU8`, `NO_END_REQUEST` = none); `pump` polls it at its
+  stop checks, sends the STREAM_STOP, half-closes and lets the reader drain for up to 2 s
+  (the RST rule below). Disconnect = reason 0 (the Mac already shows "The PC ended the
+  session"), Forget of the streaming Mac = reason 4. **Dark menu:** Win32 popup menus
+  are light unless the process calls uxtheme's undocumented ordinal 135
+  `SetPreferredAppMode` (2 = ForceDark, 3 = ForceLight; on 1809 that ordinal is a
+  different function, so gated on build ≥ 18362) and 136 `FlushMenuThemes`; done at
+  start and on `ImmersiveColorSet`, following the taskbar theme like the icon.
+  MessageBox stays light. **Exit** = `ControlService(STOP)` on the Relay service from the
+  worker (SYSTEM may); the service's stop path sets the quit event and the tray loop
+  quits as before — nothing Relay is left running. **Start on system boot** =
+  `QueryServiceConfigW`/`ChangeServiceConfigW` start type with `SERVICE_NO_CHANGE`
+  (`windows_service::change_config` would rewrite the binary path); while it is off the
+  service also skips the `SessionLogon`/`ConsoleConnect` respawn, `Start-Service Relay`
+  is the manual way in, and so is a **double-click on the exe**: `main.rs::hand_off_to_service` — no console, no `--no-vdd`, service installed but stopped → relaunch elevated as `relay-host service start` (`ShellExecuteW runas`; `service::start`) and exit, instead of a user-session dev run. From a terminal a dev run still happens (that is how `Stop-Service Relay` + `relay-host` is used). Greyed in a dev run (`under_service` = the quit event exists).
+- **Mac follow-up (open):** after a PC-side Forget the Mac still lists the PC under
+  *Paired* (that means "key in `hosts.txt`"; only the Mac's own Forget removes it) and
+  Connect re-prompts for the PIN because the handshake's `paired` byte is 0. The client
+  should treat `paired == 0` from a host that *is* in `hosts.txt`, and STREAM_STOP 4
+  mid-session, as "the PC forgot me": drop it from `hosts.txt` and move the row to
+  *Available*. No protocol change.
 - The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
   `relay-host worker` into the **console session as SYSTEM**: duplicate our token,
   `SetTokenInformation(TokenSessionId)` (needs SE_TCB — only LocalSystem has it),
@@ -73,7 +99,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 - State is `%ProgramData%\Relay` (SYSTEM has no meaningful `%LOCALAPPDATA%`): Users
   RX, `identity.key` SYSTEM/Admins only (`restrict_to_admins` after creation). The
   installer and the first run as a user migrate the old `%LOCALAPPDATA%\Relay`. So
-  `pin --new` / `paired --forget` need an elevated prompt; the tray does them as SYSTEM.
+  `pin --new` / `paired --forget` need an elevated prompt; the tray does both as SYSTEM
+  (`Get new PIN`, `Forget paired MacBook`).
   One serving host per session is enforced with the `Local\Relay.host` mutex + a
   message box (SYSTEM worker and a user dev run share session 1's namespace).
 - Tray icons are `host/assets/relay-{light,dark}.ico`, embedded with `include_bytes!`
@@ -94,7 +121,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Running it
 
-PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray icon with the PIN and status; `pin`,
+PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray icon with the PIN, status, Disconnect, Forget, Start on system boot and Exit; `pin`,
 `paired`, `service install/uninstall`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
 `tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
 found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%

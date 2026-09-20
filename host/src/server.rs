@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ use crate::protocol::{
     self, msg, pair_result, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME,
     UNKNOWN_MICROS,
 };
-use crate::status::{HostStatus, SessionInfo};
+use crate::status::{HostStatus, SessionInfo, NO_END_REQUEST};
 use crate::topology;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -51,6 +51,8 @@ const DESKTOP_RETRY: Duration = Duration::from_secs(2);
 const RECOVERY_SETTLE: Duration = Duration::from_millis(750);
 /// Never reassert the virtual-only topology more often than this.
 const REASSERT_MIN_INTERVAL: Duration = Duration::from_secs(2);
+/// After a tray-requested STREAM_STOP, how long to let the client close first.
+const END_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -673,6 +675,8 @@ fn handle_session(
             codec,
         ),
     )?;
+    // The tray ends the session by storing a stop reason here.
+    let end_request = Arc::new(AtomicU8::new(NO_END_REQUEST));
     cfg.status.lock().unwrap().session = Some(SessionInfo {
         client: if hello.name.is_empty() {
             client_fp.clone()
@@ -683,6 +687,7 @@ fn handle_session(
         width: placement.width,
         height: placement.height,
         hz: placement.hz,
+        end_request: Arc::clone(&end_request),
     });
 
     let mut encoder_config = EncoderConfig {
@@ -746,22 +751,72 @@ fn handle_session(
         gpu: &cfg.gpu,
         want,
     };
+    let ending = SessionEnding {
+        stop: &stop,
+        end_request: &end_request,
+    };
     let result = pump(
         &mut tx,
         &mut encoder,
         &mut recovery,
-        &stop,
+        &ending,
         &last_pong,
         &last_ping_sent,
         &network_rtt,
     );
 
+    if matches!(result, Ok(PumpEnd::Ended)) {
+        // We sent the final STREAM_STOP while the client may still be sending
+        // input. Half-close and let the reader drain until the client closes
+        // (it does on STREAM_STOP): a full close with unread bytes can turn
+        // into an RST that discards the stop on Windows.
+        tx.shutdown_write();
+        let deadline = Instant::now() + END_DRAIN_TIMEOUT;
+        while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
     tx.shutdown();
     stop.store(true, Ordering::Relaxed);
     drop(encoder);
     let _ = reader.join();
     drop(source);
-    result
+    result.map(|_| ())
+}
+
+/// Why `pump` returned normally.
+#[derive(Debug, PartialEq, Eq)]
+enum PumpEnd {
+    /// The client closed or stopped answering; nothing more to send.
+    ClientGone,
+    /// The tray asked for the end and the client was told with STREAM_STOP.
+    Ended,
+}
+
+/// The two ways a session is asked to stop: the reader thread saw the client
+/// go (`stop`), or the tray stored a stop reason (`end_request`).
+struct SessionEnding<'a> {
+    stop: &'a AtomicBool,
+    end_request: &'a AtomicU8,
+}
+
+impl SessionEnding<'_> {
+    /// `Some(end)` when the pump should return now. A tray request sends the
+    /// STREAM_STOP here so every check site behaves the same.
+    fn check(&self, tx: &mut SecureWriter) -> Option<PumpEnd> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Some(PumpEnd::ClientGone);
+        }
+        let reason = self.end_request.load(Ordering::Relaxed);
+        if reason == NO_END_REQUEST {
+            return None;
+        }
+        log::info!("session ended from the tray (stop reason {reason})");
+        if let Err(e) = tx.send(msg::STREAM_STOP, 0, &[reason]) {
+            log::debug!("final STREAM_STOP not delivered: {e:#}");
+        }
+        Some(PumpEnd::Ended)
+    }
 }
 
 struct CaptureRecovery<'a> {
@@ -777,11 +832,11 @@ fn pump(
     tx: &mut SecureWriter,
     encoder: &mut Encoder,
     recovery: &mut CaptureRecovery<'_>,
-    stop: &AtomicBool,
+    ending: &SessionEnding<'_>,
     last_pong: &Mutex<Instant>,
     last_ping_sent: &Mutex<Option<Instant>>,
     network_rtt: &Mutex<Option<Duration>>,
-) -> Result<()> {
+) -> Result<PumpEnd> {
     let mut last_config: Vec<Vec<u8>> = Vec::new();
     let mut next_ping = Instant::now() + PING_INTERVAL;
     let mut ping_outstanding: Option<Instant> = None;
@@ -800,8 +855,8 @@ fn pump(
     let mut congestion = CongestionWindow::new();
 
     loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
+        if let Some(end) = ending.check(tx) {
+            return Ok(end);
         }
         let read_at = Instant::now();
         let au = match encoder.next_access_unit() {
@@ -855,8 +910,8 @@ fn pump(
                 // agents modesetting the same virtual display at once can freeze
                 // the whole machine.
                 thread::sleep(RECOVERY_SETTLE);
-                if stop.load(Ordering::Relaxed) {
-                    return Ok(());
+                if let Some(end) = ending.check(tx) {
+                    return Ok(end);
                 }
                 let may_reassert =
                     last_reassert.is_none_or(|t| t.elapsed() >= REASSERT_MIN_INTERVAL);
@@ -881,8 +936,8 @@ fn pump(
                     recovery.source.location.adapter_index;
                 recovery.encoder_config.output_idx = recovery.source.location.output_index;
                 thread::sleep(ENCODER_RESTART_DELAY);
-                if stop.load(Ordering::Relaxed) {
-                    return Ok(());
+                if let Some(end) = ending.check(tx) {
+                    return Ok(end);
                 }
                 match encoder.restart(recovery.encoder_config) {
                     Ok(()) => {
@@ -1136,6 +1191,7 @@ mod display_claim_tests {
             width: 1920,
             height: 1080,
             hz: 60,
+            end_request: Arc::new(AtomicU8::new(NO_END_REQUEST)),
         });
 
         drop(first);

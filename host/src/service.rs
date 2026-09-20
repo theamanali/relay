@@ -7,13 +7,14 @@
 //! stream the lock and login screens, change display topology while locked,
 //! and flip device nodes without any elevated helper.
 //!
-//! Worker exit codes decide what happens next: **0** (tray Quit, logoff)
+//! Worker exit codes decide what happens next: **0** (quit event, logoff)
 //! keeps it down until the next logon; anything else is a crash, so the
 //! service runs `relay-host restore` in the session (physical monitors and
 //! layout back) and starts a fresh worker with a backoff. A console session
 //! change (logoff, fast user switch) moves the worker to the new session.
 //! `Stop-Service` sets a named event the worker's tray loop waits on, so it
-//! quits the way the tray's Quit does.
+//! quits the way the tray's Exit does (which itself asks the SCM to stop the
+//! service, so Exit takes everything down).
 
 use std::ffi::OsString;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -28,6 +29,7 @@ use windows::Win32::Security::{
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
+use windows::Win32::System::Services as services;
 use windows::Win32::System::Threading::{
     CreateEventW, CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
     SetEvent, TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT,
@@ -160,6 +162,124 @@ pub fn is_installed() -> bool {
         .is_ok()
 }
 
+/// Installed and not stopped (starting/running/stopping all count: the SCM
+/// is in charge of it). `None` when it is not installed.
+pub fn is_active() -> Option<bool> {
+    ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .and_then(|m| m.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS))
+        .and_then(|s| s.query_status())
+        .ok()
+        .map(|s| s.current_state != ServiceState::Stopped)
+}
+
+/// `Start-Service Relay`: the way back after "Start on system boot" was
+/// turned off and the PC rebooted. Needs an administrator.
+pub fn start() -> Result<()> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .context("opening the service manager")?;
+    let service = manager
+        .open_service(
+            SERVICE_NAME,
+            ServiceAccess::START | ServiceAccess::QUERY_STATUS,
+        )
+        .context("opening the Relay service (elevated prompt needed)")?;
+    if service.query_status()?.current_state != ServiceState::Stopped {
+        return Ok(());
+    }
+    service
+        .start::<&str>(&[])
+        .context("starting the Relay service")
+}
+
+// --- the tray's view of the service ------------------------------------------
+//
+// These go through the raw SCM API rather than `windows_service` because that
+// crate's `change_config` rewrites the whole configuration (binary path
+// included); `SERVICE_NO_CHANGE` lets us touch the start type alone.
+
+/// The `Relay` service handle with `access`, closed on drop.
+struct ScmService(services::SC_HANDLE, services::SC_HANDLE);
+
+impl ScmService {
+    fn open(access: u32) -> Result<Self> {
+        unsafe {
+            let manager = services::OpenSCManagerW(None, None, services::SC_MANAGER_CONNECT)
+                .context("opening the service manager")?;
+            let name: Vec<u16> = SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
+            match services::OpenServiceW(manager, PCWSTR(name.as_ptr()), access) {
+                Ok(service) => Ok(ScmService(manager, service)),
+                Err(e) => {
+                    let _ = services::CloseServiceHandle(manager);
+                    Err(e).context("opening the Relay service")
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ScmService {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = services::CloseServiceHandle(self.1);
+            let _ = services::CloseServiceHandle(self.0);
+        }
+    }
+}
+
+/// Whether the service starts with Windows (`Automatic`). `None` when it is
+/// not installed or cannot be queried.
+pub fn start_on_boot() -> Option<bool> {
+    let service = ScmService::open(services::SERVICE_QUERY_CONFIG).ok()?;
+    unsafe {
+        let mut needed = 0u32;
+        // Size probe first; the config carries variable-length strings.
+        let _ = services::QueryServiceConfigW(service.1, None, 0, &mut needed);
+        let mut buf = vec![0u64; needed.div_ceil(8) as usize + 1];
+        let config = buf.as_mut_ptr() as *mut services::QUERY_SERVICE_CONFIGW;
+        services::QueryServiceConfigW(service.1, Some(config), needed, &mut needed).ok()?;
+        Some((*config).dwStartType == services::SERVICE_AUTO_START)
+    }
+}
+
+/// Switch the service between `Automatic` (start with Windows) and `Manual`.
+/// Needs SYSTEM or an administrator; the tray runs as the former.
+pub fn set_start_on_boot(on: bool) -> Result<()> {
+    let service = ScmService::open(services::SERVICE_CHANGE_CONFIG)?;
+    let start = if on {
+        services::SERVICE_AUTO_START
+    } else {
+        services::SERVICE_DEMAND_START
+    };
+    unsafe {
+        services::ChangeServiceConfigW(
+            service.1,
+            services::ENUM_SERVICE_TYPE(services::SERVICE_NO_CHANGE),
+            start,
+            services::SERVICE_ERROR(services::SERVICE_NO_CHANGE),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .context("changing the Relay service start type")
+    }
+}
+
+/// Ask the SCM to stop the service, exactly as `Stop-Service Relay` does.
+/// The service then sets the quit event, so a worker calling this quits
+/// through its own tray loop a moment later.
+pub fn stop_service() -> Result<()> {
+    let service = ScmService::open(services::SERVICE_STOP)?;
+    let mut status = services::SERVICE_STATUS::default();
+    unsafe {
+        services::ControlService(service.1, services::SERVICE_CONTROL_STOP, &mut status)
+            .context("stopping the Relay service")
+    }
+}
+
 // --- the service process ---------------------------------------------------
 
 /// Entry point for `relay-host service run`: hands the thread to the SCM.
@@ -255,7 +375,14 @@ impl Supervisor {
         log::info!("session {id}: {reason:?}");
         match reason {
             SessionChangeReason::SessionLogon | SessionChangeReason::ConsoleConnect => {
-                // Someone is (back) at the console: a quit worker is wanted again.
+                // Someone is (back) at the console: a quit worker is wanted
+                // again — unless the tray's "Start on system boot" is off,
+                // which also means "nothing at sign-in" until it is on again
+                // (`Start-Service Relay` remains the manual way in).
+                if start_on_boot() == Some(false) {
+                    log::info!("Start on system boot is off; not starting Relay for this sign-in");
+                    return;
+                }
                 self.wanted = true;
                 self.not_before = None;
             }

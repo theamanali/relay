@@ -167,6 +167,9 @@ enum ServiceAction {
     Install,
     /// Stop and remove the service (elevated prompt)
     Uninstall,
+    /// Start the installed service, e.g. after "Start on system boot" was
+    /// turned off (elevated prompt)
+    Start,
     /// Entry point used by the service control manager
     Run,
 }
@@ -213,12 +216,66 @@ fn main() -> Result<()> {
     }
     logger.init();
     relay_host::migrate_user_state();
-    let result = run(cli);
+    let result = run(cli, has_console);
     if let Err(error) = &result {
         // The `?` from main prints to stderr, which does not exist here.
         log::error!("{error:#}");
     }
     result
+}
+
+/// A double-click on the exe while the Relay service is installed but
+/// stopped — the state "Start on system boot" off + a reboot leaves the PC
+/// in — should bring the *service* back (SYSTEM worker, lock screen, the
+/// checkbox to turn it on again), not start a user-session dev host. Starting
+/// a service needs an administrator, so relaunch ourselves elevated with
+/// `service start` and let that copy do it. True when handled (the caller
+/// exits); false when there is no service or it is already up, in which
+/// case serving as usual is right (`claim_single_instance` then explains a
+/// running one). A dev run stays reachable from a terminal or with `--no-vdd`.
+fn hand_off_to_service() -> Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::ERROR_CANCELLED;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    match service::is_active() {
+        None => return Ok(false),
+        Some(true) => return Ok(false),
+        Some(false) => {}
+    }
+    if relay_host::devnode::is_admin() {
+        service::start()?;
+        log::info!("Relay service started; its worker takes over from here");
+        return Ok(true);
+    }
+    let exe: Vec<u16> = std::env::current_exe()?
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    log::info!("the Relay service is stopped; asking to start it (elevation prompt)");
+    let h = unsafe {
+        ShellExecuteW(
+            None,
+            w!("runas"),
+            PCWSTR(exe.as_ptr()),
+            w!("service start"),
+            None,
+            SW_HIDE,
+        )
+    };
+    // ShellExecute's ancient contract: values above 32 are success.
+    if h.0 as isize <= 32 {
+        let err = windows::core::Error::from_win32();
+        if err.code() == ERROR_CANCELLED.to_hresult() {
+            log::info!("elevation declined; nothing started");
+        } else {
+            log::warn!("could not relaunch elevated to start the service: {err}");
+        }
+    }
+    Ok(true)
 }
 
 /// One serving host per session. A second launch (a double-click after
@@ -295,13 +352,18 @@ fn open_log_file() -> Result<std::fs::File> {
         .with_context(|| format!("opening {}", path.display()))
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli, has_console: bool) -> Result<()> {
     if let Err(error) = relay_host::input::enable_physical_pixel_coordinates() {
         log::warn!("could not enable physical-pixel input coordinates: {error}");
     }
 
     match cli.command {
-        None => serve(cli.serve, false),
+        None => {
+            if !has_console && !cli.serve.no_vdd && hand_off_to_service()? {
+                return Ok(());
+            }
+            serve(cli.serve, false)
+        }
         Some(Command::Displays) => {
             print!("{}", display::describe_all());
             Ok(())
@@ -331,6 +393,12 @@ fn run(cli: Cli) -> Result<()> {
             ServiceAction::Uninstall => {
                 service::uninstall()?;
                 println!("Relay service removed");
+                Ok(())
+            }
+            ServiceAction::Start => {
+                service::start()?;
+                log::info!("Relay service started");
+                println!("Relay service started");
                 Ok(())
             }
             ServiceAction::Run => service::run(),
@@ -388,7 +456,7 @@ fn open_driver(kind: DriverKind) -> Result<Arc<dyn VirtualDisplay>> {
     Ok(drv)
 }
 
-/// The one way out for Ctrl-C, tray Quit and logoff: displays back, Bonjour
+/// The one way out for Ctrl-C, tray Exit and logoff: displays back, Bonjour
 /// goodbye sent (so the Mac's list drops us now, not at the record's TTL),
 /// then exit. `process::exit` runs no destructors, hence the explicit steps.
 fn shut_down(
@@ -605,7 +673,7 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         advertisement: Arc::clone(&advertisement),
     };
     // The accept loop never returns on its own; the tray's message loop owns
-    // the main thread and Quit ends the process the way Ctrl-C does.
+    // the main thread and Exit ends the process the way Ctrl-C does.
     std::thread::Builder::new()
         .name("server".into())
         .spawn(move || {

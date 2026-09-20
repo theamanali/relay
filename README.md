@@ -73,8 +73,9 @@ small encrypted protocol between them.
 | Mac host picker | implemented: Paired / Available sections, return-to-list on disconnect, `--host` bypass. Pairing is decided by the Bonjour TXT `pk` key only; per-row rename and forget-on-both-sides buttons. Bonjour goodbye handling verified on the hardware (2026-09-17): quitting the host from its tray removes the row within ~1 s with no intermediate Available state; restarting it returns the row to Paired |
 | Mac Metal presentation | default renderer, VSync off; direct YCbCr→RGB shader. Verified on a real stream: colour correct. Mode changes, reconnect and the Metal vs `--renderer avsbdl` latency numbers still to be recorded |
 | 3. First real session over the cable | done; native 3024x1964@120 is usable, with remaining latency work tracked below |
-| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done; **Relay runs as a Windows service** (SYSTEM worker in the console session): starts at boot, streams the lock and login screens, in-process device-node control, crash restore, state in `%ProgramData%\Relay`. Verification on real hardware pending (see the plan in `CLAUDE.md`). DPI pending |
+| 4. Polish: tray icon, auto-start, headless boot, DPI | tray icon done (menu, dark mode, Disconnect, Forget, Start on system boot, Exit and the double-click restart verified on the hardware 2026-09-20); **Relay runs as a Windows service** (SYSTEM worker in the console session): starts at boot, streams the lock and login screens, in-process device-node control, crash restore, state in `%ProgramData%\Relay`. Verification on real hardware pending (see the plan in `CLAUDE.md`). DPI pending |
 | 5. In-process DXGI → NVENC (drops ffmpeg and its pipe/parser delay) | done and default on NVIDIA; sustains 3024×1964@120 and verified stable in exclusive-fullscreen games (Valorant, FC 26) after enabling D3D11 multithread protection on the shared capture/encode device. `--no-native` falls back to ffmpeg |
+| 6. HDR end-to-end | future: validate the VDD's HDR/10-bit advertising, capture HDR surfaces, convert to P010, encode HEVC Main10 with BT.2020/PQ metadata, negotiate HDR in the protocol, and present 10-bit EDR correctly on the Mac. Do not treat the driver's `HDRPlus` XML switch alone as HDR support |
 
 ## Setup
 
@@ -117,6 +118,7 @@ Then run:
 host\target\release\relay-host.exe            # serve (default): a tray icon, no window
 host\target\release\relay-host.exe pin        # show the PIN (--new to change it)
 host\target\release\relay-host.exe paired     # paired Macs (--forget <fingerprint>)
+host\target\release\relay-host.exe service start   # start the installed service (elevated; a double-click does this too)
 host\target\release\relay-host.exe gpus       # adapters and which one is used
 host\target\release\relay-host.exe displays   # what Windows/DXGI see
 host\target\release\relay-host.exe attach-test --width 3024 --height 1964 --hz 120
@@ -136,17 +138,30 @@ NVENC one), `--no-input`, `-v`.
 
 The host has no window. The service starts it at boot inside whatever session is at
 the console — the login screen included — and it puts a Relay icon in the
-notification area once you are signed in; click it for the status line (`Idle` or
-`Streaming to <Mac> — WxH @ Hz`), the pairing PIN (click to copy), **New PIN**, the
-list of paired Macs and **Quit Relay until next sign-in**. The PIN changes by itself
+notification area once you are signed in. Hovering it says `Relay: Idle` or
+`Relay: Streaming to <Mac>`; a click opens a menu (dark or light with
+the taskbar) with the status line, **Disconnect** while a session is running
+(the Mac sees "The PC ended the session"), **PIN: 123 456** (click to copy), **Get new
+PIN** (the menu stays open and shows it), a **Forget paired MacBook** submenu (one entry per pairing; choosing one asks
+first, and a Mac that is streaming is sent away as not paired — it still shows the
+PC as paired on its side until it forgets it too, and needs the PIN to connect
+again), a **Start on system boot** checkbox and **Exit**. The PIN changes by itself
 after every successful pairing, so a PIN only ever admits one Mac (`--pin` pins it).
 Because the host runs as SYSTEM on the input desktop, connecting while the PC is
 locked or at the login screen shows that screen and lets you type the password from
 the Mac. State (identity, pairings, PIN, layout snapshot, `host.log`) lives in
 `%ProgramData%\Relay`; `relay-host pin` and `paired` read it unelevated, `pin --new`
-and `paired --forget` need an elevated prompt (or the tray). Quit, a logoff or a
-shutdown restore your displays and remove the virtual monitor; if the worker is
-killed, the service runs `restore` and starts a new one within seconds.
+and `paired --forget` need an elevated prompt (the tray does both as SYSTEM).
+**Exit** stops the Relay service, so nothing of Relay is left running until the next
+boot; **Start on system boot** is the service's start type (Automatic when checked,
+Manual when not) and, while unchecked, the service also stays out of the way at
+sign-in. To get it back after that: **double-click `relay-host.exe`** (a UAC prompt,
+then the service starts and the tray returns — that is `relay-host service start`; a
+double-click while the service is already running just says so), or `Start-Service
+Relay` from an elevated prompt; re-checking the box in the tray brings it
+back at the next boot. Exit, a logoff or a shutdown restore your displays and remove
+the virtual monitor; if the worker is killed, the service runs `restore` and starts a
+new one within seconds.
 
 A dev run from a terminal (`relay-host --no-vdd`, or a full run with the service
 stopped: `Stop-Service Relay`) behaves as before: the log goes to that terminal, the

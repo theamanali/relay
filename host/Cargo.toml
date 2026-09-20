@@ -69,6 +69,7 @@ features = [
     "Win32_System_Performance",
     "Win32_System_Power",
     "Win32_System_SystemInformation",
+    "Win32_System_Services",
     "Wdk_Graphics_Direct3D",
     "Win32_Devices_Display",
 ]
