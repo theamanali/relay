@@ -29,4 +29,4 @@ if BUILD=$(git rev-list --count HEAD 2>/dev/null); then
 fi
 # Ad-hoc signature so the local-network entitlement dialog attributes to the app.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
-echo "built $APP  (open it, or: open $APP --args --help)"
+echo "built $APP  (open it, or for the flags: $APP/Contents/MacOS/Relay --help)"

@@ -78,7 +78,7 @@ struct LaunchOptions {
                 }
                 exit(IconExport.run(into: dir))
             case "--render-app-icon":
-                // Relay.icns for bundle.sh; see client/Assets.
+                // AppIcon.icon and Relay.icns for bundle.sh; see client/Assets.
                 guard let dir = it.next() else {
                     print("--render-app-icon requires a directory")
                     exit(2)
@@ -100,7 +100,7 @@ struct LaunchOptions {
                   --renderer metal|avsbdl    presentation backend (default metal)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
                   --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
-                  --render-app-icon <dir>    write the Mac app icon (Relay.icns) and exit
+                  --render-app-icon <dir>    write the Mac app icon (AppIcon.icon, Relay.icns) and exit
                 Exit with ⌃⌥⌘Q.
                 """)
                 exit(0)

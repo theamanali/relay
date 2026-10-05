@@ -1,7 +1,7 @@
-// Continuous Bonjour discovery for the picker. The host's TXT record may
-// carry its identity key (`pk`, 64 hex chars); until every host advertises
-// it, a remembered service name is the fallback for "paired". The handshake
-// verifies the real key either way, so a wrong guess only costs a PIN prompt.
+// Continuous Bonjour discovery for the picker. The host's TXT record carries
+// its identity key (`pk`, 64 hex chars); a host counts as paired only when
+// that key is in hosts.txt, never by name. The handshake verifies the real
+// key either way, so the TXT record is never trusted on its own.
 
 import Foundation
 import Network
