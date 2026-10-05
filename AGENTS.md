@@ -6,8 +6,6 @@ one Swift app on the Mac, a small encrypted TCP protocol between them. Deliberat
 smaller than Sunshine + Moonlight: no config UI, no game launcher; pairing is the one
 piece of ceremony and it is intentional.
 
-`CLAUDE.md` only imports this file; edit here.
-
 ## Layout and which machine builds what
 
 | path | what | builds/tests on |
@@ -17,7 +15,7 @@ piece of ceremony and it is intentional.
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
 | `client/Tools/fakehost.swift` | fake host in Swift (CryptoKit, real handshake); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc`, advertise with `dns-sd -R`) |
-| `tools/` | elevated installer (`install-host.ps1`), driver settings template, (no helper script any more: the service does the privileged work) | Windows |
+| `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
 Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session owns
@@ -25,30 +23,20 @@ Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session 
 Protocol changes go host-first (verified with `probe` + tests), then the spec, then the
 client. Never change `docs/PROTOCOL.md` and only one side.
 
-## Status (2026-09-18)
+## Status
 
-- Milestones 0–3 and 5 done and verified on the real hardware: virtual display becomes
-  the only display at the Mac's exact mode, layout restored on disconnect/Ctrl-C/hard
-  kill, in-process DXGI → NVENC at 3024x1964@120 (stable in exclusive-fullscreen
-  games), PIN pairing + encryption, real sessions over the cable from the Mac client
-  (Metal presenter).
-- Milestone 4 in progress: tray icon done; **the host is a Windows service now**
-  (`host/src/service.rs`, 2026-09-18) so the lock and login screens stream and the PC
-  can boot headless — verification on the real hardware pending (lock screen, login
-  screen, reboot, crash restore, sign-out/in; the list is in the README status row).
-  Still to do: DPI, installers/signing. Open measurement items live in
-  `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md` (Metal vs avsbdl numbers,
-  `--scale 0.75`, mode changes).
-- Protocol additions (2026-09-18, both halves done): connections run on their own scoped
-  thread so `server.rs` answers a second connection at once — full handshake and
-  SERVER_HELLO, then PAIR/UNPAIR remain available while only CLIENT_HELLO gets
-  the atomic display lease or `STREAM_STOP` reason 6 `BUSY`; waiting for a PIN
-  does not reserve the display and a running display session is never preempted;
-  `PAIR_RESULT` is `u8 result` (1 paired, 0 wrong PIN, 2 rate-limited + `u16 seconds`
-  to wait). Verified end-to-end on the PC and Mac: an unpaired Mac pairs while `probe`
-  owns the display, its Connect gets BUSY without preempting `probe`, and it connects
-  successfully after the probe releases the display. PAIR_RESULT paths were also
-  verified on the Mac against `client/Tools/fakehost.swift`.
+- Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
+  the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
+  in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over
+  the cable from the Mac client (Metal presenter).
+- Milestone 4 is in progress: tray icon and Windows service are done; real-hardware
+  verification of the service is pending (lock screen, login screen, reboot, crash restore,
+  sign-out/in). Still to do: DPI, installers/signing. Open measurements live in
+  `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md`.
+- The README status table is the source of truth for status; keep it current.
+
+## How the host and client work (details you need before changing them)
+
 - The host is windowless (`windows_subsystem = "windows"`). `serve` = tray icon +
   `%ProgramData%\Relay\host.log`; from a terminal it attaches to that terminal instead
   (`AttachConsole`, with the inherited std handles put back so `> file` still works).
@@ -57,7 +45,10 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   windows never get `TaskbarCreated`, `WM_SETTINGCHANGE` or `WM_ENDSESSION`, all of which
   it relies on. Menu is built on each click from `status::HostStatus` (server writes,
   tray reads): status line, `Disconnect` while streaming, separator, `PIN: 123 456` (copies),
-  `Get new PIN` (the menu **stays open**: a Win32 popup closes on any choice, so a `WH_MSGFILTER` hook on the tray thread swallows that item's click/Return, rotates the PIN and `ModifyMenuW`s the open item; the `#32768` popup window does not repaint on its own, `InvalidateRect` it), `Forget paired MacBook ▸` (one id per entry, Yes/No `MessageBoxW`,
+  `Get new PIN` (the menu **stays open**: a Win32 popup closes on any choice, so a
+  `WH_MSGFILTER` hook on the tray thread swallows that item's click/Return, rotates the PIN
+  and `ModifyMenuW`s the open item; the `#32768` popup window does not repaint on its own,
+  `InvalidateRect` it), `Forget paired MacBook ▸` (one id per entry, Yes/No `MessageBoxW`,
   `PeerList::remove`), `Start on system boot` checkbox, `Exit` (2026-09-19). The PIN
   rotates after every successful pairing and is never logged. The tooltip follows the
   session (1 s timer, `NIM_MODIFY` only when the text changes; `szTip` is 127 units, the
@@ -76,9 +67,15 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   `QueryServiceConfigW`/`ChangeServiceConfigW` start type with `SERVICE_NO_CHANGE`
   (`windows_service::change_config` would rewrite the binary path); while it is off the
   service also skips the `SessionLogon`/`ConsoleConnect` respawn, `Start-Service Relay`
-  is the manual way in, and so is a **double-click on the exe**: `main.rs::hand_off_to_service` — no console, no `--no-vdd`, service installed but stopped → relaunch elevated as `relay-host service start` (`ShellExecuteW runas`; `service::start`) and exit, instead of a user-session dev run. From a terminal a dev run still happens (that is how `Stop-Service Relay` + `relay-host` is used). Greyed in a dev run (`under_service` = the quit event exists).
+  is the manual way in, and so is a **double-click on the exe**:
+  `main.rs::hand_off_to_service` — no console, no `--no-vdd`, service installed but stopped
+  → relaunch elevated as `relay-host service start` (`ShellExecuteW runas`;
+  `service::start`) and exit, instead of a user-session dev run. From a terminal a dev run
+  still happens (that is how `Stop-Service Relay` + `relay-host` is used). Greyed in a dev
+  run (`under_service` = the quit event exists).
 - **Pairing digest `pg` in the TXT record (host + spec done 2026-09-20; Mac side done
-  2026-09-19).** `PeerList::digest()` = first 4 bytes of SHA-256 over `DIGEST_LABEL` + the sorted paired keys (the label keeps a lone client's digest from being its fingerprint),
+  2026-09-19).** `PeerList::digest()` = first 4 bytes of SHA-256 over `DIGEST_LABEL` + the
+  sorted paired keys (the label keeps a lone client's digest from being its fingerprint),
   hex; renames do not move it. The `readvertise` thread in `server.rs` ticks every
   second: `PeerList::reload_if_changed()` (mtime; picks up `relay-host paired --forget`
   from another process, which the running host used to overwrite on its next save),
@@ -100,11 +97,13 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Same outcome from a plain Connect whose handshake says `paired` 0 for a known host
   (`HostConnection` forgets it itself, next to where it `remember`s; an explicit Pair
   still gets the PIN sheet) and from STREAM_STOP 4 mid-session; `--host` mode forgets
-  and the re-dial then asks for the PIN as for an unknown host. Verified 2026-09-19 against `fakehost --forget` / `--pg` / `notpaired`
+  and the re-dial then asks for the PIN as for an unknown host. Verified 2026-09-19 against
+  `fakehost --forget` / `--pg` / `notpaired`
   (all four paths) and on the hardware over the cable: the launch-time check stored the
   PC's digest, a tray Forget on the PC moved the row to Available within seconds with
   nothing touched on the Mac, and Pair from the picker brought it back (same digest as
-  before, since the PC's list held the same one key). Each check shows up in `host.log` as `connection with … ended with
+  before, since the PC's list held the same one key). Each check shows up in `host.log` as
+  `connection with … ended with
   error: waiting for the first message` (the client hangs up after SERVER_HELLO);
   a quieter line is the host's to add. Spec: PROTOCOL.md Discovery + Forgetting.
 - The Relay service (`relay-host service run`, LocalSystem, session 0) spawns
@@ -148,54 +147,44 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Running it
 
-PC: `host\target\release\relay-host.exe` (installed as the `Relay` service; tray icon with the PIN, status, Disconnect, Forget, Start on system boot and Exit; `pin`,
-`paired`, `service install/uninstall`, `gpus`, `displays`, `layout`, `restore`, `attach-test` subcommands). Installer once, elevated:
-`tools\install-host.ps1`. Mac: `swift run Relay` opens a picker listing hosts
-found over Bonjour under *Paired* / *Available* plus a footer with a resolution popup (native/75%/50%
-of the current screen), a 120/60 Hz segmented control and an Advanced popover (modifier
-mapping, Control the PC / Observe only radio buttons, latency HUD — `SessionPrefs`; the
-mode is also PC ▸ Control / Observe (Screen Sharing's words; ⌃⌥⌘K sits on whichever is
-not current so it always switches), which mid-session goes through the local event
-monitor, saves the pref, releases held keys when turning off, and flashes
-"Controlling/Observing <PC>"), all remembered in UserDefaults and
-overridden per launch by the equivalent flags; an available host gets a Pair button (PIN sheet,
-then it moves to Paired without streaming); a paired host connects from within the picker
-(footer status, Cancel button) and the kiosk window opens on the first decoded frame; a dropped session returns to the picker. A PC already in a session with another Mac
-still allows Pair and forget because neither takes over the display. Connect gets
-"The PC is in another session" at once and is not retried from the picker.
-A rate-limited PIN reopens the sheet with "Too many wrong PINs. Try again in N min."
-(minutes rounded up); a wrong one keeps "That PIN wasn't correct…". `--host` skips the picker and re-dials on
-drops (every 5 s instead of 1 s after a busy answer). Other flags: `--pin`, `--max-fps`, `--scale`, `--modifiers`, `--no-input`,
-`--latency-stats`, `--renderer`, `--metal-vsync`; ⌃⌥⌘Q returns to the picker (quits in
-`--host` mode). A row's context menu has Connect (paired) or Pair (available) — the same `didChoose` as the footer button — then Rename, `Revert Name to “<PC name>”` while a nickname is set, and, when paired, a separator and Forget (Delete does the same); the menu items carry SF Symbols with no configuration so AppKit sizes them like Finder's. Rename edits in place like Finder: the name becomes a bezeled field with its text selected, sized to the text (measured — a truncating NSTextField has no intrinsic width), Return or any loss of focus commits, Escape restores, an emptied name means the PC's own. Forget removes
-the pairing on both sides (UNPAIR message; `relay-host paired --forget <fp>` is the
-host-only fallback) and rename stores a local nickname in `nicknames.txt`. Paired means the advertised key is in
-`hosts.txt` — there is no name-based fallback. The menu bar (`MainMenu.swift`, built in
-code) has the standard Relay/Edit/Window/Help menus plus **PC** in File's slot (the
-selected row's Connect ⌘↩ / Pair, Rename ⌘R, Revert Name ⇧⌘R, Forget ⌘⌫, then the global
-Control / Observe radio pair with ⌃⌥⌘K, Close Window) and **View** = the picture
-(Resolution and Refresh Rate submenus — the latter hidden on a one-rate panel — the footer's mode, kept in sync; a Bitrate
-submenu of presets rebuilt on open so an off-preset slider value appears checked in sorted
-place, plus Custom… → Advanced, and Show Latency Stats); PC/View/Settings… actions are nil-targeted and validated by the
-picker controller, so they disable themselves while the kiosk window is key, and
-`StreamView.performKeyEquivalent` swallows ⌘-shortcuts before the menu bar sees them
-during a session. Without a main menu ⌘Q/⌘W/⌘H and ⌘A/⌘C/⌘V in text fields do nothing.
-AppKit's automatic items: "Close All" is paired with any `performClose:` item (Close
-Window uses its own selector to avoid it) and "Enter Full Screen" is added to any View
-menu unless `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.shared`
-(`main.swift`, not the menu code).
+PC: `host\target\release\relay-host.exe`, installed as the `Relay` service with a tray icon;
+subcommands `pin`, `paired`, `service install/uninstall`, `gpus`, `displays`, `layout`,
+`restore`, `attach-test`. Installer once, elevated: `tools\install-host.ps1`. See
+`host/README.md`.
+
+Mac: `swift run Relay` opens the picker; flags are in `client/README.md` (or `--help`).
+User-visible behaviour (pairing, connect, rename, forget, menus, shortcuts, settings) is
+documented there. What follows is only the mechanics that are easy to break:
+
+- Control / Observe is PC ▸ Control / Observe. Mid-session it goes through the local event
+  monitor, saves the pref, releases held keys when turning off, and flashes
+  "Controlling/Observing <PC>". ⌃⌥⌘K sits on whichever item is not current, so it always
+  switches.
+- A dropped session returns to the picker; the kiosk window opens on the first decoded frame.
+- Rename edits in place like Finder: the name becomes a bezeled field with its text selected,
+  sized to the text (measured; a truncating NSTextField has no intrinsic width). Return or
+  any loss of focus commits, Escape restores, an empty name means the PC's own.
+- Row context-menu items carry SF Symbols with no configuration so AppKit sizes them like
+  Finder's.
+- The menu bar is built in code (`MainMenu.swift`): Relay/Edit/Window/Help plus **PC** in
+  File's slot and **View**. The Refresh Rate submenu is hidden on a one-rate panel; the
+  Bitrate submenu is rebuilt on open so an off-preset slider value appears checked in sorted
+  place. PC/View/Settings… actions are nil-targeted and validated by the picker controller, so
+  they disable themselves while the kiosk window is key, and
+  `StreamView.performKeyEquivalent` swallows ⌘-shortcuts before the menu bar sees them during
+  a session. Without a main menu ⌘Q/⌘W/⌘H and ⌘A/⌘C/⌘V in text fields do nothing.
+- AppKit's automatic items: "Close All" is paired with any `performClose:` item (Close Window
+  uses its own selector to avoid it) and "Enter Full Screen" is added to any View menu unless
+  `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.shared` (`main.swift`, not
+  the menu code).
 
 ## Hard-won facts — do not relearn these
 
-- **Renamed from TravelDisplay to Relay (2026-09-16).** Everything user-visible and every
-  identifier changed (`_relay._tcp`, `relay-host.exe`, `Relay.app`, the `Relay display
-  driver` task, `%LOCALAPPDATA%\Relay`, `~/Library/Application Support/Relay`) except the
-  HKDF info string and `TDH2` handshake magic, which stay so pairings survive. Both state
-  directories are moved from the old name automatically on first run. On the PC the
-  installer must be re-run once (new task and firewall names; it removes the old ones).
-  GitHub repo is `theamanali/relay` (old `travel-display` URLs redirect); a local clone
-  directory may still be called `travel-display`.
-
+- **Renamed from TravelDisplay to Relay (2026-09-16).** Every user-visible name and identifier
+  changed except the HKDF info string and the `TDH2` handshake magic, which stay so pairings
+  survive. State directories move from the old name automatically on first run; re-run the
+  installer once on the PC (it removes the old task and firewall names). The GitHub repo is
+  `theamanali/relay`; a local clone directory may still be called `travel-display`.
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
   Code 43. The device node is the switch: the host enables/disables it in-process
@@ -291,3 +280,5 @@ menu unless `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.sh
 - Defaults are 120 Hz and the Mac's native pixel size; `--scale 0.75`/`0.5` are the
   cheaper same-aspect modes.
 - Keep the README's status table honest; note anything verified on real hardware.
+
+`CLAUDE.md` only imports this file; edit here.
