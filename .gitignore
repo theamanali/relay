@@ -15,3 +15,5 @@ Thumbs.db
 /tools/downloads/
 /client/fakehost.key
 /client/fakehost
+/capture.hevc
+*.hevc
