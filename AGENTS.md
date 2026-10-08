@@ -31,8 +31,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   the cable from the Mac client (Metal presenter).
 - Milestone 4 is in progress: tray icon and Windows service are done; real-hardware
   verification of the service is pending (lock screen, login screen, reboot, crash restore,
-  sign-out/in). Still to do: DPI, installers/signing. Open measurements live in
-  `docs/HOST-LATENCY.md` and `docs/CLIENT-LATENCY.md`.
+  sign-out/in). Still to do: DPI, installers/signing. Latency measurements, what was
+  rejected and what is still open: `docs/LATENCY.md`.
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)

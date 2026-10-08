@@ -22,6 +22,10 @@ native Swift app on macOS, and a small encrypted protocol between them,
 deliberately smaller than Sunshine + Moonlight: no game launcher, no settings
 UI, and pairing is one PIN, once.
 
+**Built with:** Rust · Swift · Win32 / DXGI / Direct3D 11 · NVENC · VideoToolbox ·
+Metal · AppKit · Network.framework · X25519 / ChaCha20-Poly1305 · mDNS / Bonjour ·
+Windows services · GitHub Actions
+
 ## Highlights
 
 - **3024×1964 at 120 fps** (a 14-inch MacBook Pro's native panel), captured and
@@ -91,7 +95,8 @@ Per frame at 3024×1964, 120 fps, HEVC, default settings, on the real hardware:
 
 Mac timings start after decryption. Network transit and the panel's own response
 time are not included; a camera-based screen-to-screen measurement is on the
-[roadmap](#status).
+[roadmap](#status). How these were measured, what moved them and what was
+tried and rejected: **[docs/LATENCY.md](docs/LATENCY.md)**.
 
 ### Finding a hidden 0–8 ms
 
@@ -108,7 +113,7 @@ its timer to land just after each new desktop frame:
 
 The Mac's p95 time to screen dropped by 1.8 ms as a result. Two simpler fixes
 were measured and rejected; both are written up in
-[docs/HOST-LATENCY.md](docs/HOST-LATENCY.md).
+[docs/LATENCY.md](docs/LATENCY.md#the-hidden-08-ms).
 
 ## Design decisions
 
@@ -138,30 +143,20 @@ were measured and rejected; both are written up in
 
 ## Status
 
-Verified on the real hardware:
+**Working and verified on the real hardware:** the virtual monitor at the
+Mac's native mode with the PC's layout restored afterwards; in-process capture
+and NVENC encode at 3024×1964 @ 120 in exclusive-fullscreen games; pairing,
+encryption, discovery and forgetting a pairing from either side; the Mac app
+(PC picker, hardware decode, Metal presentation, keyboard and trackpad); the
+Windows tray menu.
 
-- [x] Virtual monitor at the Mac's native mode; display layout restored on
-      disconnect, Ctrl-C and a killed process
-- [x] In-process capture → NVENC at 3024×1964 @ 120, stable in
-      exclusive-fullscreen games
-- [x] Pairing, encryption, discovery, and forgetting a pairing from either side
-- [x] Mac app: PC picker, hardware decode, Metal presentation, keyboard and
-      trackpad input
-- [x] Windows tray menu: status, PIN, Disconnect, Forget, start on boot
-
-In progress:
+**Next:**
 
 - [ ] Windows service: lock screen, login screen, reboot and crash-restore
       verification
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app
-
-Implemented but untested, or future:
-
-- [ ] AMD (AMF) and Intel (Quick Sync) encoding
-- [ ] [parsec-vdd](https://github.com/nomi-san/parsec-vdd) as an alternative
-      display driver
 - [ ] HDR end to end
 
 ## Getting started
@@ -198,18 +193,22 @@ troubleshooting, are [host/README.md](host/README.md) and
 | [`host/`](host/) | Windows host (Rust): virtual display control, capture and encode, Windows service and tray, protocol server |
 | [`client/`](client/) | macOS client (Swift, AppKit): discovery, pairing, decode, Metal presenter, input |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | wire protocol spec, the contract both sides implement |
-| [`docs/`](docs/) | latency investigations and measurements |
+| [`docs/LATENCY.md`](docs/LATENCY.md) | how the latency was measured and tuned, including what didn't work |
 | [`tools/`](tools/) | Windows installer and driver settings template |
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost.swift` is a fake PC host. Both run
-the real handshake. Unit tests: `cargo test` on Windows, `swift test` on macOS;
+the real handshake. Unit tests (about 170: 105 Rust, 64 Swift): `cargo test`
+on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)
 on every push that touches that side.
 
 ## Known limitations
 
-- Only NVIDIA encoding is tested; AMD and Intel use `ffmpeg` and are unverified.
+- Only NVIDIA encoding is tested. AMD (AMF) and Intel (Quick Sync) go through
+  `ffmpeg` and are implemented but unverified, as is
+  [parsec-vdd](https://github.com/nomi-san/parsec-vdd) as an alternative
+  display driver.
 - Built for a cable or a LAN: there is no congestion control, so it is not meant
   for streaming over the internet.
 - First-time pairing should happen on a trusted network (see Design decisions).
