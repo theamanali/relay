@@ -267,7 +267,10 @@ mod tests {
         };
         assert_eq!(
             facts.txt_entries(),
-            vec![("ram".to_string(), "32".to_string()), ("ip".to_string(), "192.168.1.5".to_string())]
+            vec![
+                ("ram".to_string(), "32".to_string()),
+                ("ip".to_string(), "192.168.1.5".to_string())
+            ]
         );
     }
 }

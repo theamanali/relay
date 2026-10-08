@@ -5,7 +5,8 @@
 [![Host: Rust on Windows](https://img.shields.io/badge/host-Rust%20%C2%B7%20Windows-CE422B)](host/)
 [![Client: Swift on macOS](https://img.shields.io/badge/client-Swift%20%C2%B7%20macOS%2013%2B-F05138)](client/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-<!-- CI badges go here once .github/workflows/host.yml and client.yml exist -->
+[![Host CI](https://github.com/theamanali/relay/actions/workflows/host.yml/badge.svg)](https://github.com/theamanali/relay/actions/workflows/host.yml)
+[![Client CI](https://github.com/theamanali/relay/actions/workflows/client.yml/badge.svg)](https://github.com/theamanali/relay/actions/workflows/client.yml)
 
 <!-- Demo: docs/media/demo.gif (20–30 s): plug in the cable, pick the PC, a game running at 120 Hz on the MacBook -->
 
@@ -202,7 +203,9 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost.swift` is a fake PC host. Both run
-the real handshake. Unit tests: `cargo test` on Windows, `swift test` on macOS.
+the real handshake. Unit tests: `cargo test` on Windows, `swift test` on macOS;
+GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)
+on every push that touches that side.
 
 ## Known limitations
 
