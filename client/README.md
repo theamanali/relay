@@ -165,6 +165,10 @@ The unit tests cover:
 
 - the crypto, including the [protocol test vector](../docs/PROTOCOL.md) shared
   with the Rust host;
+- the protocol v4 building blocks, not yet wired in: Noise XX against the
+  published cacophony vector, CPace against the vectors in
+  draft-irtf-cfrg-cpace-21, and the field arithmetic behind CPace's
+  PIN-to-point map against big-integer reference values;
 - message parsing and frame reassembly;
 - the picker's row model, pairing classification and the debouncer that tells a
   PC's goodbye from a cable being unplugged;
@@ -201,6 +205,22 @@ Then `swift run Relay` lists "Fake PC", or `swift run Relay --host
 `--paired` makes it claim the Mac is already paired, and `--forget`, `--pg
 <hex>` change the advertised pairing digest to exercise the "PC forgot this
 MacBook" path. The header of the file has worked examples.
+
+### `ctcheck`: timing of the PIN-to-point map
+
+CPace turns the pairing PIN into a curve point with field arithmetic in
+[`Field25519.swift`](Sources/Relay/Field25519.swift), which must take the same
+time whatever the PIN. [`Tools/ctcheck.swift`](Tools/ctcheck.swift) checks this
+with the dudect method: it times fixed against random inputs and compares them
+with Welch's t-test.
+
+```sh
+swiftc -O -parse-as-library -o ctcheck Tools/ctcheck.swift Sources/Relay/Field25519.swift
+./ctcheck        # about 25 s; exit status 1 if |t| > 10
+```
+
+On an M3 Pro: max |t| 1.5 over 200,000 runs. A 1 µs input-dependent difference
+planted for comparison shows |t| 41.
 
 ## How it works
 
