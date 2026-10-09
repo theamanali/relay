@@ -196,12 +196,13 @@ cargo clippy --all-targets
 ```
 
 The unit tests cover the crypto (including the
-[handshake test vector](../docs/PROTOCOL.md) the Mac client is also checked
-against), the pairing rate limit and digest, the display lease, bitrate choice
-and congestion detection, the ffmpeg command lines and stream splitting, the MTT
-settings-file rewriting, the layout snapshot format, input coordinate mapping
-and the tray text. Anything that actually changes the displays needs the real
-machine.
+[v4 test vector](../docs/PROTOCOL.md) the Mac client generated, the CPace
+draft-21 vectors and the field arithmetic reference values), records and
+pairing end to end, the pairing rate limit and digest, the display lease,
+bitrate choice and congestion detection, the ffmpeg command lines and stream
+splitting, the MTT settings-file rewriting, the layout snapshot format, input
+coordinate mapping and the tray text. Anything that actually changes the
+displays needs the real machine.
 
 ### `probe`: a fake Mac
 
@@ -222,6 +223,7 @@ ffplay -f hevc capture.hevc
 | `--wiggle` | | Move the mouse while connected (tests input injection). |
 | `--pin <digits>` | | Pair first if this probe isn't paired yet. |
 | `--pair-only` / `--unpair` | | Pair and leave, or ask the host to forget this probe. |
+| `--abandon-pair` | | With `--pin`: send `PAIR`, read `PAIR_REPLY` and leave without confirming, the way a Mac with the wrong PIN does. The host must count it as a failed PIN. |
 | `--fresh-identity` | | Use a throwaway key instead of `probe-identity.key`. |
 
 A probe session takes the display like a real Mac does, so **your monitors go
@@ -239,12 +241,16 @@ second line.
 
 ### One session
 
-1. **Connect.** Each TCP connection gets its own thread. Both sides run the
-   handshake and the host sends `SERVER_HELLO`.
-2. **Pair or forget, if asked.** A new Mac must send `PAIR` with a proof of the
-   PIN. Failures are rate-limited to 5 per 10 minutes, and the PIN rotates after
-   a success. `UNPAIR` forgets the Mac and closes. Neither touches the display,
-   so they work while another Mac is streaming.
+1. **Connect.** Each TCP connection gets its own thread, up to 8 at a time.
+   Both sides run the Noise XX handshake and the host sends `SERVER_HELLO`,
+   which says whether it knows the Mac.
+2. **Pair or forget, if asked.** A new Mac proves the PIN with CPace inside the
+   encrypted channel, and the PC proves it back (`PAIR`, `PAIR_REPLY`,
+   `PAIR_CONFIRM`), so each attempt is one guess. Every attempt counts as a
+   failure until the Mac's confirmation checks out; failures are rate-limited to
+   5 per 10 minutes, and the PIN rotates after a success. `UNPAIR` forgets the
+   Mac and closes. Neither touches the display, so they work while another Mac
+   is streaming.
 3. **Claim the display.** On `CLIENT_HELLO` the connection tries to claim the
    single display lease. If another Mac holds it, the answer is
    `STREAM_STOP(BUSY)`. A running session is never taken over.
@@ -277,7 +283,8 @@ learns within seconds that the tray forgot it.
 | [`main.rs`](src/main.rs) | CLI, subcommands, serve startup, single-instance check, shutdown path |
 | [`service.rs`](src/service.rs) | The Windows service: install, start type, the worker in the console session, crash restore |
 | [`server.rs`](src/server.rs) | Accept loop, per-connection session, display lease, stream pump, re-advertising |
-| [`crypto.rs`](src/crypto.rs) | Handshake, encrypted framing, PIN proof and rate limiter, paired list and digest |
+| [`crypto.rs`](src/crypto.rs) | Noise XX handshake (`snow`), records, the pairing exchange and rate limiter, paired list and digest |
+| [`cpace.rs`](src/cpace.rs), [`field25519.rs`](src/field25519.rs) | CPace (draft-21) and the field arithmetic and Elligator 2 map under it |
 | [`protocol.rs`](src/protocol.rs) | Message types and encoding |
 | [`discovery.rs`](src/discovery.rs), [`sysinfo.rs`](src/sysinfo.rs) | mDNS advertisement and the PC facts in it |
 | [`driver/`](src/driver/) | Virtual display backends: [MTT](src/driver/mtt.rs) (default) and [parsec-vdd](src/driver/parsec.rs) |

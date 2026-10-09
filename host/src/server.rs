@@ -20,8 +20,7 @@ use crate::encoder::{Encoder, EncoderConfig, Quality};
 use crate::gpu::GpuInfo;
 use crate::input::Injector;
 use crate::protocol::{
-    self, msg, pair_result, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME,
-    UNKNOWN_MICROS,
+    self, msg, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME, UNKNOWN_MICROS,
 };
 use crate::status::{HostStatus, SessionInfo, NO_END_REQUEST};
 use crate::topology;
@@ -577,46 +576,69 @@ fn handle_session(
     // it, a stuck write fails, the session ends, and the layout comes back.
     stream.set_write_timeout(Some(SEND_TIMEOUT))?;
 
-    // --- key agreement, then pairing if this client is new ------------------
-    let hs =
-        crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired).context("handshake")?;
-    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.h2c);
-    let mut rx = SecureReader::new(stream, &hs.keys.c2h, MAX_CLIENT_PAYLOAD);
+    // --- Noise handshake, then pairing if this client is new ----------------
+    let hs = match crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired) {
+        Ok(hs) => hs,
+        // Logged where it happened (an old Mac app, or a Mac that pinned
+        // another key for this PC); not a fault on either side.
+        Err(e) if e.is::<crypto::HandshakeEnd>() => return Ok(()),
+        Err(e) => return Err(e.context("handshake")),
+    };
+    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys);
+    let mut rx = SecureReader::new(stream, &hs.keys, MAX_CLIENT_PAYLOAD);
     let client_fp = crypto::fingerprint(&hs.peer);
-    tx.send(msg::SERVER_HELLO, 0, &protocol::server_hello(&cfg.name))?;
+    tx.send(
+        msg::SERVER_HELLO,
+        0,
+        &protocol::server_hello(&cfg.name, hs.paired),
+    )?;
 
     // A known client may still send a PIN (it lost its copy of our key); an unknown one must.
     if !hs.paired {
         log::info!("unpaired client {client_fp} from {peer}: waiting for the PIN");
         rx.set_read_timeout(Some(PAIR_TIMEOUT))?;
     }
-    let (mut ty, mut flags, mut payload) = rx.recv().context("waiting for the first message")?;
+    let (mut ty, mut flags, mut payload) = match rx.recv() {
+        Ok(first) => first,
+        Err(e) if crypto::peer_closed(&e) => {
+            // A Mac checking whether we still know it (`pg` moved) reads
+            // `paired` from SERVER_HELLO and leaves.
+            log::info!("client {client_fp} closed after SERVER_HELLO");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("waiting for the first message")),
+    };
     if ty == msg::PAIR {
-        let proof = payload;
-        let mut limiter = cfg.pair_limiter.lock().unwrap();
-        if !limiter.allowed() {
-            // Checked before the proof so a locked-out guesser learns nothing
-            // about the PIN. The wait lets the Mac say when to try again.
-            let wait = limiter.retry_after().as_secs().min(u16::MAX as u64) as u16;
-            let mut reply = vec![pair_result::RATE_LIMITED];
-            reply.extend_from_slice(&wait.to_be_bytes());
-            tx.send(msg::PAIR_RESULT, 0, &reply)?;
-            bail!("pairing refused for {client_fp}: too many failed PINs recently ({wait} s left)");
-        }
         let pin = cfg.status.lock().unwrap().pin.clone();
-        if !crypto::verify_pin_proof(&hs.keys.pair, &pin, &proof) {
-            limiter.record_failure();
-            tx.send(msg::PAIR_RESULT, 0, &[pair_result::WRONG_PIN])?;
-            bail!("wrong PIN from {client_fp} at {peer}");
+        // The Mac confirms as soon as PAIR_REPLY arrives: the human part (the
+        // PIN) was typed before PAIR.
+        rx.set_read_timeout(Some(HELLO_TIMEOUT))?;
+        let store = || -> Result<()> {
+            if !hs.paired {
+                cfg.paired
+                    .lock()
+                    .unwrap()
+                    .add(hs.peer, &format!("paired {}", peer.ip()))?;
+            }
+            Ok(())
+        };
+        let paired = crypto::host_pairing(
+            &mut tx,
+            &mut rx,
+            &hs.keys,
+            &payload,
+            &pin,
+            &cfg.pair_limiter,
+            store,
+        )
+        .with_context(|| format!("pairing client {client_fp} at {peer}"))?;
+        if !paired {
+            log::info!(
+                "client {client_fp} left after PAIR_REPLY (its PIN did not match, or it gave up); \
+                 counted as a failed PIN"
+            );
+            return Ok(());
         }
-        drop(limiter);
-        if !hs.paired {
-            cfg.paired
-                .lock()
-                .unwrap()
-                .add(hs.peer, &format!("paired {}", peer.ip()))?;
-        }
-        tx.send(msg::PAIR_RESULT, 0, &[pair_result::PAIRED])?;
         log::info!("paired client {client_fp}");
         // Each PIN admits one Mac: a PIN that was read off the screen (or out
         // of a log) stops being useful the moment it has done its job.
