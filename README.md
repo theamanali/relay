@@ -23,8 +23,8 @@ deliberately smaller than Sunshine + Moonlight: no game launcher, no settings
 UI, and pairing is one PIN, once.
 
 **Built with:** Rust · Swift · Win32 / DXGI / Direct3D 11 · NVENC · VideoToolbox ·
-Metal · AppKit · Network.framework · X25519 / ChaCha20-Poly1305 · mDNS / Bonjour ·
-Windows services · GitHub Actions
+Metal · AppKit · Network.framework · Noise · CPace · X25519 / ChaCha20-Poly1305 ·
+mDNS / Bonjour · Windows services · GitHub Actions
 
 ## Highlights
 
@@ -34,10 +34,11 @@ Windows services · GitHub Actions
 - **About 6 ms of work per frame on the PC and about 4 ms on the Mac** from
   receiving a frame to putting it on screen. Measured, not estimated; see
   [Performance](#performance).
-- **End-to-end encrypted**, mutually authenticated and forward-secret (X25519,
-  HKDF-SHA256, ChaCha20-Poly1305), with a [written wire spec](docs/PROTOCOL.md)
-  and a test vector that both the Rust and Swift implementations are checked
-  against.
+- **End-to-end encrypted** with standard, analysed constructions: a
+  `Noise_XX_25519_ChaChaPoly_SHA256` handshake and CPace, a PAKE, for the
+  one-time PIN pairing. There is a [written wire spec](docs/PROTOCOL.md) and a
+  shared test vector, and each side is also checked against the published
+  Noise and CPace vectors.
 - **No network setup.** The Mac finds the PC over Bonjour on the IPv6
   link-local addresses both machines assign the moment a cable is up, so a bare
   cable with no DHCP works. A home LAN or Tailscale works too.
@@ -140,7 +141,9 @@ were measured and rejected; both are written up in
   with CPace inside a Noise XX channel, and the PC proves it back. Someone in
   the middle gets one guess per attempt (rate-limited) and nothing to test
   offline; after that the pinned keys make impersonation impossible on any
-  network. (Protocol v4: the PC side is done, the Mac side is in progress.)
+  network. CryptoKit has no field arithmetic, so the Mac computes the PIN's
+  curve point with about 150 lines of TweetNaCl-style code, timing-tested for
+  input independence (`client/Tools/ctcheck.swift`).
 
 ## Status
 
@@ -153,6 +156,8 @@ Windows tray menu.
 
 **Next:**
 
+- [ ] Protocol v4 (Noise + CPace) end to end on the real hardware: the PC side
+      is verified with `probe`, the Mac side with `fakehost`
 - [ ] Windows service: lock screen, login screen, reboot and crash-restore
       verification
 - [ ] Camera-based screen-to-screen latency measurement
@@ -198,9 +203,10 @@ troubleshooting, are [host/README.md](host/README.md) and
 | [`tools/`](tools/) | Windows installer and driver settings template |
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
-fake Mac client and `client/Tools/fakehost.swift` is a fake PC host. Both run
-the real handshake. Unit tests (about 170: 105 Rust, 64 Swift): `cargo test`
-on Windows, `swift test` on macOS;
+fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
+real handshake and pairing. Unit tests (about 220: 132 Rust, 92 Swift),
+including the cross-implementation test vector, the Noise cacophony vectors and
+the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)
 on every push that touches that side.
 
@@ -212,7 +218,6 @@ on every push that touches that side.
   display driver.
 - Built for a cable or a LAN: there is no congestion control, so it is not meant
   for streaming over the internet.
-- First-time pairing should happen on a trusted network (see Design decisions).
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys; everything else is forwarded.
 - Windows' scaling for the virtual monitor has to be set once by hand in
   Settings → Display (200% looks right at Retina resolution).
@@ -224,6 +229,11 @@ on every push that touches that side.
 - [parsec-vdd](https://github.com/nomi-san/parsec-vdd) is the alternative driver.
 - The NVENC bindings are derived from `nvidia-video-codec-sdk` 0.4.0
   (© 2023 Viliam Vadocz, MIT; notice in `host/src/nvenc_bindings/`).
+- [snow](https://github.com/mcginty/snow) runs the host's Noise handshake; the
+  [Noise Protocol Framework](https://noiseprotocol.org) and
+  [CPace](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/) specs come
+  with the test vectors both sides are checked against, and the field
+  arithmetic follows [TweetNaCl](https://tweetnacl.cr.yp.to) (public domain).
 
 ## License
 
