@@ -654,7 +654,9 @@ pub fn spawn_in_session(session: u32, args: &[&str]) -> Result<Process> {
 /// service (a dev run), so the tray loop has nothing extra to wait on.
 pub fn open_quit_event() -> Option<HANDLE> {
     use windows::Win32::System::Threading::{OpenEventW, SYNCHRONIZATION_SYNCHRONIZE};
-    let session = unsafe { WTSGetActiveConsoleSessionId() };
+    // The console may already have moved while this worker is starting/exiting.
+    // Its quit event belongs to its own process session, not the latest console.
+    let session = crate::desktop::process_session_id().ok()?;
     let name: Vec<u16> = format!("{QUIT_EVENT_PREFIX}{session}")
         .encode_utf16()
         .chain(Some(0))

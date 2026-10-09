@@ -603,8 +603,8 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
     claim_single_instance();
     if worker {
         log::info!(
-            "worker started by the Relay service in session {}",
-            unsafe { windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId() }
+            "worker started by the Relay service: {}",
+            relay_host::desktop::context_description()
         );
     }
     let name = args
