@@ -520,12 +520,14 @@ pub fn acquire_display(
 struct ConnectionSlot(Arc<AtomicUsize>);
 
 impl ConnectionSlot {
+    /// Only the accept loop acquires, so taking a slot and handing it back
+    /// when there was none cannot turn another connection away.
     fn acquire(open: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
-        open.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-            (n < max).then_some(n + 1)
-        })
-        .ok()
-        .map(|_| Self(Arc::clone(open)))
+        if open.fetch_add(1, Ordering::AcqRel) >= max {
+            open.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(Self(Arc::clone(open)))
     }
 }
 
