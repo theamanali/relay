@@ -14,7 +14,7 @@ piece of ceremony and it is intentional.
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
-| `client/Tools/fakehost.swift` | fake host in Swift (CryptoKit, real handshake); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc`, advertise with `dns-sd -R`) |
+| `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
@@ -35,9 +35,16 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   rejected and what is still open: `docs/LATENCY.md`.
 - Protocol v4 (2026-10-08): Noise XX handshake, CPace PIN pairing and chunked records
   (`docs/PROTOCOL.md`). Host and spec are done (`crypto.rs`, `cpace.rs`, `field25519.rs`; the
-  v4 test vector matches line for line); the Mac side's building blocks are in but not wired
-  in. Until they are, the current Mac app cannot connect to an updated PC: `host.log` says
-  "the Mac app speaks the v2 handshake; update it". Verified against the installed service
+  v4 test vector matches line for line). The Mac side is wired in too (`Noise.swift`,
+  `CPace.swift`, `Field25519.swift`, `HostConnection`); a v3 Mac app cannot connect to a v4 PC
+  (`host.log`: "the Mac app speaks the v2 handshake; update it") and a v4 Mac reports that an
+  older PC "hung up during the handshake". Mac side verified 2026-10-08 against `fakehost`
+  in every mode through the real app (pair with the right PIN, wrong PIN caught from
+  PAIR_REPLY with nothing stored, rate limit, pairing while busy, STREAM_STOP 4 then re-pair)
+  and through the picker's launch-time check (still paired → digest stored; forgot →
+  forgotten locally; a different key behind the advertised `pk` → closed after msg2, no msg3)
+  and PC ▸ Forget in the bundled app (UNPAIR straight after msg3 → UNPAIRED, the row back to
+  Available, "Forgot Fake PC"). Not yet run between the real PC and Mac. PC side verified against the installed service
   with `probe`: not paired / pair / already paired / unpair / re-pair (PIN rotates),
   `--abandon-pair` and wrong PINs counted, the sixth attempt refused with 599 s, TXT `v=4`,
   and a 1080p60 session at 60.2 fps with encrypt/send avg 0.07 ms (max 0.38 ms); the current
@@ -98,7 +105,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   ends) picks the next known host whose advertised digest is neither verified nor
   already attempted this run (`PairingVerifier`, pure; one attempt per digest value so
   an unreachable host is not re-dialled on every update) and runs one `VerifyTask`
-  (`HostConnection.verifyOnly`: msg1, msg2, read `paired`, close; never CLIENT_HELLO, so
+  (`HostConnection.verifyOnly`: msg1–msg3, read `paired` from SERVER_HELLO, close; never CLIENT_HELLO, so
   it never touches the display or another Mac's session). `paired` 1 stores the digest;
   0 forgets the host locally, reloads the picker and flashes "PC forgot this MacBook".
   Checks only run while no connection or unpair is in flight, one host at a time, and
@@ -279,6 +286,13 @@ documented there. What follows is only the mechanics that are easy to break:
   2026-09-19); `probe --unpair` removes it.
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
+- **v4 records and the receive loop.** Senders fill every record but a message's last
+  (65,519 plaintext bytes), so once a message's first record is decrypted its header says
+  exactly how many wire bytes remain; `HostConnection.receiveMore` asks for all of them in one
+  read (`SecureChannel.remainingWireBytes`), keeping the one-read-per-frame property
+  `docs/LATENCY.md` measured. `FrameReader` caps frames at 65,535, so a hostile length never
+  allocates more. The pinned-key check sits between msg2 and msg3: a PC with another key never
+  sees the Mac's identity.
 - Pairing is CPace (a PAKE) inside the Noise channel since v4: someone in the middle gets one
   online guess per attempt, nothing to test offline, and the PC proves the PIN back. The
   host counts every attempt as a failure until PAIR_CONFIRM checks out (`PairLimiter::
