@@ -414,6 +414,20 @@ pub fn acquire_display(
     want: Mode,
     lock_physical: bool,
 ) -> Result<Source> {
+    if driver.is_some() {
+        return crate::desktop::with_input_desktop("acquire display", || {
+            acquire_display_bound(driver, gpu, want, lock_physical)
+        });
+    }
+    acquire_display_bound(driver, gpu, want, lock_physical)
+}
+
+fn acquire_display_bound(
+    driver: Option<&Arc<dyn VirtualDisplay>>,
+    gpu: &GpuInfo,
+    want: Mode,
+    lock_physical: bool,
+) -> Result<Source> {
     let Some(driver) = driver else {
         let monitor = display::primary().ok_or_else(|| anyhow!("no primary display"))?;
         let placement = display::current_placement(&monitor.device_name)?;
@@ -436,6 +450,10 @@ pub fn acquire_display(
             location,
         });
     };
+
+    // Do not overwrite a failed restore with a potentially damaged/new-session
+    // layout. Retry it in the current console before beginning another lease.
+    topology::recover_saved()?;
 
     // The snapshot must describe the user's own layout: a virtual monitor that
     // is still on the desktop from an earlier session must not end up in it.

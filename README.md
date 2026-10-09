@@ -154,12 +154,26 @@ encryption, discovery and forgetting a pairing from either side; the Mac app
 (PC picker, hardware decode, Metal presentation, keyboard and trackpad); the
 Windows tray menu.
 
+On 2026-10-09, the real Mac and PC passed protocol v4 existing/fresh pairing,
+wrong-PIN rejection, Forget from either side, reconnect without a PIN, and
+3024×1964@120 streaming. Normal disconnect restored physical monitors and layout.
+Lock/unlock during a stream and connecting while already locked passed. One
+reboot → login-screen connection → sign-in from the Mac passed; an earlier reboot
+and sign-out/reconnect failed virtual-display setup until local sign-in.
+
+The host now binds topology setup and restoration to the input desktop on a
+separate thread, preserves access errors and failed-restore snapshots, and logs
+desktop/session/readiness diagnostics. Windows unit tests, a read-only desktop
+binding/CCD test, release build and strict clippy pass. **This fix has not yet
+passed the exclusive-display hardware retest**; see the
+[reboot and sign-out retest sequence](host/PRELOGIN-RETEST.md).
+
 **Next:**
 
-- [ ] Protocol v4 (Noise + CPace) end to end on the real hardware: the PC side
-      is verified with `probe`, the Mac side with `fakehost`
-- [ ] Windows service: lock screen, login screen, reboot and crash-restore
-      verification
+- [ ] Windows service: repeatable reboot-before-login and sign-out/reconnect,
+      regression checks for lock/unlock and restoration, and crash-restore verification
+- [ ] Pair-only peer name: currently stored as “paired <IP>”; the Mac name arrives
+      in CLIENT_HELLO on the first streaming connection (separate UI follow-up)
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app
@@ -204,7 +218,8 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
-real handshake and pairing. Unit tests (about 220: 132 Rust, 92 Swift),
+real handshake and pairing. Unit tests (134 Rust plus one opt-in Windows desktop
+test, 92 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)

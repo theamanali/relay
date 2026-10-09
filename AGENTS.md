@@ -29,9 +29,13 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over
   the cable from the Mac client (Metal presenter).
-- Milestone 4 is in progress: tray icon and Windows service are done; real-hardware
-  verification of the service is pending (lock screen, login screen, reboot, crash restore,
-  sign-out/in). Still to do: DPI, installers/signing. Latency measurements, what was
+- Milestone 4 is in progress: tray icon and Windows service are done. On 2026-10-09,
+  lock/unlock during streaming and connecting to an already-locked PC passed; one
+  reboot → login-screen connect → sign-in from the Mac passed. An earlier reboot and
+  sign-out/reconnect failed virtual-display setup until local sign-in. The topology
+  context fix below passes Windows tests/build/clippy; exclusive-display hardware
+  retesting is pending, as is service crash-restore verification. Still to do: DPI,
+  installers/signing. Latency measurements, what was
   rejected and what is still open: `docs/LATENCY.md`.
 - Protocol v4 (2026-10-08): Noise XX handshake, CPace PIN pairing and chunked records
   (`docs/PROTOCOL.md`). Host and spec are done (`crypto.rs`, `cpace.rs`, `field25519.rs`; the
@@ -44,11 +48,16 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   and through the picker's launch-time check (still paired → digest stored; forgot →
   forgotten locally; a different key behind the advertised `pk` → closed after msg2, no msg3)
   and PC ▸ Forget in the bundled app (UNPAIR straight after msg3 → UNPAIRED, the row back to
-  Available, "Forgot Fake PC"). Not yet run between the real PC and Mac. PC side verified against the installed service
+  Available, "Forgot Fake PC"). Real Mac/PC verified 2026-10-09: existing pairing,
+  fresh CPace pairing, wrong-PIN rejection, Forget from either side, reconnect without
+  a PIN, and 3024×1964@120 streaming; normal disconnect restores monitors and layout.
+  PC side verified against the installed service
   with `probe`: not paired / pair / already paired / unpair / re-pair (PIN rotates),
   `--abandon-pair` and wrong PINs counted, the sixth attempt refused with 599 s, TXT `v=4`,
-  and a 1080p60 session at 60.2 fps with encrypt/send avg 0.07 ms (max 0.38 ms); the current
-  Mac app's Connect over the cable logs the v2 hint.
+  and a 1080p60 session at 60.2 fps with encrypt/send avg 0.07 ms (max 0.38 ms).
+- Separate UI follow-up: pair-only stores “paired <IP>” in the host peer list;
+  the real Mac name arrives only with CLIENT_HELLO on the first stream. Do not fold
+  a protocol/name-exchange change into the topology fix.
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)
@@ -138,6 +147,24 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   SCM's own recovery restarts a crashed *service*; Task Scheduler's
   `RestartOnFailure` never restarted a crashed process — that is why the logon-task
   design (2026-09-17) was replaced.
+- **Topology context (2026-10-09, hardware retest pending):** setup used the connection
+  thread's inherited `Default` desktop; shutdown restore could run on the tray thread,
+  which owns a window and cannot rebind. `desktop::with_input_desktop` now uses a fresh
+  scoped thread for acquisition, CCD snapshots, exclusive setup/reassertion and restore,
+  validates the actual process session against the console and requires `WinSta0`.
+  Each operation opens the current input desktop; the handle stays alive until the
+  thread switches back. Capture/input binding is unchanged. The worker's quit event
+  uses its actual process session, not a potentially changed console id.
+  Error 5 is a context/access failure, not evidence of a bad mode; it no longer falls
+  through to another topology API. Removed the invalid `0x24a0` retry:
+  `SDC_ALLOW_PATH_ORDER_CHANGES` requires `SDC_TOPOLOGY_SUPPLIED`, not
+  `SDC_USE_SUPPLIED_DISPLAY_CONFIG`. Read-only query/empty-layout waits are bounded;
+  no modeset retry loop was added. Failed restore snapshots survive and must recover
+  before the next acquisition replaces them. Diagnostics include process/thread ids,
+  actual/console sessions, station, thread/input desktops, paths/modes and virtual
+  monitor presence. The logs establish successful worker launch and handshake, but
+  cannot prove context was the sole cause; readiness/stale topology remain hypotheses
+  for the retest. See `host/PRELOGIN-RETEST.md` for steps and failure classification.
 - State is `%ProgramData%\Relay` (SYSTEM has no meaningful `%LOCALAPPDATA%`): Users
   RX, `identity.key` SYSTEM/Admins only (`restrict_to_admins` after creation). The
   installer and the first run as a user migrate the old `%LOCALAPPDATA%\Relay`. So

@@ -11,6 +11,7 @@
 use std::fs;
 use std::mem::size_of;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use windows::Win32::Devices::Display::{
@@ -18,17 +19,34 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
     DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
     DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
-    QDC_VIRTUAL_MODE_AWARE, QUERY_DISPLAY_CONFIG_FLAGS, SDC_ALLOW_CHANGES,
-    SDC_ALLOW_PATH_ORDER_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_TOPOLOGY_EXTEND,
-    SDC_USE_DATABASE_CURRENT, SDC_USE_SUPPLIED_DISPLAY_CONFIG, SDC_VIRTUAL_MODE_AWARE,
-    SET_DISPLAY_CONFIG_FLAGS,
+    QDC_VIRTUAL_MODE_AWARE, QUERY_DISPLAY_CONFIG_FLAGS, SDC_ALLOW_CHANGES, SDC_APPLY,
+    SDC_SAVE_TO_DATABASE, SDC_TOPOLOGY_EXTEND, SDC_USE_DATABASE_CURRENT,
+    SDC_USE_SUPPLIED_DISPLAY_CONFIG, SDC_VIRTUAL_MODE_AWARE, SET_DISPLAY_CONFIG_FLAGS,
 };
-use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID, POINTL};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, LUID, POINTL};
 use windows::Win32::Graphics::Gdi::DISPLAYCONFIG_PATH_ACTIVE;
 
 use crate::display::{self, wide_to_string, Mode, Monitor};
 
 const SNAPSHOT_MAGIC: &[u8; 8] = b"TDSNAP01";
+const QUERY_SETTLE: Duration = Duration::from_secs(2);
+
+#[derive(Debug)]
+struct SetError(u32);
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SetDisplayConfig error {}", self.0)
+    }
+}
+
+impl std::error::Error for SetError {}
+
+fn access_denied(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<SetError>()
+        .is_some_and(|e| e.0 == ERROR_ACCESS_DENIED.0)
+}
 
 /// The active display configuration at one point in time.
 #[derive(Clone)]
@@ -41,6 +59,7 @@ fn query(
     flags: QUERY_DISPLAY_CONFIG_FLAGS,
 ) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>)> {
     unsafe {
+        let deadline = Instant::now() + QUERY_SETTLE;
         loop {
             let (mut num_paths, mut num_modes) = (0u32, 0u32);
             GetDisplayConfigBufferSizes(flags, &mut num_paths, &mut num_modes)
@@ -57,6 +76,10 @@ fn query(
                 None,
             );
             if r == ERROR_INSUFFICIENT_BUFFER {
+                if Instant::now() >= deadline {
+                    bail!("QueryDisplayConfig topology kept changing for {QUERY_SETTLE:?}");
+                }
+                std::thread::sleep(Duration::from_millis(100));
                 continue; // a monitor came or went between the two calls
             }
             r.ok().context("QueryDisplayConfig")?;
@@ -80,10 +103,15 @@ fn set(
         )
     };
     if r != 0 {
-        bail!(
-            "SetDisplayConfig(flags 0x{:x}) failed with error {r}",
-            flags.0
-        );
+        return Err(anyhow::Error::new(SetError(r as u32))).with_context(|| {
+            format!(
+                "SetDisplayConfig(flags 0x{:x}, paths={}, modes={}); {}",
+                flags.0,
+                paths.len(),
+                modes.len(),
+                crate::desktop::context_description()
+            )
+        });
     }
     Ok(())
 }
@@ -125,11 +153,25 @@ fn snapshot_file() -> Result<PathBuf> {
 impl Snapshot {
     /// Capture the currently active paths and modes.
     pub fn take() -> Result<Self> {
-        let (paths, modes) = query(QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE)?;
-        if paths.is_empty() {
-            bail!("no active display paths to snapshot");
-        }
-        Ok(Snapshot { paths, modes })
+        crate::desktop::with_input_desktop("snapshot display layout", || {
+            let deadline = Instant::now() + QUERY_SETTLE;
+            loop {
+                let (paths, modes) = query(QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE)?;
+                if !paths.is_empty() {
+                    log::info!(
+                        "snapshot readiness: {} active paths, {} modes",
+                        paths.len(),
+                        modes.len()
+                    );
+                    return Ok(Snapshot { paths, modes });
+                }
+                if Instant::now() >= deadline {
+                    bail!("display readiness: no active paths after {QUERY_SETTLE:?}");
+                }
+                log::debug!("display readiness: no active paths yet");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
     }
 
     /// Human-readable list of the displays in the snapshot.
@@ -230,6 +272,10 @@ impl Snapshot {
     /// goes inactive. Saved to the database so Windows keeps it as the layout
     /// for this set of monitors.
     pub fn restore(&self) -> Result<()> {
+        crate::desktop::with_input_desktop("restore display layout", || self.restore_bound())
+    }
+
+    fn restore_bound(&self) -> Result<()> {
         let flags = SDC_APPLY
             | SDC_USE_SUPPLIED_DISPLAY_CONFIG
             | SDC_VIRTUAL_MODE_AWARE
@@ -241,8 +287,13 @@ impl Snapshot {
                 Ok(())
             }
             Err(e) => {
+                // Another topology cannot fix a permissions/session failure.
+                // Keep the snapshot for the next worker instead of masking error 5.
+                if access_denied(&e) {
+                    return Err(e);
+                }
                 log::warn!("{e:#}; falling back to Windows' saved layout");
-                restore_from_database()
+                restore_from_database_bound()
             }
         }
     }
@@ -251,9 +302,20 @@ impl Snapshot {
 /// Let Windows apply whatever it has stored for the currently connected
 /// monitors; if it has nothing, extend across all of them.
 pub fn restore_from_database() -> Result<()> {
-    if set(&[], &[], SDC_APPLY | SDC_USE_DATABASE_CURRENT).is_ok() {
-        log::info!("display layout restored from Windows' database");
-        return Ok(());
+    crate::desktop::with_input_desktop(
+        "restore Windows display database",
+        restore_from_database_bound,
+    )
+}
+
+fn restore_from_database_bound() -> Result<()> {
+    match set(&[], &[], SDC_APPLY | SDC_USE_DATABASE_CURRENT) {
+        Ok(()) => {
+            log::info!("display layout restored from Windows' database");
+            return Ok(());
+        }
+        Err(e) if access_denied(&e) => return Err(e),
+        Err(e) => log::warn!("{e:#}; trying SDC_TOPOLOGY_EXTEND"),
     }
     set(&[], &[], SDC_APPLY | SDC_TOPOLOGY_EXTEND).context("SDC_TOPOLOGY_EXTEND")?;
     log::warn!("display layout reset to 'extend' (no saved layout was usable)");
@@ -269,15 +331,29 @@ pub fn restore_from_database() -> Result<()> {
 /// desktop the ordinary way, its real source/target modes are read back, and
 /// a complete one-path configuration built from them is applied.
 pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
+    crate::desktop::with_input_desktop("activate virtual-only display", || {
+        exclusive_bound(pnp_id, mode)
+    })
+}
+
+fn exclusive_bound(pnp_id: &str, mode: Mode) -> Result<Monitor> {
     let is_virtual = |m: &Monitor| m.has_pnp_id(pnp_id);
 
     // 1. Get it onto the desktop (extended, anywhere) so it has real modes.
     let present = display::present_matching(&is_virtual);
+    log::info!("virtual display readiness: present={present:?}; requested={mode:?}");
     let monitor = present
         .iter()
         .max_by_key(|m| m.attached)
         .cloned()
         .ok_or_else(|| anyhow!("no {pnp_id} monitor is present"))?;
+    let available = display::list_modes(&monitor.device_name);
+    log::info!(
+        "virtual display readiness: {} advertised modes, requested mode present={}, current={:?}",
+        available.len(),
+        available.contains(&mode),
+        display::current_placement(&monitor.device_name)
+    );
     if !monitor.attached {
         let (x, y) = display::next_free_position();
         log::info!(
@@ -314,6 +390,11 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
     // 2. Read the active configuration back and keep only the virtual path,
     //    with its own modes, moved to the origin.
     let (paths, modes) = query(QDC_ONLY_ACTIVE_PATHS)?;
+    log::info!(
+        "exclusive topology: {} active paths, {} modes",
+        paths.len(),
+        modes.len()
+    );
     let path = paths
         .iter()
         .find(|p| {
@@ -343,11 +424,13 @@ pub fn exclusive(pnp_id: &str, mode: Mode) -> Result<Monitor> {
     // Complete config, deliberately NOT saved to the database.
     let flags = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
     if let Err(e) = set(&[only], &only_modes, flags) {
-        log::debug!("{e:#}; retrying with path order changes allowed");
-        if let Err(e) = set(&[only], &only_modes, flags | SDC_ALLOW_PATH_ORDER_CHANGES) {
-            log::warn!("{e:#}; using the legacy per-display route");
-            exclusive_via_gdi(pnp_id, mode)?;
+        if access_denied(&e) {
+            return Err(e);
         }
+        // ALLOW_PATH_ORDER_CHANGES is valid only with TOPOLOGY_SUPPLIED,
+        // not USE_SUPPLIED_DISPLAY_CONFIG; it masked the original error with 87.
+        log::warn!("{e:#}; using the legacy per-display route");
+        exclusive_via_gdi(pnp_id, mode)?;
     }
 
     // 3. Verify.
@@ -419,6 +502,15 @@ pub fn recover_saved() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_access_denied_through_context() {
+        let denied = anyhow::Error::new(SetError(5)).context("apply snapshot");
+        assert!(access_denied(&denied));
+        for code in [31, 87, 1610] {
+            assert!(!access_denied(&anyhow::Error::new(SetError(code))));
+        }
+    }
 
     #[test]
     fn snapshot_round_trips_through_bytes() {
