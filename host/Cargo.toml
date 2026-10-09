@@ -29,10 +29,12 @@ regex = "1"
 winreg = "0.55"
 ctrlc = "3"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"
-chacha20poly1305 = "0.10"
+# The default resolver with just this suite's primitives: snow's std feature
+# would also build ring (and the defaults AES-GCM and BLAKE2), none of which
+# Noise_XX_25519_ChaChaPoly_SHA256 uses.
+snow = { version = "0.10", default-features = false, features = ["use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom"] }
 rand = "0.8"
 hex = "0.4"
 if-addrs = "0.13"

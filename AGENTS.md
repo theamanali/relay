@@ -33,6 +33,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   verification of the service is pending (lock screen, login screen, reboot, crash restore,
   sign-out/in). Still to do: DPI, installers/signing. Latency measurements, what was
   rejected and what is still open: `docs/LATENCY.md`.
+- Protocol v4 (2026-10-08): Noise XX handshake, CPace PIN pairing and chunked records
+  (`docs/PROTOCOL.md`). Host and spec are done (`crypto.rs`, `cpace.rs`, `field25519.rs`; the
+  v4 test vector matches line for line); the Mac side's building blocks are in but not wired
+  in. Until they are, the current Mac app cannot connect to an updated PC: `host.log` says
+  "the Mac app speaks the v2 handshake; update it".
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)
@@ -181,9 +186,10 @@ documented there. What follows is only the mechanics that are easy to break:
 ## Hard-won facts — do not relearn these
 
 - **Renamed from TravelDisplay to Relay (2026-09-16).** Every user-visible name and identifier
-  changed except the HKDF info string and the `TDH2` handshake magic, which stay so pairings
-  survive. State directories move from the old name automatically on first run; re-run the
-  installer once on the PC (it removes the old task and firewall names). The GitHub repo is
+  changed except the HKDF info string and the `TDH2` handshake magic, which stayed so pairings
+  survived; protocol v4 replaced both (2026-10-08) and keeps the identity keys, so pairings
+  survive it too. State directories move from the old name automatically on first run;
+  re-run the installer once on the PC (it removes the old task and firewall names). The GitHub repo is
   `theamanali/relay`; a local clone directory may still be called `travel-display`.
 - **MTT Virtual Display Driver's control pipe must never be used.** `SETDISPLAYCOUNT` /
   `RELOAD_DRIVER` crash its user-mode host; after 5 crashes Windows parks the device at
@@ -268,9 +274,16 @@ documented there. What follows is only the mechanics that are easy to break:
   is paired with it since 2026-09-18 (`probe --unpair` removes it).
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
-- Pairing is PIN-based, not a PAKE: pair on the cable or at home, never first-pair on
-  hotel Wi-Fi. Keys/pairings: `%ProgramData%\Relay`,
-  `~/Library/Application Support/Relay`.
+- Pairing is CPace (a PAKE) inside the Noise channel since v4: someone in the middle gets one
+  online guess per attempt, nothing to test offline, and the PC proves the PIN back. The
+  host counts every attempt as a failure until PAIR_CONFIRM checks out (`PairLimiter::
+  undo_failure`), so a client that leaves after PAIR_REPLY still spent a guess.
+  Keys/pairings: `%ProgramData%\Relay`, `~/Library/Application Support/Relay`.
+- **snow's default `Dh25519` accepts an all-zero DH result** (plain `mul_clamped`), which
+  Relay has always refused (the Mac's Noise.swift too), so the host checks every key a peer
+  sends with `Identity::refuse_low_order`. snow's `std` feature turns on `ring/std` (not
+  `ring?/std`) and so builds ring; the host uses `default-features = false` with just the
+  four `use-*` features its suite needs.
 
 ## Conventions
 

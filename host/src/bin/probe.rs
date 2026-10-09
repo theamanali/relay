@@ -58,6 +58,10 @@ struct Args {
     /// Pair if needed, then close without requesting the display
     #[arg(long, conflicts_with = "unpair")]
     pair_only: bool,
+    /// Send PAIR, read PAIR_REPLY, then close without confirming (the host
+    /// must count it as a failed PIN)
+    #[arg(long, requires = "pin", conflicts_with = "unpair")]
+    abandon_pair: bool,
 }
 
 fn main() -> Result<()> {
@@ -73,26 +77,37 @@ fn main() -> Result<()> {
         crypto::Identity::load_or_create(&relay_host::state_dir()?.join("probe-identity.key"))?
     };
     let hs = crypto::client_handshake(&mut stream, &identity, None)?;
-    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.c2h);
-    let mut rx = SecureReader::new(stream, &hs.keys.h2c, protocol::MAX_PAYLOAD as usize);
+    let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys);
+    let mut rx = SecureReader::new(stream, &hs.keys, protocol::MAX_PAYLOAD as usize);
     println!(
-        "handshake ok: host {} , probe {} , {}",
+        "handshake ok: host {} , probe {}",
         crypto::fingerprint(&hs.peer),
         crypto::fingerprint(identity.public.as_bytes()),
-        if hs.paired {
+    );
+    // The host greets first and says whether it knows us; pairing (if
+    // needed) happens before our hello.
+    let (ty, _, p) = rx.recv()?;
+    if ty != msg::SERVER_HELLO {
+        bail!("expected SERVER_HELLO, got 0x{ty:02x}");
+    }
+    let (Some(version), Some(&name_len)) = (p.get(..2), p.get(2)) else {
+        bail!("SERVER_HELLO of {} bytes", p.len());
+    };
+    let version = u16::from_be_bytes([version[0], version[1]]);
+    let name_end = 3 + name_len as usize;
+    let (Some(name), Some(&paired)) = (p.get(3..name_end), p.get(name_end)) else {
+        bail!("SERVER_HELLO of {} bytes", p.len());
+    };
+    let name = String::from_utf8_lossy(name).into_owned();
+    let paired = paired != 0;
+    println!(
+        "host '{name}' protocol v{version}, {}",
+        if paired {
             "already paired"
         } else {
             "not paired"
         }
     );
-    // The host greets first; pairing (if needed) happens before our hello.
-    let (ty, _, p) = rx.recv()?;
-    if ty != msg::SERVER_HELLO {
-        bail!("expected SERVER_HELLO, got 0x{ty:02x}");
-    }
-    let version = u16::from_be_bytes([p[0], p[1]]);
-    let name = String::from_utf8_lossy(&p[3..3 + p[2] as usize]).into_owned();
-    println!("host '{name}' protocol v{version}");
     if args.unpair {
         tx.send(msg::UNPAIR, 0, &[])?;
         let (ty, _, p) = rx.recv()?;
@@ -105,12 +120,16 @@ fn main() -> Result<()> {
         }
         bail!("expected STREAM_STOP(UNPAIRED), got 0x{ty:02x} {p:?}");
     }
-    if !hs.paired || args.pin.is_some() {
+    if !paired || args.pin.is_some() {
         let pin = args
             .pin
             .clone()
             .context("not paired with this host: pass --pin <host PIN>")?;
-        crypto::pair_as_client(&mut tx, &mut rx, &hs.keys, &pin)?;
+        crypto::client_pairing(&mut tx, &mut rx, &hs.keys, &pin, args.abandon_pair)?;
+        if args.abandon_pair {
+            println!("left after PAIR_REPLY without confirming; the host counts a failed PIN");
+            return Ok(());
+        }
         println!("paired");
     }
     if args.pair_only {
@@ -157,6 +176,8 @@ fn main() -> Result<()> {
     let deadline = start + Duration::from_secs(args.seconds);
     let (mut frames, mut keyframes, mut bytes, mut configs, mut timings) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
+    // FRAME_TIMING's frame_send_us: the host's encrypt + write time per frame.
+    let (mut send_us_total, mut send_samples) = (0u64, 0u64);
     let mut first_frame_at: Option<Duration> = None;
     let mut last_wiggle = Instant::now();
     let mut phase = 0u32;
@@ -210,8 +231,12 @@ fn main() -> Result<()> {
                 tx.send(msg::PONG, 0, &p)?;
             }
             msg::FRAME_TIMING => {
-                if protocol::FrameTiming::parse(&p).is_some() {
+                if let Some(timing) = protocol::FrameTiming::parse(&p) {
                     timings += 1;
+                    if timing.send_us != protocol::UNKNOWN_MICROS {
+                        send_us_total += u64::from(timing.send_us);
+                        send_samples += 1;
+                    }
                 }
             }
             msg::STREAM_STOP => {
@@ -236,9 +261,10 @@ fn main() -> Result<()> {
 
     let secs = start.elapsed().as_secs_f64();
     println!(
-        "{frames} frames ({keyframes} key) in {secs:.1}s = {:.1} fps, {:.1} Mbps avg, {configs} codec configs, {timings} timing samples",
+        "{frames} frames ({keyframes} key) in {secs:.1}s = {:.1} fps, {:.1} Mbps avg, {configs} codec configs, {timings} timing samples, host send avg {:.3} ms",
         frames as f64 / secs,
-        bytes as f64 * 8.0 / secs / 1e6
+        bytes as f64 * 8.0 / secs / 1e6,
+        send_us_total as f64 / send_samples.max(1) as f64 / 1000.0
     );
     if let Some(mut w) = out {
         w.flush()?;

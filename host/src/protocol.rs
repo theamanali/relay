@@ -2,7 +2,7 @@
 
 use std::io::{self, Read, Write};
 
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 pub const DEFAULT_PORT: u16 = 8468;
 pub const SERVICE_TYPE: &str = "_relay._tcp.local.";
 pub const MAX_PAYLOAD: u32 = 64 * 1024 * 1024;
@@ -24,6 +24,8 @@ pub mod msg {
     /// that do not know this message safely ignore it.
     pub const FRAME_TIMING: u8 = 0x08;
     pub const PAIR_RESULT: u8 = 0xA1;
+    /// CPace: the host's share and confirmation tag, in answer to PAIR.
+    pub const PAIR_REPLY: u8 = 0xA3;
     // client -> host
     pub const CLIENT_HELLO: u8 = 0x81;
     pub const PONG: u8 = 0x87;
@@ -31,9 +33,11 @@ pub mod msg {
     pub const MOUSE_BUTTON: u8 = 0x91;
     pub const MOUSE_WHEEL: u8 = 0x92;
     pub const KEY: u8 = 0x93;
-    // pairing (client -> host proof, host -> client verdict)
+    // pairing (CPace inside the channel; see docs/PROTOCOL.md)
     pub const PAIR: u8 = 0xA0;
     pub const UNPAIR: u8 = 0xA2;
+    /// CPace: the client's confirmation tag, after PAIR_REPLY checked out.
+    pub const PAIR_CONFIRM: u8 = 0xA4;
 }
 
 pub const FLAG_KEYFRAME: u8 = 0x01;
@@ -178,13 +182,16 @@ pub fn write_nal_msg(w: &mut impl Write, ty: u8, flags: u8, nals: &[Vec<u8>]) ->
     w.write_all(&buf)
 }
 
-pub fn server_hello(name: &str) -> Vec<u8> {
+/// paired: whether this host knows the client's identity key (the client
+/// learns it here because the handshake only reveals its key in msg3).
+pub fn server_hello(name: &str, paired: bool) -> Vec<u8> {
     let name = name.as_bytes();
     let n = name.len().min(255);
-    let mut p = Vec::with_capacity(3 + n);
+    let mut p = Vec::with_capacity(4 + n);
     p.extend_from_slice(&VERSION.to_be_bytes());
     p.push(n as u8);
     p.extend_from_slice(&name[..n]);
+    p.push(paired as u8);
     p
 }
 
@@ -266,6 +273,15 @@ mod timing_tests {
     fn client_hello_rejects_invalid_bitrates() {
         assert!(ClientHello::parse(&hello(0)).is_none());
         assert!(ClientHello::parse(&hello(MAX_BITRATE_MBPS + 1)).is_none());
+    }
+
+    #[test]
+    fn server_hello_ends_with_paired() {
+        let mut expected = vec![0, 4, 7];
+        expected.extend_from_slice(b"Test PC");
+        expected.push(1);
+        assert_eq!(server_hello("Test PC", true), expected);
+        assert_eq!(server_hello("", false), [0, 4, 0, 0]);
     }
 
     #[test]

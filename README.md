@@ -136,10 +136,11 @@ were measured and rejected; both are written up in
   session lets those screens stream and lets the service restore the PC's
   monitors if the worker crashes. (Implemented; hardware verification in
   progress.)
-- **PIN pairing, not a PAKE.** Simpler to implement and audit. The tradeoff is
-  that the first pairing must happen on a trusted link (the cable, or home);
-  after that the pinned keys make impersonation impossible on any network.
-  Wrong PINs are rate-limited.
+- **A PIN, checked with a PAKE.** The first pairing proves the PC's six-digit PIN
+  with CPace inside a Noise XX channel, and the PC proves it back. Someone in
+  the middle gets one guess per attempt (rate-limited) and nothing to test
+  offline; after that the pinned keys make impersonation impossible on any
+  network. (Protocol v4: the PC side is done, the Mac side is in progress.)
 
 ## Status
 
