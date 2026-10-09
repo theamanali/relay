@@ -25,6 +25,9 @@ struct FrameReader {
         return max(1, 4 + len - have)
     }
 
+    /// Bytes received but not yet returned by `next()`.
+    var buffered: Int { buffer.count - consumed }
+
     mutating func append(_ data: Data) {
         // Drop the consumed prefix only when it dominates, so steady-state
         // reads are appends rather than reallocations.

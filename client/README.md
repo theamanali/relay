@@ -163,13 +163,12 @@ swift test
 
 The unit tests cover:
 
-- the crypto, including the [protocol test vector](../docs/PROTOCOL.md) shared
-  with the Rust host;
-- the protocol v4 building blocks, not yet wired in: Noise XX against the
-  published cacophony vector, CPace against the vectors in
-  draft-irtf-cfrg-cpace-21, and the field arithmetic behind CPace's
-  PIN-to-point map against big-integer reference values;
-- message parsing and frame reassembly;
+- the crypto: the [protocol v4 test vector](../docs/PROTOCOL.md) shared with
+  the Rust host (a full pairing transcript, through the app's own handshake
+  and record code), Noise XX against the published cacophony vector, CPace
+  against the vectors in draft-irtf-cfrg-cpace-21, and the field arithmetic
+  behind CPace's PIN-to-point map against big-integer reference values;
+- message parsing, record splitting at 65,519 bytes and reassembly;
 - the picker's row model, pairing classification and the debouncer that tells a
   PC's goodbye from a cable being unplugged;
 - the pairing-check scheduler and Bonjour reconfirm;
@@ -180,14 +179,15 @@ The unit tests cover:
 
 ### `fakehost`: a fake PC
 
-[`Tools/fakehost.swift`](Tools/fakehost.swift) runs the real handshake with
-CryptoKit and plays one host behaviour per run, so the connect and pairing paths
-can be tested with no PC:
+[`Tools/fakehost/main.swift`](Tools/fakehost/main.swift) runs the real v4
+handshake and pairing with the app's own `Noise.swift` and `CPace.swift` and
+plays one host behaviour per run, so the connect and pairing paths can be
+tested with no PC:
 
 ```sh
-swiftc -O -o fakehost Tools/fakehost.swift
+swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift
 ./fakehost 8470 busy            # prints the dns-sd line to advertise it
-dns-sd -R "Fake PC" _relay._tcp . 8470 v=3 pk=<hex> pg=<hex>
+dns-sd -R "Fake PC" _relay._tcp . 8470 v=4 pk=<hex> pg=<hex>
 ```
 
 Then `swift run Relay` lists "Fake PC", or `swift run Relay --host
@@ -197,14 +197,15 @@ Then `swift run Relay` lists "Fake PC", or `swift run Relay --host
 |---|---|
 | `busy` | allows Pair and Forget, answers Connect with "in another session" |
 | `ratelimit <s>` | refuses pairing for `<s>` seconds |
-| `wrong` | rejects every PIN |
-| `accept` | accepts any PIN, then closes |
-| `hang` | accepts any PIN, then stays connected |
-| `notpaired` | accepts the PIN, then says the Mac isn't paired when it connects |
+| `wrong` | checks against a different PIN, so the Mac sees the PIN fail |
+| `accept` | pairs with its PIN, then closes |
+| `hang` | pairs with its PIN, then stays connected |
+| `notpaired` | pairs, then says the Mac isn't paired when it connects |
 
-`--paired` makes it claim the Mac is already paired, and `--forget`, `--pg
-<hex>` change the advertised pairing digest to exercise the "PC forgot this
-MacBook" path. The header of the file has worked examples.
+Its PIN is `000000` unless `--pin <digits>` sets one: CPace needs the real PIN on
+both sides. `--paired` makes it claim the Mac is already paired, and
+`--forget`, `--pg <hex>` change the advertised pairing digest to exercise the
+"PC forgot this MacBook" path. The header of the file has worked examples.
 
 ### `ctcheck`: timing of the PIN-to-point map
 
@@ -231,12 +232,16 @@ planted for comparison shows |t| 41.
    digest `pg`, and facts for the hover card.
 2. **Connect.** [`HostConnection`](Sources/Relay/HostConnection.swift) dials over
    Network.framework, pinned to wired Ethernet when the PC was seen there, and
-   runs the handshake. It refuses a PC whose identity key changed.
-3. **Pair if needed**, then send `CLIENT_HELLO` with the screen's pixel size,
-   refresh rate, bitrate and supported codecs.
-4. **Receive.** [`FrameReader`](Sources/Relay/FrameReader.swift) pulls whole
-   encrypted frames with one socket read each, and
-   [`SecureChannel`](Sources/Relay/Crypto.swift) decrypts them.
+   runs the Noise XX handshake ([`Noise.swift`](Sources/Relay/Noise.swift)). It
+   refuses a PC whose identity key changed before sending its own.
+3. **Pair if needed** with CPace ([`CPace.swift`](Sources/Relay/CPace.swift)):
+   the PC proves it knows the same PIN before the Mac confirms. Then send
+   `CLIENT_HELLO` with the screen's pixel size, refresh rate, bitrate and
+   supported codecs.
+4. **Receive.** Messages arrive as encrypted records of up to 64 KiB.
+   [`FrameReader`](Sources/Relay/FrameReader.swift) pulls them from the socket
+   and [`SecureChannel`](Sources/Relay/Crypto.swift) decrypts and reassembles
+   them; once a frame's first record is in, the rest is read in one go.
 5. **Decode.** [`VideoRenderer`](Sources/Relay/VideoRenderer.swift) owns a
    real-time `VTDecompressionSession`. The wire already uses the length-prefixed
    NAL layout VideoToolbox wants, so each frame becomes a sample buffer with no
@@ -284,5 +289,5 @@ output.
 - The Metal presenter is verified for colour and orientation on a real stream.
   Mode switches and reconnects are still being checked, and Metal versus
   `avsbdl` latency numbers have not been recorded yet.
-- Pairing is PIN-based, not a PAKE: pair the first time on the cable or a
-  trusted network. After that the pinned keys protect every connection.
+- The PC must run protocol v4 too. An older PC hangs up during the handshake,
+  and the Mac says it may need the latest Relay.
