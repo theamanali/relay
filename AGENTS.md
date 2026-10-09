@@ -37,7 +37,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   (`docs/PROTOCOL.md`). Host and spec are done (`crypto.rs`, `cpace.rs`, `field25519.rs`; the
   v4 test vector matches line for line); the Mac side's building blocks are in but not wired
   in. Until they are, the current Mac app cannot connect to an updated PC: `host.log` says
-  "the Mac app speaks the v2 handshake; update it".
+  "the Mac app speaks the v2 handshake; update it". Verified against the installed service
+  with `probe`: not paired / pair / already paired / unpair / re-pair (PIN rotates),
+  `--abandon-pair` and wrong PINs counted, the sixth attempt refused with 599 s, TXT `v=4`,
+  and a 1080p60 session at 60.2 fps with encrypt/send avg 0.07 ms (max 0.38 ms); the current
+  Mac app's Connect over the cable logs the v2 hint.
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)
@@ -271,7 +275,8 @@ documented there. What follows is only the mechanics that are easy to break:
 - A session-less host in the same session as the SYSTEM worker cannot be run for
   tests (`Local\Relay.host` mutex): redeploy with `install-host.ps1 -SkipDriver`
   (elevated) and test against the service instead. The probe's persisted identity
-  is paired with it since 2026-09-18 (`probe --unpair` removes it).
+  is paired with it again since the v4 checks (2026-10-08; the list had been empty since
+  2026-09-19); `probe --unpair` removes it.
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
   not 120; that is frame duplication, not loss.
 - Pairing is CPace (a PAKE) inside the Noise channel since v4: someone in the middle gets one
