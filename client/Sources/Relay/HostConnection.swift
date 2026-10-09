@@ -42,10 +42,10 @@ final class HostConnection {
         var unpairOnly = false
         /// Pair (PIN exchange) and then close without starting a stream.
         var pairOnly = false
-        /// Run the handshake and close: msg2 alone says whether the host
-        /// still has this Mac paired (`pairingVerified`). Nothing is sent
-        /// after it, no CLIENT_HELLO, so the host's display and any other
-        /// Mac's session are untouched.
+        /// Run the handshake and close: SERVER_HELLO's `paired` says whether
+        /// the host still has this Mac paired (`pairingVerified`). Nothing is
+        /// sent after msg3, no CLIENT_HELLO, so the host's display and any
+        /// other Mac's session are untouched.
         var verifyOnly = false
         var requestedWidth = 0
         var requestedHeight = 0
@@ -72,23 +72,32 @@ final class HostConnection {
     private var send: SecureChannel?
     private var receive: SecureChannel?
     private var hostKey = Data()
+    /// Noise's handshake hash: CPace binds the PIN exchange to it.
+    private var handshakeHash = Data()
+    /// SERVER_HELLO has arrived (the handshake timeout runs until it does).
+    private var greeted = false
     private var pairing = false
+    /// Our half of the PIN exchange, from PAIR until PAIR_REPLY.
+    private var cpace: CPaceInitiator?
     private var ready = false
     private var nextFrameSequence: UInt64 = 0
-    private var reader = FrameReader(maxFrame: Int(Proto.maxPayload) + Proto.headerSize + 16)
+    /// Every frame on the wire is a handshake message or one record, so none
+    /// is longer than Noise's largest message.
+    private var reader = FrameReader(maxFrame: SecureChannel.maxRecord)
     /// Set while a receive is outstanding so drains never overlap.
     private var receiving = false
     /// The host answered UNPAIR, so the pairing is gone on both sides.
     private(set) var hostConfirmedUnpair = false
     /// Pair-only mode finished with both sides knowing each other.
     private(set) var pairingCompleted = false
-    /// Verify-only mode read msg2: whether the host still knows this Mac.
+    /// Verify-only mode read SERVER_HELLO: whether the host still knows this Mac.
     private(set) var pairingVerified: Bool?
     /// Some attempt reached the socket-connected state: the PC was there,
     /// whatever happened next. Never set means it could not be reached at
     /// all, and its Bonjour record may be stale.
     private(set) var everConnected = false
-    /// The host answered the PIN with a refusal (wrong, or too many tries).
+    /// The PIN was refused: it did not match the host's (we see that from
+    /// PAIR_REPLY), or the host is refusing PINs after too many tries.
     private(set) var pinRejected = false
     /// With `pinRejected`: the host is not checking PINs at all for this many
     /// seconds (too many wrong ones recently), so retyping is pointless.
@@ -186,7 +195,10 @@ final class HostConnection {
         ready = false
         send = nil
         receive = nil
+        handshakeHash = Data()
+        greeted = false
         pairing = false
+        cpace = nil
         hostBusy = false
         nextFrameSequence = 0
         reader.reset()
@@ -265,78 +277,53 @@ final class HostConnection {
 
     // MARK: handshake + pairing
 
-    /// How long after the socket connects the host has to answer message 1.
-    /// A host in another session still answers the handshake at once (and
-    /// later refuses CLIENT_HELLO), so silence means it is not really there:
-    /// a stale Bonjour record, a firewall, a service that is down.
+    /// How long after the socket connects the host has to get through the
+    /// handshake to SERVER_HELLO. A host in another session still answers at
+    /// once (and later refuses CLIENT_HELLO), so silence means it is not
+    /// really there: a stale Bonjour record, a firewall, a service that is
+    /// down, or a PC on an older protocol that hangs up.
     static let handshakeTimeout: TimeInterval = 10
     /// Re-dial interval in --host mode after a busy answer.
     static let busyRetryDelay: TimeInterval = 5
 
+    /// Noise XX: msg1 ("RLY4" + e), read msg2 (the host's identity), check
+    /// it, msg3 (ours). Then everything is records, and the host greets
+    /// with SERVER_HELLO, where the pairing decisions are made.
     private func startHandshake(_ c: NWConnection, attempt: UInt64) {
         guard isCurrent(c, attempt: attempt) else { return }
-        let pending = Handshake.Pending(identity: identity)
+        let noise = Handshake.initiator(identity: identity)
         queue.asyncAfter(deadline: .now() + Self.handshakeTimeout) { [weak self] in
-            guard let self, self.isCurrent(c, attempt: attempt), self.send == nil else { return }
+            guard let self, self.isCurrent(c, attempt: attempt), !self.greeted else { return }
             self.finish("the PC didn't answer", from: c, attempt: attempt)
         }
-        var frame = Data()
-        frame.appendBE32(UInt32(pending.message1.count))
-        frame.append(pending.message1)
-        c.send(content: frame, completion: .contentProcessed { [weak self] err in
-            guard let self, self.isCurrent(c, attempt: attempt) else { return }
-            if let err { self.finish("send failed: \(err.localizedDescription)", from: c, attempt: attempt) }
-        })
+        do {
+            sendFrame(Handshake.magic + (try noise.writeMessage()), c, attempt: attempt)
+        } catch {
+            return finish("handshake failed: \(error.localizedDescription)", from: c, attempt: attempt)
+        }
         readFrame(c, attempt: attempt) { [weak self] body in
             guard let self, self.isCurrent(c, attempt: attempt) else { return }
             do {
-                let result = try pending.complete(message2: body, expectedHost: self.options.expectedHostKey)
-                self.send = SecureChannel(key: result.keys.clientToHost)
-                self.receive = SecureChannel(key: result.keys.hostToClient)
-                self.hostKey = result.hostKey
-                let fp = fingerprint(result.hostKey)
+                guard body.count == Handshake.message2Length else {
+                    throw CryptoError.badHello("not a Relay v4 handshake (msg2 of \(body.count) bytes)")
+                }
+                _ = try noise.readMessage(body)
+                guard let hostStatic = noise.remoteStatic else { throw CryptoError.malformed }
+                if let expected = self.options.expectedHostKey, expected != hostStatic {
+                    // Close before msg3: a PC with another key never learns ours.
+                    throw CryptoError.hostChanged(expected: fingerprint(expected), got: fingerprint(hostStatic))
+                }
+                self.sendFrame(try noise.writeMessage(), c, attempt: attempt)
+                let (send, receive) = try noise.split()
+                self.send = SecureChannel(cipher: send)
+                self.receive = SecureChannel(cipher: receive)
+                self.hostKey = hostStatic
+                self.handshakeHash = noise.handshakeHash
                 if self.options.unpairOnly {
+                    // UNPAIR may follow msg3 at once; the host greets, then answers it.
                     self.status("Forgetting \(self.serviceName)…")
                     self.sendRaw(Proto.message(.unpair))
-                    self.readMessage(c, attempt: attempt)
-                    return
                 }
-                if self.options.verifyOnly {
-                    // The answer was msg2's `paired` byte; nothing else to say.
-                    self.pairingVerified = result.paired
-                    self.finish(result.paired ? "still paired" : "the PC forgot this MacBook", from: c, attempt: attempt)
-                    return
-                }
-                let known = ClientState.knownHosts()[result.hostKey] != nil
-                if self.options.pairOnly {
-                    // An explicit Pair asks for the PIN when the host does not
-                    // know us or we do not know it (lost hosts.txt); a host
-                    // both sides know needs nothing more.
-                    if !result.paired || !known {
-                        self.pairing = true
-                        self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
-                    } else {
-                        self.pairingCompleted = true
-                        self.finish("already paired", from: c, attempt: attempt)
-                        return
-                    }
-                } else if !known {
-                    // Connect to a host we have no record of (--host, a lost
-                    // hosts.txt): pair first. The host takes a PIN from a
-                    // client it already knows too.
-                    self.pairing = true
-                    self.askForPIN(fingerprint: fp, keys: result.keys, connection: c, attempt: attempt)
-                } else if !result.paired {
-                    // The PC forgot us since we paired. A plain Connect does
-                    // not re-pair on its own: drop our half as well, so the
-                    // row moves to Available, where Pair asks for the PIN.
-                    ClientState.forget(host: result.hostKey)
-                    self.finish("the PC forgot this MacBook", from: c, attempt: attempt)
-                    return
-                } else {
-                    self.status("Secure channel to \(fp)")
-                }
-                // The host greets first; everything after this is encrypted.
                 self.readMessage(c, attempt: attempt)
             } catch {
                 self.finish("handshake failed: \(error.localizedDescription)", from: c, attempt: attempt)
@@ -344,7 +331,62 @@ final class HostConnection {
         }
     }
 
-    private func askForPIN(fingerprint fp: String, keys: SessionKeys, connection c: NWConnection, attempt: UInt64) {
+    /// One cleartext handshake message with its u32 length.
+    private func sendFrame(_ body: Data, _ c: NWConnection, attempt: UInt64) {
+        var frame = Data(capacity: 4 + body.count)
+        frame.appendBE32(UInt32(body.count))
+        frame.append(body)
+        c.send(content: frame, completion: .contentProcessed { [weak self] err in
+            guard let self, self.isCurrent(c, attempt: attempt) else { return }
+            if let err { self.finish("send failed: \(err.localizedDescription)", from: c, attempt: attempt) }
+        })
+    }
+
+    /// SERVER_HELLO says whether the host knows this Mac; with what we know
+    /// about the host, that decides what this connection does next.
+    private func handleServerHello(_ hello: Proto.ServerHello) {
+        greeted = true
+        if !hello.name.isEmpty { serviceName = hello.name }
+        if options.unpairOnly { return } // UNPAIR is already on its way
+        if options.verifyOnly {
+            pairingVerified = hello.paired
+            return finish(hello.paired ? "still paired" : "the PC forgot this MacBook")
+        }
+        let known = ClientState.knownHosts()[hostKey] != nil
+        if options.pairOnly {
+            // An explicit Pair asks for the PIN when the host does not know
+            // us or we do not know it (lost hosts.txt); a host both sides
+            // know needs nothing more.
+            if hello.paired && known {
+                pairingCompleted = true
+                return finish("already paired")
+            }
+            askForPIN()
+        } else if !known {
+            // Connect to a host we have no record of (--host, a lost
+            // hosts.txt): pair first. The host takes a PIN from a client it
+            // already knows too.
+            askForPIN()
+        } else if !hello.paired {
+            // The PC forgot us since we paired. A plain Connect does not
+            // re-pair on its own: drop our half as well, so the row moves to
+            // Available, where Pair asks for the PIN.
+            ClientState.forget(host: hostKey)
+            finish("the PC forgot this MacBook")
+        } else {
+            ClientState.remember(host: hostKey, name: hello.name)
+            status("Connected to \(hello.name)")
+            sendClientHello()
+        }
+    }
+
+    /// Get the PIN (command line or the sheet), then open CPace with PAIR.
+    /// The host's PAIR_REPLY proves it knows the same PIN before we confirm.
+    private func askForPIN() {
+        guard let c = connection else { return }
+        let attempt = self.attempt
+        pairing = true
+        let fp = fingerprint(hostKey)
         let host = serviceName.isEmpty ? fp : serviceName
         let deliver: (String?) -> Void = { [weak self] pin in
             self?.queue.async {
@@ -353,8 +395,16 @@ final class HostConnection {
                     self.finish("pairing cancelled")
                     return
                 }
-                self.status("Pairing with \(host)…")
-                self.sendRaw(Proto.message(.pair, payload: Handshake.pinProof(keys.pair, pin: pin)))
+                do {
+                    let ci = CPace.channelIdentifier(clientStatic: self.identity.publicKey.rawRepresentation,
+                                                     hostStatic: self.hostKey)
+                    let cpace = try CPaceInitiator(prs: Data(pin.utf8), ci: ci, sid: self.handshakeHash)
+                    self.cpace = cpace
+                    self.status("Pairing with \(host)…")
+                    self.sendRaw(Proto.message(.pair, payload: cpace.share))
+                } catch {
+                    self.finish("pairing failed: \(error.localizedDescription)")
+                }
             }
         }
         if let pin = options.pin {
@@ -362,6 +412,25 @@ final class HostConnection {
         } else {
             status("\(host) needs its pairing PIN")
             delegate?.connection(self, needsPINFor: host, fingerprint: fp, completion: deliver)
+        }
+    }
+
+    /// PAIR_REPLY: the host's share and tag. A tag that does not check out
+    /// means the PINs differ (or the PC is not who it claims; the two look
+    /// the same), and we close without confirming. The host has already
+    /// counted the attempt.
+    private func pairReplied(_ payload: Data) {
+        guard let cpace else { return finish("unexpected PAIR_REPLY") }
+        self.cpace = nil
+        guard payload.count == 64 else { return finish("malformed PAIR_REPLY") }
+        do {
+            let (_, tag) = try cpace.finish(peerShare: Data(payload.prefix(32)), peerTag: Data(payload.suffix(32)))
+            sendRaw(Proto.message(.pairConfirm, payload: tag))
+        } catch CPaceError.confirmationFailed {
+            pinRejected = true
+            finish("the PIN didn't match the PC's")
+        } catch {
+            finish("pairing failed: \(error.localizedDescription)")
         }
     }
 
@@ -382,7 +451,7 @@ final class HostConnection {
     // MARK: receive loop
 
     /// Deliver one frame body: from the buffer if it is already there,
-    /// otherwise after the next read. Used for the unencrypted handshake reply.
+    /// otherwise after the next read. Used for the cleartext msg2.
     private func readFrame(_ c: NWConnection, attempt: UInt64, _ handler: @escaping (Data) -> Void) {
         guard isCurrent(c, attempt: attempt) else { return }
         do {
@@ -399,13 +468,15 @@ final class HostConnection {
         }
     }
 
-    /// One read sized to complete the current frame (header or body), so a
-    /// small message lands in a single callback and a large keyframe waits in
-    /// the framework instead of arriving as many small pieces.
+    /// One read sized to complete the current message, so a small message
+    /// lands in a single callback and a large keyframe waits in the framework
+    /// instead of arriving as many small pieces. Until a message's first
+    /// record is in, that is the rest of the record; after it, the header
+    /// gives the size of the rest.
     private func receiveMore(_ c: NWConnection, attempt: UInt64, _ then: @escaping () -> Void) {
         guard isCurrent(c, attempt: attempt), !receiving else { return }
         receiving = true
-        let needed = reader.needed
+        let needed = max(reader.needed, (receive?.remainingWireBytes ?? 0) - reader.buffered)
         c.receive(minimumIncompleteLength: needed, maximumLength: max(needed, 256 * 1024)) { [weak self] data, _, isComplete, error in
             guard let self, self.isCurrent(c, attempt: attempt) else { return }
             self.receiving = false
@@ -417,7 +488,10 @@ final class HostConnection {
                 self.reader.append(data)
                 then()
             } else if isComplete {
-                self.finish("host closed the connection")
+                // A PC on protocol v3 or older reads msg1, cannot parse it and
+                // hangs up before msg2.
+                self.finish(self.send == nil ? "the PC hung up during the handshake (it may need the latest Relay)"
+                                             : "host closed the connection")
             } else {
                 then()
             }
@@ -429,8 +503,8 @@ final class HostConnection {
         while isCurrent(c, attempt: attempt) {
             guard let receive else { return }
             do {
-                guard let body = try reader.next() else { break }
-                let (header, payload) = try receive.open(body)
+                guard let record = try reader.next() else { break }
+                guard let (header, payload) = try receive.open(record) else { continue }
                 handle(type: header.type, flags: header.flags, payload: payload)
             } catch let failure as FrameReader.Failure {
                 finish("protocol error: \(failure)")
@@ -452,20 +526,18 @@ final class HostConnection {
         }
         switch msg {
         case .serverHello:
-            guard payload.count >= 3 else { return finish("malformed SERVER_HELLO") }
+            guard !greeted else { return }
+            guard payload.count >= 2 else { return finish("malformed SERVER_HELLO") }
             let version = payload.be16(at: 0)
-            let nameLen = Int(payload[payload.startIndex + 2])
-            let name = String(decoding: payload.dropFirst(3).prefix(nameLen), as: UTF8.self)
             guard version == Proto.version else {
                 return finish("host speaks protocol v\(version), this client v\(Proto.version)")
             }
-            if !name.isEmpty { serviceName = name }
-            if options.unpairOnly { return }
-            if !pairing {
-                ClientState.remember(host: hostKey, name: name)
-                status("Connected to \(name)")
-                sendClientHello()
-            }
+            guard let hello = Proto.ServerHello(payload) else { return finish("malformed SERVER_HELLO") }
+            handleServerHello(hello)
+
+        case .pairReply:
+            guard pairing else { return }
+            pairReplied(payload)
 
         case .pairResult:
             guard pairing else { return }

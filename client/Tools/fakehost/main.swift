@@ -1,55 +1,64 @@
 // A fake Relay host for testing the client's connect and pairing paths on a
-// Mac with no PC around (the mirror of host/src/bin/probe.rs). Speaks the
-// real v2 cryptographic handshake and v3 session framing with CryptoKit, then acts out one
-// host answer per run:
+// Mac with no PC around (the mirror of host/src/bin/probe.rs). Speaks the real
+// protocol v4 handshake (Noise XX) and pairing (CPace) with the client's own
+// Noise.swift and CPace.swift, then acts out one host answer per run:
 //
-//   busy          allow PAIR/UNPAIR; reject CLIENT_HELLO with STREAM_STOP(6)
+//   busy          allow pairing and UNPAIR; reject CLIENT_HELLO with STREAM_STOP(6)
 //   ratelimit <s> PAIR -> PAIR_RESULT 2 + u16 seconds
-//   wrong         PAIR -> PAIR_RESULT 0
-//   accept        PAIR -> PAIR_RESULT 1 (then closes; use `hang` to stay up)
+//   wrong         answers PAIR with a different PIN than the one it prints,
+//                 so the Mac sees PAIR_REPLY fail and says the PIN was wrong
+//   accept        pairs with the printed PIN (then closes; use `hang` to stay up)
 //   hang          like accept, then waits for the next message forever
 //   notpaired     like accept, but CLIENT_HELLO gets STREAM_STOP(4): the PC
 //                 forgot the Mac between the handshake and the stream
 //
-// After a PAIR_RESULT 1 the process answers later handshakes with paired = 1,
-// as a real host would, so a Mac that just paired verifies as still paired.
+// The PIN is 000000 unless `--pin <6 digits>` says otherwise; CPace needs the
+// real one on both sides. After a PAIR_RESULT 1 the process answers later
+// handshakes with paired = 1, as a real host would, so a Mac that just paired
+// verifies as still paired.
 //
-// `--paired` makes msg2 claim the client is already paired, so a host the
-// Mac has in hosts.txt connects without a PIN. The identity key is kept in
+// `--paired` makes SERVER_HELLO claim the client is already paired, so a host
+// the Mac has in hosts.txt connects without a PIN. The identity key is kept in
 // ./fakehost.key so the advertised `pk` (and the Paired row) survive restarts.
 //
 // The printed dns-sd line also carries `pg`, the pairing digest a real host
 // derives from its paired keys. Here it is a stand-in that only has to differ
-// between runs: one value for `--paired`, another for `--forget` (msg2 says
-// not paired), a third for neither, or `--pg <8 hex>` to pick one. The Mac
-// checks a known host's pairing over the handshake alone whenever the digest
-// it advertises is not the one last verified, so:
+// between runs: one value for `--paired`, another for `--forget` (SERVER_HELLO
+// says not paired), a third for neither, or `--pg <8 hex>` to pick one. The
+// Mac checks a known host's pairing over the handshake alone whenever the
+// digest it advertises is not the one last verified, so:
 //
 //   ./fakehost 8470 hang --paired      # the Mac verifies once, row stays Paired
 //   ./fakehost 8470 accept --forget    # re-run dns-sd with the new pg: the row
 //                                      # moves to Available, "PC forgot this
-//                                      # MacBook"; Pair (any PIN) brings it back
+//                                      # MacBook"; Pair (PIN 000000) brings it back
 //   ./fakehost 8470 hang --paired --pg 0badf00d   # a moved digest with paired = 1
 //                                      # only updates the stored one
 //
-//   swiftc -O -o fakehost Tools/fakehost.swift
+//   swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift
 //   ./fakehost 8470 busy                      # prints the dns-sd line to run
-//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=3 pk=<hex> pg=<hex>
+//   dns-sd -R "Fake PC" _relay._tcp . 8470 v=4 pk=<hex> pg=<hex>
 //
 // Then `swift run Relay` shows "Fake PC" in the picker, or
 // `swift run Relay --host 127.0.0.1:8470` dials it directly.
+//
+// Every message this fake sends or reads fits one record, so it does not
+// split or reassemble them (the app does; CryptoTests covers that).
 import CryptoKit
 import Foundation
 setbuf(stdout, nil)
 
 let args = CommandLine.arguments
 guard args.count >= 3, let port = UInt16(args[1]) else {
-    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--paired | --forget] [--pg <8 hex>]"); exit(2)
+    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--pin <digits>] [--paired | --forget] [--pg <8 hex>]"); exit(2)
 }
 let mode = args[2]
 let limitSecs = mode == "ratelimit" ? UInt16(args[3]) ?? 599 : 0
 let forgot = args.contains("--forget")
 var claimPaired = args.contains("--paired") && !forgot
+let pin: String = args.firstIndex(of: "--pin").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "000000"
+// `wrong` checks PINs against another one, so whatever the Mac types fails.
+let hostPIN = mode == "wrong" ? String(pin.reversed()) + "9" : pin
 
 // Stable identity so a paired host stays the same key across runs.
 let keyFile = URL(fileURLWithPath: "fakehost.key")
@@ -75,15 +84,14 @@ if let i = args.firstIndex(of: "--pg"), i + 1 < args.count {
 } else {
     pgHex = pairingDigest(forgot ? "forgot" : claimPaired ? "paired" : "")
 }
-print("pk=\(pkHex) pg=\(pgHex)")
-print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=3 pk=\(pkHex) pg=\(pgHex)")
+print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
+print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)")
 
 extension Data {
     func be16(at o: Int) -> UInt16 { UInt16(self[startIndex + o]) << 8 | UInt16(self[startIndex + o + 1]) }
     func be32(at o: Int) -> UInt32 { UInt32(be16(at: o)) << 16 | UInt32(be16(at: o + 2)) }
     mutating func appendBE16(_ v: UInt16) { append(UInt8(v >> 8)); append(UInt8(v & 0xff)) }
     mutating func appendBE32(_ v: UInt32) { appendBE16(UInt16(v >> 16)); appendBE16(UInt16(v & 0xffff)) }
-    mutating func appendBE64(_ v: UInt64) { appendBE32(UInt32(v >> 32)); appendBE32(UInt32(v & 0xffffffff)) }
 }
 
 func readExact(_ fd: Int32, _ n: Int) -> Data? {
@@ -97,56 +105,81 @@ func readExact(_ fd: Int32, _ n: Int) -> Data? {
 }
 func readFrame(_ fd: Int32) -> Data? {
     guard let h = readExact(fd, 4) else { return nil }
-    return readExact(fd, Int(h.be32(at: 0)))
+    let n = Int(h.be32(at: 0))
+    guard n <= 65_535 else { print("-- frame of \(n) bytes refused"); return nil }
+    return readExact(fd, n)
 }
+func frame(_ body: Data) -> Data { var f = Data(); f.appendBE32(UInt32(body.count)); f.append(body); return f }
 func writeAll(_ fd: Int32, _ d: Data) {
     d.withUnsafeBytes { p in var off = 0; while off < d.count { let r = write(fd, p.baseAddress! + off, d.count - off); if r <= 0 { return }; off += r } }
 }
 
+/// One direction of the record layer, one record per message.
 final class Channel {
-    let key: SymmetricKey; var counter: UInt64 = 0
-    init(_ k: SymmetricKey) { key = k }
-    func nonce() -> ChaChaPoly.Nonce { var n = Data(count: 4); n.appendBE64(counter); counter += 1; return try! ChaChaPoly.Nonce(data: n) }
+    var cipher: NoiseCipherState
+    init(_ c: NoiseCipherState) { cipher = c }
     func seal(type: UInt8, payload: Data) -> Data {
         var m = Data([type, 0, 0, 0]); m.appendBE32(UInt32(payload.count)); m.append(payload)
-        let box = try! ChaChaPoly.seal(m, using: key, nonce: nonce())
-        var f = Data(); f.appendBE32(UInt32(box.ciphertext.count + 16)); f.append(box.ciphertext); f.append(box.tag); return f
+        return frame(try! cipher.encrypt(ad: Data(), plaintext: m))
     }
     func open(_ body: Data) -> (UInt8, Data)? {
-        guard body.count >= 16, let box = try? ChaChaPoly.SealedBox(nonce: nonce(), ciphertext: body.dropLast(16), tag: body.suffix(16)),
-              let plain = try? ChaChaPoly.open(box, using: key), plain.count >= 8 else { return nil }
-        return (plain[plain.startIndex], plain.dropFirst(8))
+        guard let plain = try? cipher.decrypt(ad: Data(), ciphertext: body), plain.count >= 8,
+              plain.count == 8 + Int(plain.be32(at: 4)) else { return nil }
+        return (plain[plain.startIndex], Data(plain.dropFirst(8)))
     }
 }
 
 func serve(_ fd: Int32) {
     defer { close(fd); print("-- closed") }
-    guard let m1 = readFrame(fd), m1.count == 70, m1.prefix(4) == Data("TDH2".utf8) else { print("bad msg1"); return }
-    let sC = try! Curve25519.KeyAgreement.PublicKey(rawRepresentation: m1.subdata(in: 6..<38))
-    let eC = try! Curve25519.KeyAgreement.PublicKey(rawRepresentation: m1.subdata(in: 38..<70))
-    let eph = Curve25519.KeyAgreement.PrivateKey()
-    var m2 = Data("TDH2".utf8); m2.appendBE16(2); m2.append(identity.publicKey.rawRepresentation); m2.append(eph.publicKey.rawRepresentation); m2.append(claimPaired ? 1 : 0)
-    var f = Data(); f.appendBE32(71); f.append(m2); writeAll(fd, f)
-    var tr = m1; tr.append(m2)
-    let salt = Data(SHA256.hash(data: tr))
-    var ikm = try! eph.sharedSecretFromKeyAgreement(with: eC).withUnsafeBytes { Data($0) }
-    ikm.append(try! identity.sharedSecretFromKeyAgreement(with: eC).withUnsafeBytes { Data($0) })
-    ikm.append(try! eph.sharedSecretFromKeyAgreement(with: sC).withUnsafeBytes { Data($0) })
-    let okm = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm), salt: salt, info: Data("TravelDisplay v2".utf8), outputByteCount: 96).withUnsafeBytes { Data($0) }
-    let rx = Channel(SymmetricKey(data: okm.subdata(in: 0..<32)))
-    let tx = Channel(SymmetricKey(data: okm.subdata(in: 32..<64)))
-    let fpBytes = SHA256.hash(data: sC.rawRepresentation).prefix(4).map { String(format: "%02X", $0) }.joined()
-    print("-- handshake done with client \(fpBytes) (paired=\(claimPaired))")
-    var hello = Data(); hello.appendBE16(3); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
+    guard let m1 = readFrame(fd) else { print("no msg1"); return }
+    guard m1.count == 36, m1.prefix(4) == Data("RLY4".utf8) else {
+        print(m1.prefix(4) == Data("TDH2".utf8) ? "-- a v3 client (TDH2); closing" : "bad msg1 (\(m1.count) bytes)"); return
+    }
+    let noise = NoiseXX(role: .responder, staticKey: identity, prologue: Data("RLY4".utf8))
+    do {
+        _ = try noise.readMessage(m1.dropFirst(4))
+        writeAll(fd, frame(try noise.writeMessage()))
+    } catch { print("handshake failed: \(error)"); return }
+    guard let m3 = readFrame(fd) else { print("-- client closed after msg2 (it expected another PC key)"); return }
+    let clientKey: Data
+    let tx: Channel, rx: Channel
+    do {
+        _ = try noise.readMessage(m3)
+        clientKey = noise.remoteStatic!
+        let (send, receive) = try noise.split()
+        tx = Channel(send); rx = Channel(receive)
+    } catch { print("msg3 failed: \(error)"); return }
+    let fp = SHA256.hash(data: clientKey).prefix(4).map { String(format: "%02X", $0) }.joined()
+    print("-- handshake done with client \(fp) (paired=\(claimPaired))")
+    var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
+    hello.append(claimPaired ? 1 : 0)
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
-    guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("no first message"); return }
+    /// CPace as the responder (B), after the Mac's PAIR. Returns whether it confirmed.
+    func pair(_ share: Data) -> Bool {
+        let ci = CPace.channelIdentifier(clientStatic: clientKey, hostStatic: identity.publicKey.rawRepresentation)
+        guard let b = try? CPaceResponder(prs: Data(hostPIN.utf8), ci: ci, sid: noise.handshakeHash, peerShare: share) else {
+            print("-- invalid Ya; closing"); return false
+        }
+        writeAll(fd, tx.seal(type: 0xA3, payload: b.share + b.tag))
+        guard let body = readFrame(fd), let (type, tag) = rx.open(body), type == 0xA4 else {
+            print("-- client closed after PAIR_REPLY (the PINs differ)"); return false
+        }
+        guard b.verify(peerTag: tag) else {
+            writeAll(fd, tx.seal(type: 0xA1, payload: Data([0]))); print("-- PAIR_CONFIRM did not check out: PAIR_RESULT 0"); return false
+        }
+        writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
+        claimPaired = true
+        return true
+    }
+
+    guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("-- no first message (a pairing check ends here)"); return }
     print(String(format: "-- first message 0x%02x (%d bytes)", type, payload.count))
     if mode == "busy" {
         var requestType = type
         if requestType == 0xA0 {
-            writeAll(fd, tx.seal(type: 0xA1, payload: Data([1])))
-            print("-- PAIR_RESULT paired while display is busy")
+            guard pair(payload) else { return }
+            print("-- paired while display is busy")
             guard let next = readFrame(fd), let (nextType, _) = rx.open(next) else {
                 print("-- pair-only client closed without requesting the display")
                 return
@@ -173,11 +206,8 @@ func serve(_ fd: Int32) {
     case ("ratelimit", 0xA0):
         var p = Data([2]); p.appendBE16(limitSecs)
         writeAll(fd, tx.seal(type: 0xA1, payload: p)); print("-- PAIR_RESULT rate-limited \(limitSecs) s")
-    case ("wrong", 0xA0):
-        writeAll(fd, tx.seal(type: 0xA1, payload: Data([0]))); print("-- PAIR_RESULT wrong PIN")
-    case ("accept", 0xA0), ("hang", 0xA0), ("notpaired", 0xA0):
-        writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
-        claimPaired = true
+    case ("wrong", 0xA0), ("accept", 0xA0), ("hang", 0xA0), ("notpaired", 0xA0):
+        guard pair(payload) else { break }
         if mode == "hang" { _ = readFrame(fd) }
     case (_, 0xA2):
         writeAll(fd, tx.seal(type: 0x06, payload: Data([5]))); print("-- UNPAIRED")

@@ -1,17 +1,18 @@
 // One-shot connection that asks a host, over the handshake alone, whether
 // it still has this Mac paired. Wraps a HostConnection in verify mode and
-// reduces its delegate callbacks to a single completion. Nothing follows
-// msg2 (no CLIENT_HELLO), so the host's display and any other Mac's session
-// are untouched; what to do with the answer is the caller's.
+// reduces its delegate callbacks to a single completion. The handshake ends
+// with SERVER_HELLO's `paired`, and nothing follows it (no CLIENT_HELLO), so
+// the host's display and any other Mac's session are untouched; what to do
+// with the answer is the caller's.
 
 import CoreMedia
 import Foundation
 
 final class VerifyTask: HostConnectionDelegate {
     enum Outcome {
-        /// msg2 said `paired`: the host still knows this Mac.
+        /// SERVER_HELLO said `paired`: the host still knows this Mac.
         case paired
-        /// msg2 said not paired: the host forgot this Mac.
+        /// SERVER_HELLO said not paired: the host forgot this Mac.
         case forgotten
         /// No handshake before the timeout, or a host with another identity.
         case unreachable

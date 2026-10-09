@@ -3,7 +3,7 @@
 import Foundation
 
 enum Proto {
-    static let version: UInt16 = 3
+    static let version: UInt16 = 4
     static let defaultPort: UInt16 = 8468
     static let serviceType = "_relay._tcp"
     static let headerSize = 8
@@ -20,6 +20,7 @@ enum Proto {
         case ping = 0x07
         case frameTiming = 0x08
         case pairResult = 0xA1
+        case pairReply = 0xA3
         // client -> host
         case clientHello = 0x81
         case pong = 0x87
@@ -29,6 +30,7 @@ enum Proto {
         case key = 0x93
         case pair = 0xA0
         case unpair = 0xA2
+        case pairConfirm = 0xA4
     }
 
     static let flagKeyframe: UInt8 = 0x01
@@ -77,6 +79,23 @@ enum Proto {
             fps = Int(p.be16(at: 4))
             self.bitrateMbps = bitrateMbps
             self.codec = codec
+        }
+    }
+
+    /// The host's first encrypted message: its protocol version, its name and
+    /// whether it knows this Mac's identity key (it learned the key from msg3).
+    struct ServerHello: Equatable {
+        let version: UInt16
+        let name: String
+        let paired: Bool
+
+        init?(_ p: Data) {
+            guard p.count >= 3 else { return nil }
+            let nameLength = Int(p[p.startIndex + 2])
+            guard p.count >= 3 + nameLength + 1 else { return nil }
+            version = p.be16(at: 0)
+            name = String(decoding: p.dropFirst(3).prefix(nameLength), as: UTF8.self)
+            paired = p[p.startIndex + 3 + nameLength] != 0
         }
     }
 

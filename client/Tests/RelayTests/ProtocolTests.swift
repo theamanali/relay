@@ -14,7 +14,7 @@ final class ProtocolTests: XCTestCase {
         )
         let payload = Data(message.dropFirst(Proto.headerSize))
         XCTAssertEqual(payload.count, 16)
-        XCTAssertEqual(payload.be16(at: 0), 3)
+        XCTAssertEqual(payload.be16(at: 0), 4)
         XCTAssertEqual(payload.be16(at: 8), 500)
         XCTAssertEqual(payload[payload.startIndex + 10], 1)
         XCTAssertEqual(payload[payload.startIndex + 11], Proto.Codec.hevc.bit)
@@ -30,6 +30,18 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(start?.codec, .hevc)
         XCTAssertNil(Proto.StreamStart(Data([0, 1, 0, 1, 0, 60, 0, 120])))
         XCTAssertNil(Proto.StreamStart(Data([0, 1, 0, 1, 0, 60, 0, 0, 2, 0])))
+    }
+
+    func testServerHelloCarriesPaired() {
+        let hello = Proto.ServerHello(Data([0, 4, 4]) + Data("Desk".utf8) + Data([1]))
+        XCTAssertEqual(hello?.version, 4)
+        XCTAssertEqual(hello?.name, "Desk")
+        XCTAssertEqual(hello?.paired, true)
+        XCTAssertEqual(Proto.ServerHello(Data([0, 4, 0, 0]))?.paired, false)
+        XCTAssertEqual(Proto.ServerHello(Data([0, 4, 0, 0]))?.name, "")
+        XCTAssertNil(Proto.ServerHello(Data([0, 4, 4]) + Data("Desk".utf8)), "v4 hellos end with paired")
+        XCTAssertNil(Proto.ServerHello(Data([0, 4, 9, 0])), "name longer than the payload")
+        XCTAssertNil(Proto.ServerHello(Data([0, 4])))
     }
 
     func testPairResultCodes() {
