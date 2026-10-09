@@ -74,7 +74,7 @@ fn main() -> Result<()> {
     };
     let hs = crypto::client_handshake(&mut stream, &identity, None)?;
     let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.c2h);
-    let mut rx = SecureReader::new(stream, &hs.keys.h2c);
+    let mut rx = SecureReader::new(stream, &hs.keys.h2c, protocol::MAX_PAYLOAD as usize);
     println!(
         "handshake ok: host {} , probe {} , {}",
         crypto::fingerprint(&hs.peer),

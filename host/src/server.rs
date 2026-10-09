@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -53,6 +53,14 @@ const RECOVERY_SETTLE: Duration = Duration::from_millis(750);
 const REASSERT_MIN_INTERVAL: Duration = Duration::from_secs(2);
 /// After a tray-requested STREAM_STOP, how long to let the client close first.
 const END_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// The largest payload accepted from a client. Any peer can finish the
+/// handshake without being paired, so this bounds what it can make us
+/// buffer; the largest real message (CLIENT_HELLO) is under 300 bytes.
+const MAX_CLIENT_PAYLOAD: usize = 4096;
+/// Connections handled at once; more are closed as soon as they are accepted.
+/// One Mac streaming plus a few pairing, forgetting or checking `pg` fit well
+/// under it.
+const MAX_CONNECTIONS: usize = 8;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -117,6 +125,7 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
     // for the single display lease only after it sends CLIENT_HELLO.
     let cfg = &cfg;
     let display_claimed = Arc::new(AtomicBool::new(false));
+    let connections = Arc::new(AtomicUsize::new(0));
     thread::scope(|s| -> Result<()> {
         loop {
             let (stream, peer) = match listener.accept() {
@@ -126,11 +135,17 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
                     continue;
                 }
             };
+            let Some(slot) = ConnectionSlot::acquire(&connections, MAX_CONNECTIONS) else {
+                log::warn!("refused {peer}: {MAX_CONNECTIONS} connections are already open");
+                drop(stream);
+                continue;
+            };
             log::info!("client connected from {peer}");
             let display_claimed = Arc::clone(&display_claimed);
             let spawned = thread::Builder::new()
                 .name(format!("client-{peer}"))
                 .spawn_scoped(s, move || {
+                    let _slot = slot;
                     match handle_session(cfg, stream, peer, &display_claimed) {
                         Ok(()) => log::info!("connection with {peer} ended"),
                         Err(e) => log::warn!("connection with {peer} ended with error: {e:#}"),
@@ -502,6 +517,25 @@ pub fn acquire_display(
     })
 }
 
+/// One of the `MAX_CONNECTIONS` connection threads; dropping it frees the slot.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl ConnectionSlot {
+    fn acquire(open: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        open.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < max).then_some(n + 1)
+        })
+        .ok()
+        .map(|_| Self(Arc::clone(open)))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// The one connection allowed to own the virtual display. Releasing this on
 /// every exit path also keeps the tray's session state honest after errors.
 struct DisplayClaim<'a> {
@@ -544,10 +578,10 @@ fn handle_session(
     stream.set_write_timeout(Some(SEND_TIMEOUT))?;
 
     // --- key agreement, then pairing if this client is new ------------------
-    let hs = crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired.lock().unwrap())
-        .context("handshake")?;
+    let hs =
+        crypto::host_handshake(&mut stream, &cfg.identity, &cfg.paired).context("handshake")?;
     let mut tx = SecureWriter::new(stream.try_clone()?, &hs.keys.h2c);
-    let mut rx = SecureReader::new(stream, &hs.keys.c2h);
+    let mut rx = SecureReader::new(stream, &hs.keys.c2h, MAX_CLIENT_PAYLOAD);
     let client_fp = crypto::fingerprint(&hs.peer);
     tx.send(msg::SERVER_HELLO, 0, &protocol::server_hello(&cfg.name))?;
 
@@ -1231,6 +1265,19 @@ mod display_claim_tests {
         assert!(!claimed.load(Ordering::Acquire));
         assert!(status.lock().unwrap().session.is_none());
         assert!(DisplayClaim::acquire(&claimed, &status).is_some());
+    }
+
+    #[test]
+    fn connection_slots_cap_and_free_on_drop() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let slots: Vec<_> = (0..MAX_CONNECTIONS)
+            .map(|_| ConnectionSlot::acquire(&open, MAX_CONNECTIONS).expect("a free slot"))
+            .collect();
+        assert!(ConnectionSlot::acquire(&open, MAX_CONNECTIONS).is_none());
+        assert_eq!(open.load(Ordering::Acquire), MAX_CONNECTIONS);
+        drop(slots);
+        assert_eq!(open.load(Ordering::Acquire), 0);
+        assert!(ConnectionSlot::acquire(&open, MAX_CONNECTIONS).is_some());
     }
 
     #[test]

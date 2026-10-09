@@ -33,6 +33,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -368,15 +369,16 @@ pub struct Handshake {
     pub paired: bool,
 }
 
-/// Host side: answer a client's msg1, derive keys.
+/// Host side: answer a client's msg1, derive keys. The paired list is
+/// locked only for the lookup, never while waiting on the peer.
 pub fn host_handshake(
     stream: &mut TcpStream,
     identity: &Identity,
-    paired: &PeerList,
+    paired: &Mutex<PeerList>,
 ) -> Result<Handshake> {
     let msg1 = read_frame(stream, 70).context("reading client hello")?;
     let (client_static, client_eph, _) = parse_hello(&msg1, 70, "client hello")?;
-    let is_paired = paired.contains(client_static.as_bytes());
+    let is_paired = paired.lock().unwrap().contains(client_static.as_bytes());
 
     let eph = Identity::generate();
     let msg2 = msg2_bytes(&identity.public, &eph.public, is_paired);
@@ -556,14 +558,20 @@ pub struct SecureReader {
     stream: io::BufReader<TcpStream>,
     cipher: ChaCha20Poly1305,
     counter: u64,
+    max_payload: usize,
 }
 
 impl SecureReader {
-    pub fn new(stream: TcpStream, key: &Key32) -> Self {
+    /// `max_payload` is the largest payload this side accepts. Anything
+    /// longer is refused from its length alone, before a byte of it is
+    /// buffered: the host passes a few KiB, because any peer can finish the
+    /// handshake without being paired.
+    pub fn new(stream: TcpStream, key: &Key32, max_payload: usize) -> Self {
         SecureReader {
             stream: io::BufReader::with_capacity(256 * 1024, stream),
             cipher: ChaCha20Poly1305::new(key.into()),
             counter: 0,
+            max_payload: max_payload.min(MAX_PAYLOAD as usize),
         }
     }
 
@@ -573,7 +581,7 @@ impl SecureReader {
 
     /// Next message as (type, flags, payload).
     pub fn recv(&mut self) -> io::Result<(u8, u8, Vec<u8>)> {
-        let ct = read_frame(&mut self.stream, MAX_PAYLOAD as usize + 8 + TAG_LEN)?;
+        let ct = read_frame(&mut self.stream, 8 + self.max_payload + TAG_LEN)?;
         let pt = self
             .cipher
             .decrypt(&nonce(self.counter), ct.as_slice())
@@ -639,7 +647,7 @@ mod tests {
         let host_pub = *host_id.public.as_bytes();
         let client_pub = *client_id.public.as_bytes();
         let dir = std::env::temp_dir().join(format!("td-peers-{}", std::process::id()));
-        let paired = PeerList::load(&dir.join("none.txt")).unwrap();
+        let paired = Mutex::new(PeerList::load(&dir.join("none.txt")).unwrap());
 
         let host = thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
@@ -674,7 +682,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let host_id = Identity::generate();
         let dir = std::env::temp_dir().join(format!("td-peers2-{}", std::process::id()));
-        let paired = PeerList::load(&dir.join("none.txt")).unwrap();
+        let paired = Mutex::new(PeerList::load(&dir.join("none.txt")).unwrap());
         thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             let _ = host_handshake(&mut s, &host_id, &paired);
@@ -695,7 +703,7 @@ mod tests {
         let key = [7u8; 32];
         let server = thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let mut r = SecureReader::new(s, &key);
+            let mut r = SecureReader::new(s, &key, 4096);
             let a = r.recv().unwrap();
             let b = r.recv().unwrap();
             (a, b)
@@ -713,12 +721,37 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let mut r = SecureReader::new(s, &[8u8; 32]);
+            let mut r = SecureReader::new(s, &[8u8; 32], 4096);
             r.recv().is_err()
         });
         let mut w = SecureWriter::new(TcpStream::connect(addr).unwrap(), &key);
         w.send(0x04, 0, b"x").unwrap();
         assert!(server.join().unwrap());
+    }
+
+    #[test]
+    fn an_oversized_length_is_refused_before_its_body_is_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            // A reader that allocated and waited for the body would sit here
+            // until the timeout instead of failing on the length.
+            s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut r = SecureReader::new(s, &[7u8; 32], 4096);
+            let started = Instant::now();
+            (r.recv().unwrap_err().kind(), started.elapsed())
+        });
+        // Only the length of a 1 MiB frame; the connection stays open.
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(&(1u32 << 20).to_be_bytes()).unwrap();
+        let (kind, took) = server.join().unwrap();
+        assert_eq!(kind, io::ErrorKind::InvalidData);
+        assert!(
+            took < Duration::from_secs(5),
+            "waited {took:?} for the body"
+        );
+        drop(c);
     }
 
     #[test]
