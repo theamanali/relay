@@ -38,8 +38,40 @@ commands or repeated modesets were introduced.
   caller context, and takes a read-only CCD snapshot. No display changes.
 - `cargo clippy --all-targets -- -D warnings`, `cargo build --release`,
   `cargo fmt --check`: passed.
-- The fixed binary's exclusive-display, pre-login and sign-out behavior is **not
-  yet hardware verified**. Agent did not install it or run those tests.
+- The user subsequently installed the fix and reported all three retests passed
+  once (reboot-before-login, sign-out/reconnect and lock/unlock), with no observed
+  failure. Agent did not run exclusive-display tests. Repeat runs and service
+  crash-restore verification remain pending.
+
+## First hardware retest report — October 9, 2026 (Pacific)
+
+The installed executable and locally built release executable have the same
+SHA-256: `991E516AC4362F07D9ADCF453503655CBA50F435318AB2B9A6B403546691F737`.
+The log's timestamps below are UTC (October 10 UTC is still October 9 Pacific).
+
+- 00:39:10: 3024×1964@120 exclusive streaming; 00:39:16: layout restored and VDD
+  disabled after normal disconnect.
+- 00:41:00–00:41:10: lock/unlock interrupted capture, which recovered in about
+  1.1 seconds per restart and resumed approximately 120 fps.
+- 00:41:23: shutdown cleanup re-enabled physical monitors and removed the VDD.
+  A concurrent capture recovery attempt found no MTT1337 monitor; this warning
+  did not prevent restoration. The restore thread changed from Default to
+  Winlogon, with process session and console both 2; saved layout restore succeeded.
+- 00:41:58: service started after reboot; Windows logged SessionLogon in session 1,
+  then SessionLock. The 00:42:04 connection configured the display on Default and
+  streamed at the requested mode, recovering through SessionUnlock at 00:42:13.
+- No SetDisplayConfig error 5/87 or DISP_CHANGE -1 recurred in the reviewed log
+  after installation. A service-process DPI-awareness warning is separate from
+  topology setup. The last stream was still active when inspected, so its saved
+  display snapshot was expected to exist.
+
+The user's one-pass report covers all three scenarios. The log independently
+confirms the outcomes above, but SessionLogon **preceded** the post-reboot connection;
+it does not establish that connection occurred before any Windows user session
+existed. It also does not separately corroborate a post-fix sign-out → ConsoleConnect
+→ pre-logon connection sequence. Preserve those evidence limits when reporting
+status; do not infer automatic sign-in as a proven cause. On repeat runs, distinguish
+the visible lock/login screen from whether Windows has already created a user session.
 
 ## Install and baseline (user-run)
 

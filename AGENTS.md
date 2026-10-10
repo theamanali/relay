@@ -33,8 +33,14 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   lock/unlock during streaming and connecting to an already-locked PC passed; one
   reboot → login-screen connect → sign-in from the Mac passed. An earlier reboot and
   sign-out/reconnect failed virtual-display setup until local sign-in. The topology
-  context fix below passes Windows tests/build/clippy; exclusive-display hardware
-  retesting is pending, as is service crash-restore verification. Still to do: DPI,
+  context fix below passes Windows tests/build/clippy. Later on 2026-10-09 the user
+  reported all three retests passed once (reboot-before-login, sign-out/reconnect,
+  lock/unlock), with no observed failure. Installed/release executable hashes match.
+  Logs confirm normal disconnect restore, shutdown restore bound to Winlogon,
+  lock/unlock capture recovery and 3024×1964@120 streaming; the reboot connection
+  followed SessionLogon, so that log does not independently prove setup before any
+  user session exists. Repeat runs and service crash-restore verification remain
+  pending. Still to do: DPI,
   installers/signing. Latency measurements, what was
   rejected and what is still open: `docs/LATENCY.md`.
 - Protocol v4 (2026-10-08): Noise XX handshake, CPace PIN pairing and chunked records
@@ -147,7 +153,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   SCM's own recovery restarts a crashed *service*; Task Scheduler's
   `RestartOnFailure` never restarted a crashed process — that is why the logon-task
   design (2026-09-17) was replaced.
-- **Topology context (2026-10-09, hardware retest pending):** setup used the connection
+- **Topology context (2026-10-09, one user-reported pass per retest):** setup used the connection
   thread's inherited `Default` desktop; shutdown restore could run on the tray thread,
   which owns a window and cannot rebind. `desktop::with_input_desktop` now uses a fresh
   scoped thread for acquisition, CCD snapshots, exclusive setup/reassertion and restore,
@@ -163,8 +169,12 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   before the next acquisition replaces them. Diagnostics include process/thread ids,
   actual/console sessions, station, thread/input desktops, paths/modes and virtual
   monitor presence. The logs establish successful worker launch and handshake, but
-  cannot prove context was the sole cause; readiness/stale topology remain hypotheses
-  for the retest. See `host/PRELOGIN-RETEST.md` for steps and failure classification.
+  cannot prove context was the sole cause. The later retest log confirms restoration
+  on Winlogon and no recurrence of topology error 5/87 or DISP_CHANGE -1. A shutdown
+  recovery attempt briefly found no virtual monitor while cleanup disabled it; the
+  subsequent restore succeeded. Repeat runs must still distinguish true pre-session
+  setup from a locked user session (SessionLogon preceded the reboot connection in
+  this log). See `host/PRELOGIN-RETEST.md` for evidence, steps and failure classification.
 - State is `%ProgramData%\Relay` (SYSTEM has no meaningful `%LOCALAPPDATA%`): Users
   RX, `identity.key` SYSTEM/Admins only (`restrict_to_admins` after creation). The
   installer and the first run as a user migrate the old `%LOCALAPPDATA%\Relay`. So

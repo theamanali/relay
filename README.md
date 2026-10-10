@@ -164,14 +164,21 @@ and sign-out/reconnect failed virtual-display setup until local sign-in.
 The host now binds topology setup and restoration to the input desktop on a
 separate thread, preserves access errors and failed-restore snapshots, and logs
 desktop/session/readiness diagnostics. Windows unit tests, a read-only desktop
-binding/CCD test, release build and strict clippy pass. **This fix has not yet
-passed the exclusive-display hardware retest**; see the
+binding/CCD test, release build and strict clippy pass. On 2026-10-09 the user
+reported one pass each for reboot-before-login, sign-out/reconnect and lock/unlock,
+with no observed failure. The installed binary matches the fix. Logs confirm
+normal disconnect restoration, restoration while bound to Winlogon during shutdown,
+lock/unlock capture recovery and 3024×1964@120 streaming. The post-reboot connection
+followed a Windows SessionLogon event, so setup before any user session exists is
+not independently established by that log. Repeat runs and crash recovery remain
+pending; see the
 [reboot and sign-out retest sequence](host/PRELOGIN-RETEST.md).
 
 **Next:**
 
-- [ ] Windows service: repeatable reboot-before-login and sign-out/reconnect,
-      regression checks for lock/unlock and restoration, and crash-restore verification
+- [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
+      user-reported pass each), confirm setup before any user session exists, and
+      verify crash restoration
 - [ ] Pair-only peer name: currently stored as “paired <IP>”; the Mac name arrives
       in CLIENT_HELLO on the first streaming connection (separate UI follow-up)
 - [ ] Camera-based screen-to-screen latency measurement
