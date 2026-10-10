@@ -76,6 +76,7 @@ final class HostConnection {
     private var handshakeHash = Data()
     /// SERVER_HELLO has arrived (the handshake timeout runs until it does).
     private var greeted = false
+    private var supportsPairName = false
     private var pairing = false
     /// Our half of the PIN exchange, from PAIR until PAIR_REPLY.
     private var cpace: CPaceInitiator?
@@ -197,6 +198,7 @@ final class HostConnection {
         receive = nil
         handshakeHash = Data()
         greeted = false
+        supportsPairName = false
         pairing = false
         cpace = nil
         hostBusy = false
@@ -346,6 +348,7 @@ final class HostConnection {
     /// about the host, that decides what this connection does next.
     private func handleServerHello(_ hello: Proto.ServerHello) {
         greeted = true
+        supportsPairName = hello.supportsPairName
         if !hello.name.isEmpty { serviceName = hello.name }
         if options.unpairOnly { return } // UNPAIR is already on its way
         if options.verifyOnly {
@@ -398,10 +401,11 @@ final class HostConnection {
                 do {
                     let ci = CPace.channelIdentifier(clientStatic: self.identity.publicKey.rawRepresentation,
                                                      hostStatic: self.hostKey)
-                    let cpace = try CPaceInitiator(prs: Data(pin.utf8), ci: ci, sid: self.handshakeHash)
+                    let ad = self.supportsPairName ? Proto.pairNameAD(self.options.clientName) : Data()
+                    let cpace = try CPaceInitiator(prs: Data(pin.utf8), ci: ci, sid: self.handshakeHash, ad: ad)
                     self.cpace = cpace
                     self.status("Pairing with \(host)…")
-                    self.sendRaw(Proto.message(.pair, payload: cpace.share))
+                    self.sendRaw(Proto.message(.pair, payload: cpace.share + ad))
                 } catch {
                     self.finish("pairing failed: \(error.localizedDescription)")
                 }

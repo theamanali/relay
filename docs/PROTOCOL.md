@@ -124,11 +124,26 @@ the initiator (A) and the host as the responder (B):
 
 | type | name         | direction      | payload |
 |------|--------------|----------------|---------|
-| 0xA0 | PAIR         | client -> host | `Ya` (32) |
+| 0xA0 | PAIR         | client -> host | `Ya` (32), optionally followed by `u8 client_name_len` and `client_name` (UTF-8) when SERVER_HELLO advertises `CAP_PAIR_NAME` |
 | 0xA3 | PAIR_REPLY   | host -> client | `Yb` (32) `‖` `Tb` (32) |
 | 0xA4 | PAIR_CONFIRM | client -> host | `Ta` (32) |
 | 0xA1 | PAIR_RESULT  | host -> client | `u8 result`: 1 = paired, 0 = wrong PIN, 2 = rate-limited, followed by `u16 seconds` until pairing is accepted again. On 0 and 2 the host then closes. |
 | 0xA2 | UNPAIR       | client -> host | empty. Sent instead of CLIENT_HELLO (it may follow msg3 without waiting for SERVER_HELLO): the host forgets the client's key, answers STREAM_STOP reason 5 (`UNPAIRED`) and closes. |
+
+**Optional name extension (v4).** SERVER_HELLO may append one capability byte
+after `paired`. Bit `0x01` is `CAP_PAIR_NAME`; an absent byte means zero,
+and clients ignore unknown bits. Only when that bit is set, a client sends
+PAIR = `Ya[32] | u8 client_name_len | client_name_utf8`. The name is capped
+at 255 UTF-8 bytes, truncated on a Unicode scalar boundary, without a terminator;
+the largest payload is 288 bytes. The complete suffix, including its length
+byte, is CPace ADa. An empty name has ADa `[0]`, distinct from legacy empty ADa.
+Hosts reject inconsistent suffix lengths and invalid UTF-8.
+
+Without the capability, clients send just the original 32-byte Ya and use
+empty ADa. New hosts accept this legacy form too. A refused PIN must never
+be retried automatically using another protocol variant. The Noise handshake,
+protocol version, identities, existing pairings, ADb (empty), PAIR_REPLY,
+PAIR_CONFIRM and PAIR_RESULT layouts are unchanged.
 
 CPace's inputs and functions, byte for byte (`lv_cat` prefixes each part with
 its LEB128 length, `prepend_len` does it for one part; draft appendix A.1):
@@ -136,16 +151,17 @@ its LEB128 length, `prepend_len` does it for one part; draft appendix A.1):
 ```
 PRS      the PIN's ASCII digits
 sid      h
-ADa, ADb empty
+ADa      the complete optional name suffix, or empty for legacy PAIR
+ADb      empty
 CI       lv_cat("relay-v4", client identity key, host identity key)
 gen_str  lv_cat("CPace255", PRS, zpad zero bytes, CI, sid)
          zpad = max(0, 128 - 1 - len(prepend_len(PRS)) - len(prepend_len("CPace255")))
 g        Elligator 2 of the first 32 bytes of SHA-512(gen_str), bit 255 cleared
 Ya, Yb   X25519(ya, g), X25519(yb, g); ya, yb are 32 random bytes
 K        X25519(ya, Yb) = X25519(yb, Ya)
-ISK      SHA-512(lv_cat("CPace255_ISK", sid, K) || lv_cat(Ya, "") || lv_cat(Yb, ""))
+ISK      SHA-512(lv_cat("CPace255_ISK", sid, K) || lv_cat(Ya, ADa) || lv_cat(Yb, ADb))
 mac_key  SHA-512("CPaceMac" || sid || ISK)
-Ta, Tb   HMAC-SHA512(mac_key, lv_cat(Ya, "")), HMAC-SHA512(mac_key, lv_cat(Yb, "")), first 32 bytes each
+Ta, Tb   HMAC-SHA512(mac_key, lv_cat(Ya, ADa)), HMAC-SHA512(mac_key, lv_cat(Yb, ADb)), first 32 bytes each
 ```
 
 Elligator 2 on Curve25519 (A = 486662, Z = 2, draft appendix A.5): decode the
@@ -165,9 +181,19 @@ the client closes without PAIR_CONFIRM. The host, on PAIR:
    seeing `Tb` has still spent its guess.
 3. Sends PAIR_REPLY and waits briefly for PAIR_CONFIRM; the client sends it at
    once.
-4. On a valid `Ta`, takes back that one failure, stores the client's key,
+4. On a valid `Ta`, takes back that one failure, stores the client's key and name,
    answers result 1 and then replaces its PIN. On an invalid `Ta` it answers 0
    and closes.
+
+Proofs use the original wire bytes. Only after confirmation does the host
+replace control characters with spaces and trim the name for storage and UI,
+before sending success. A new unnamed pairing uses `Paired MacBook`; an
+unnamed re-pair preserves an existing label, and a named re-pair updates it.
+Names are display labels; identity and Forget use the public key, and a name
+change does not affect the pairing digest. Existing `paired <IP>` labels
+gain a name on a successful named re-pair or streaming CLIENT_HELLO.
+Pair-only closes after success without CLIENT_HELLO or any display operation;
+legacy hosts continue to learn the name on the first streaming connection.
 
 Each attempt is one online guess: a run reveals nothing that would test other
 PINs offline, `sid` ties it to this Noise session and CI to both identity
@@ -190,7 +216,7 @@ There is no message for it: the client learns of it through the `pg` TXT value
 (Discovery, above), or through STREAM_STOP reason 4 (`NOT_PAIRED`) if it was
 streaming at the time, and should forget the host locally in either case.
 
-**Test vector.** Every secret is one byte repeated 32 times: client identity
+**Legacy test vector.** Every secret is one byte repeated 32 times: client identity
 0x11, client ephemeral 0x22, host identity 0x33, host ephemeral 0x44, `ya`
 0x55, `yb` 0x66. PIN `"123456"`, host name `"Test PC"`, `paired = 0`. The
 handshake messages are shown without their length prefix, and so are the
@@ -221,6 +247,19 @@ rec_confirm  2fc518fc7bf0afdd9ed6dde4ac630eb08bdd61249b288e9329cef276b99f26732c0
 The vector was generated by the Swift client (Noise.swift, CPace.swift, which
 are themselves checked against the cacophony and draft-21 vectors); the host's
 `crypto::tests::v4_vector` reproduces every line.
+
+**Named pairing vector.** Use the same inputs as above, with client name
+`Aman’s MacBook Pro` (U+2019 apostrophe, 20 UTF-8 bytes) and empty ADb. The
+generator, CI, h, Ya, Yb and K are unchanged. ISK and both confirmation tags
+change. Rust `crypto::tests::named_pairing_vector` and Swift
+`CryptoTests.testNamedPairingVector` reproduce these values:
+
+```text
+ADa          14416d616ee2809973204d6163426f6f6b2050726f
+ISK          babe000cfe7c4fd314c375fed097aa1d24fe6378e76301176e789efc7d1028bc6b478776897e730bd39f59a00f4229e177eb7237545ba54c9fe9109b3eaab508
+Tb           499bc005e3877364ce6002d9fcecf22d02d1a0f76019e9f6f042150add403315
+Ta           921c83bc4d09122459355ac523326b048f5bae10859d4584543415d41b946e2d
+```
 
 ## Session
 
@@ -267,7 +306,7 @@ another session" rather than retry in a loop.
 
 | type | name           | payload |
 |------|----------------|---------|
-| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key) |
+| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`; missing = 0, ignore unknown bits) |
 | 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 reserved` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |

@@ -52,6 +52,61 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(Proto.PairResult(Data([1, 9, 9])), .paired, "trailing bytes are ignored")
     }
 
+    func testServerHelloNegotiatesPairNameAndIgnoresUnknownBits() throws {
+        let legacy = Data([0, 4, 4]) + Data("Desk".utf8) + Data([1])
+        for (suffix, capabilities, named) in [(Data(), UInt8(0), false),
+                                             (Data([1]), 1, true),
+                                             (Data([0x80]), 0x80, false),
+                                             (Data([0x81]), 0x81, true)] {
+            // Also exercise Data whose startIndex is not zero.
+            let hello = try XCTUnwrap(Proto.ServerHello((Data([9]) + legacy + suffix).dropFirst()))
+            XCTAssertEqual(hello.version, 4)
+            XCTAssertEqual(hello.name, "Desk")
+            XCTAssertTrue(hello.paired)
+            XCTAssertEqual(hello.capabilities, capabilities)
+            XCTAssertEqual(hello.supportsPairName, named)
+        }
+    }
+
+    func testPairNameIsBoundedOnUnicodeScalarBoundaries() throws {
+        let cases = [
+            ("Aman’s MacBook Pro", "Aman’s MacBook Pro"),
+            ("", ""),
+            (String(repeating: "a", count: 256), String(repeating: "a", count: 255)),
+            (String(repeating: "界", count: 86), String(repeating: "界", count: 85)),
+            (String(repeating: "a", count: 254) + "🦀", String(repeating: "a", count: 254)),
+            (String(repeating: "a", count: 251) + "🦀", String(repeating: "a", count: 251) + "🦀"),
+            // The boundary may split a grapheme, but never a scalar's UTF-8.
+            (String(repeating: "a", count: 254) + "e\u{301}", String(repeating: "a", count: 254) + "e"),
+            (" \nMac\t ", " \nMac\t "), // proof uses unsanitized bytes
+        ]
+        for (name, expected) in cases {
+            let ad = Proto.pairNameAD(name)
+            let request = try XCTUnwrap(Proto.PairRequest(Data(repeating: 7, count: 32) + ad))
+            XCTAssertEqual(request.name, expected)
+            XCTAssertEqual(request.ad, ad)
+            XCTAssertEqual(Int(ad[0]), expected.utf8.count)
+            XCTAssertLessThanOrEqual(32 + ad.count, 288)
+        }
+    }
+
+    func testPairRequestDistinguishesEmptyNameFromLegacyAndRejectsMalformedNames() throws {
+        let share = Data(repeating: 7, count: 32)
+        let legacy = try XCTUnwrap(Proto.PairRequest(share))
+        XCTAssertNil(legacy.name)
+        XCTAssertEqual(legacy.ad, Data())
+        let empty = try XCTUnwrap(Proto.PairRequest(share + Proto.pairNameAD("")))
+        XCTAssertEqual(empty.name, "")
+        XCTAssertEqual(empty.ad, Data([0]))
+        XCTAssertEqual(empty.share, share)
+        XCTAssertNil(Proto.PairRequest(share.dropFirst()))
+        for suffix: Data in [Data([1]), Data([0, 1]), Data([1, 0xff]), Data([2, 97]),
+                             Data([2, 0xc0, 0xaf]), Data([3, 0xed, 0xa0, 0x80]),
+                             Data([1, 0xe2]), Data([255]) + Data(repeating: 97, count: 256)] {
+            XCTAssertNil(Proto.PairRequest(share + suffix), "suffix \(suffix)")
+        }
+    }
+
     func testAnythingElseIsARefusal() {
         XCTAssertEqual(Proto.PairResult(Data()), .rejected)
         XCTAssertEqual(Proto.PairResult(Data([2])), .rejected, "rate-limited without its wait")

@@ -35,7 +35,10 @@
 //   ./fakehost 8470 hang --paired --pg 0badf00d   # a moved digest with paired = 1
 //                                      # only updates the stored one
 //
-//   swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift
+// `--legacy-pair` omits CAP_PAIR_NAME and accepts only the legacy 32-byte PAIR.
+// Otherwise named PAIR and legacy PAIR are both accepted, like the real host.
+//
+//   swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift
 //   ./fakehost 8470 busy                      # prints the dns-sd line to run
 //   dns-sd -R "Fake PC" _relay._tcp . 8470 v=4 pk=<hex> pg=<hex>
 //
@@ -50,12 +53,14 @@ setbuf(stdout, nil)
 
 let args = CommandLine.arguments
 guard args.count >= 3, let port = UInt16(args[1]) else {
-    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--pin <digits>] [--paired | --forget] [--pg <8 hex>]"); exit(2)
+    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--pin <digits>] [--paired | --forget] [--pg <8 hex>] [--legacy-pair]"); exit(2)
 }
 let mode = args[2]
-let limitSecs = mode == "ratelimit" ? UInt16(args[3]) ?? 599 : 0
+let limitSecs = mode == "ratelimit" && args.count > 3 ? UInt16(args[3]) ?? 599 : 0
+let legacyPair = args.contains("--legacy-pair")
 let forgot = args.contains("--forget")
 var claimPaired = args.contains("--paired") && !forgot
+var peerName = "Paired MacBook"
 let pin: String = args.firstIndex(of: "--pin").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "000000"
 // `wrong` checks PINs against another one, so whatever the Mac types fails.
 let hostPIN = mode == "wrong" ? String(pin.reversed()) + "9" : pin
@@ -86,13 +91,6 @@ if let i = args.firstIndex(of: "--pg"), i + 1 < args.count {
 }
 print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
 print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)")
-
-extension Data {
-    func be16(at o: Int) -> UInt16 { UInt16(self[startIndex + o]) << 8 | UInt16(self[startIndex + o + 1]) }
-    func be32(at o: Int) -> UInt32 { UInt32(be16(at: o)) << 16 | UInt32(be16(at: o + 2)) }
-    mutating func appendBE16(_ v: UInt16) { append(UInt8(v >> 8)); append(UInt8(v & 0xff)) }
-    mutating func appendBE32(_ v: UInt32) { appendBE16(UInt16(v >> 16)); appendBE16(UInt16(v & 0xffff)) }
-}
 
 func readExact(_ fd: Int32, _ n: Int) -> Data? {
     var out = Data(); var buf = [UInt8](repeating: 0, count: 65536)
@@ -153,12 +151,17 @@ func serve(_ fd: Int32) {
     print("-- handshake done with client \(fp) (paired=\(claimPaired))")
     var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     hello.append(claimPaired ? 1 : 0)
+    if !legacyPair { hello.append(Proto.capPairName) }
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
     /// CPace as the responder (B), after the Mac's PAIR. Returns whether it confirmed.
-    func pair(_ share: Data) -> Bool {
+    func pair(_ payload: Data) -> Bool {
+        guard let request = Proto.PairRequest(payload), !legacyPair || request.ad.isEmpty else {
+            print("-- malformed PAIR; closing"); return false
+        }
         let ci = CPace.channelIdentifier(clientStatic: clientKey, hostStatic: identity.publicKey.rawRepresentation)
-        guard let b = try? CPaceResponder(prs: Data(hostPIN.utf8), ci: ci, sid: noise.handshakeHash, peerShare: share) else {
+        guard let b = try? CPaceResponder(prs: Data(hostPIN.utf8), ci: ci, sid: noise.handshakeHash,
+                                         peerShare: request.share, peerAD: request.ad) else {
             print("-- invalid Ya; closing"); return false
         }
         writeAll(fd, tx.seal(type: 0xA3, payload: b.share + b.tag))
@@ -168,8 +171,14 @@ func serve(_ fd: Int32) {
         guard b.verify(peerTag: tag) else {
             writeAll(fd, tx.seal(type: 0xA1, payload: Data([0]))); print("-- PAIR_CONFIRM did not check out: PAIR_RESULT 0"); return false
         }
-        writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
+        // Like the real host, commit the label only after confirmation and
+        // before success. Log it so pair-only checks can verify the timing.
+        let name = request.name?.unicodeScalars.map { $0.properties.generalCategory == .control ? " " : String($0) }
+            .joined().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { peerName = name }
+        print("-- confirmed peer name: \(peerName)")
         claimPaired = true
+        writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
         return true
     }
 
@@ -188,6 +197,7 @@ func serve(_ fd: Int32) {
             print(String(format: "-- next message 0x%02x", requestType))
         }
         if requestType == 0xA2 {
+            claimPaired = false
             writeAll(fd, tx.seal(type: 0x06, payload: Data([5])))
             print("-- UNPAIRED while display is busy")
             return
@@ -208,8 +218,18 @@ func serve(_ fd: Int32) {
         writeAll(fd, tx.seal(type: 0xA1, payload: p)); print("-- PAIR_RESULT rate-limited \(limitSecs) s")
     case ("wrong", 0xA0), ("accept", 0xA0), ("hang", 0xA0), ("notpaired", 0xA0):
         guard pair(payload) else { break }
-        if mode == "hang" { _ = readFrame(fd) }
+        if let next = readFrame(fd), let (nextType, _) = rx.open(next) {
+            print(String(format: "-- next message 0x%02x", nextType))
+            if mode == "notpaired" && nextType == 0x81 {
+                writeAll(fd, tx.seal(type: 0x06, payload: Data([4])))
+                print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
+            }
+            if mode == "hang" { _ = readFrame(fd) }
+        } else {
+            print("-- pair-only client closed without requesting the display")
+        }
     case (_, 0xA2):
+        claimPaired = false
         writeAll(fd, tx.seal(type: 0x06, payload: Data([5]))); print("-- UNPAIRED")
     case ("notpaired", 0x81):
         writeAll(fd, tx.seal(type: 0x06, payload: Data([4]))); print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
@@ -228,7 +248,10 @@ setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.s
 var addr = sockaddr_in6(); addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size); addr.sin6_family = sa_family_t(AF_INET6); addr.sin6_port = port.bigEndian; addr.sin6_addr = in6addr_any
 let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
 guard bound == 0, listen(sock, 8) == 0 else { print("bind/listen failed: \(errno)"); exit(1) }
-print("listening on \(port), mode \(mode)")
+var actualAddr = sockaddr_in6()
+var actualLength = socklen_t(MemoryLayout<sockaddr_in6>.size)
+_ = withUnsafeMutablePointer(to: &actualAddr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(sock, $0, &actualLength) } }
+print("listening on \(UInt16(bigEndian: actualAddr.sin6_port)), mode \(mode)")
 while true {
     let fd = accept(sock, nil, nil)
     guard fd >= 0 else { continue }

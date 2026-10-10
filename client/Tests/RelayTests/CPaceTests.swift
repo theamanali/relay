@@ -122,6 +122,32 @@ final class CPaceTests: XCTestCase {
         XCTAssertTrue(pc.verify(peerTag: tag))
     }
 
+    func testPairNameTamperingAndStrippingFailConfirmation() throws {
+        let pin = Data("123456".utf8)
+        let ad = Proto.pairNameAD("Aman’s MacBook Pro")
+        let mac = try CPaceInitiator(prs: pin, ci: ci, sid: sid, ad: ad)
+        let honest = try CPaceResponder(prs: pin, ci: ci, sid: sid, peerShare: mac.share, peerAD: ad)
+        let (_, tag) = try mac.finish(peerShare: honest.share, peerTag: honest.tag)
+        for tampered in [Proto.pairNameAD("Someone else's Mac"), Data(), Data([0])] {
+            let pc = try CPaceResponder(prs: pin, ci: ci, sid: sid, peerShare: mac.share, peerAD: tampered)
+            XCTAssertThrowsError(try mac.finish(peerShare: pc.share, peerTag: pc.tag)) { error in
+                XCTAssertEqual(error as? CPaceError, .confirmationFailed)
+            }
+            XCTAssertFalse(pc.verify(peerTag: tag))
+        }
+    }
+
+    func testEmptyNamedPairingHasDifferentProofFromLegacy() throws {
+        let pin = Data("123456".utf8)
+        let scalar = Data(repeating: 0x55, count: 32)
+        let named = try CPaceInitiator(prs: pin, ci: ci, sid: sid, ad: Proto.pairNameAD(""), scalar: scalar)
+        let legacy = try CPaceInitiator(prs: pin, ci: ci, sid: sid, scalar: scalar)
+        XCTAssertEqual(named.share, legacy.share)
+        let pc = try CPaceResponder(prs: pin, ci: ci, sid: sid, peerShare: named.share, peerAD: Data([0]))
+        XCTAssertTrue(pc.verify(peerTag: try named.finish(peerShare: pc.share, peerTag: pc.tag).tag))
+        XCTAssertThrowsError(try legacy.finish(peerShare: pc.share, peerTag: pc.tag))
+    }
+
     /// A wrong PIN on either side: the Mac rejects the PC's tag (it cannot
     /// tell a wrong PIN from an impostor), and a forged Mac tag fails on the PC.
     func testWrongPINFailsConfirmation() throws {
