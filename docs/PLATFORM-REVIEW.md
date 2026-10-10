@@ -3,8 +3,10 @@
 Reviewed 2026-10-10 at source commit `1d0118e`. This is a proposed implementation
 plan, not a record of completed platform or UI changes.
 
-The requested policy is NVIDIA-only on Windows, Apple-silicon-only on the latest
-stable macOS, with SwiftUI wherever practical. The existing accelerated stream
+The requested policy is NVIDIA-only on Windows and Apple-silicon-only on Mac,
+with SwiftUI wherever practical. Develop and fully test on the latest stable
+macOS; choose the minimum macOS version from the APIs actually adopted, rather
+than automatically requiring the latest major release. The existing accelerated stream
 path already serves this combination. Most implementation work is support
 enforcement, removal of alternative backends, and separation of UI state from
 the connection/decoder pipeline.
@@ -28,10 +30,15 @@ audit of generated ABI definitions or cryptographic correctness.
 - Existing Windows records report 145 unit tests and a probe integration test
   passing, plus installed NVIDIA streaming and real-Mac tests. No Windows build,
   GPU benchmark or new physical streaming session was performed for this review.
-- Apple currently lists macOS 27 Golden Gate **27.0.1** as the latest release.
-  This machine's 27.0 results do not qualify 27.0.1. Use 27.0 as the major-version
-  deployment floor and qualify the current stable patch for releases; document
-  how that floor advances when a new major OS ships. [Apple release list](https://support.apple.com/en-us/109033).
+- At review time, Apple lists macOS 27 Golden Gate **27.0.1** as the latest
+  release. This machine's 27.0 results do not qualify 27.0.1. Qualify the current
+  stable release without automatically making it the deployment floor.
+  [Apple release list](https://support.apple.com/en-us/109033).
+- Agreed compatibility policy: preserve older macOS compatibility where the
+  adopted APIs allow it. Decide availability fallbacks individually; document
+  the feature that requires any increase in the minimum version. SwiftUI alone
+  is not a reason to require macOS 27. Test the chosen minimum OS as well as the
+  latest stable release before claiming that support.
 
 ## 1. Windows host: enforce NVIDIA support
 
@@ -124,14 +131,20 @@ to replace and no need for a new media pipeline to support Apple silicon.
 
 | Area | Proposed change |
 |---|---|
-| `Package.swift` | Raise the macOS floor from 13 to the chosen current major (27); adopt a current Swift tools version. Enable Swift 6 language mode after ownership fixes. |
+| `Package.swift` | Audit adopted API availability before changing the current macOS 13 floor; adopt a current Swift tools version. Enable Swift 6 language mode after ownership fixes. |
 | `Info.plist` | Match `LSMinimumSystemVersion` to the package floor; preserve bundle identity, Bonjour declarations and local-network explanation. |
 | `bundle.sh` | Explicitly build arm64, match the icon deployment target, and verify the produced executable architecture. Fail if signing fails instead of swallowing it. |
 | `VideoRenderer.swift` | Require hardware decoding, verify codec availability, and surface decoder creation failures to session UI. |
 | `MetalPresenter.swift` | Keep the IOSurface texture path, bounded latest-frame mailbox, generation checks and presentation metrics. Make initialization failure explicit. |
-| `VideoRenderer.swift` / launch options | Consider removing the AVSampleBufferDisplayLayer alternative, then remove the macOS 14/14.4 compatibility branches. |
+| `VideoRenderer.swift` / launch options | Consider removing the AVSampleBufferDisplayLayer alternative. Remove its compatibility branches with that backend, or only when the chosen minimum OS makes them unnecessary. |
 | `StreamMode.swift` / screen integration | Preserve runtime pixel sizes, backing scale and refresh-rate limits; qualify 60 Hz Air and 120 Hz Pro behavior separately. |
-| `.github/workflows/client.yml` | Assert arm64, OS and Xcode versions; use a verified runner for the target OS. Add release bundle/signature and fakehost checks. |
+| `.github/workflows/client.yml` | Assert arm64, OS and Xcode versions; qualify latest stable macOS and the chosen minimum on verified runners or test Macs. Add release bundle/signature and fakehost checks. |
+
+The proposed Observation-based UI requires macOS 14 unless we provide an older
+observation approach. Other selected APIs may raise that floor further; record
+their requirements during implementation. The build toolchain version and the
+minimum runtime OS are separate decisions. Apple-silicon-only packaging also
+does not require a latest-macOS-only policy.
 
 [`VideoRenderer.makeSession`](/Users/amanali/repos/travel-display/client/Sources/Relay/VideoRenderer.swift:198)
 currently *enables* hardware acceleration and logs whether it got it. For the
@@ -251,8 +264,9 @@ crash restore and DPI remain product work even after this platform reduction.
 
 ## 5. Suggested implementation order and acceptance gates
 
-1. **Declare/enforce supported platforms.** Align Mac deployment/architecture
-   settings, add NVIDIA selection and capability diagnostics, document supported
+1. **Declare/enforce supported platforms.** Enforce arm64 packaging, audit Mac
+   API requirements and align deployment settings with the resulting minimum.
+   Add NVIDIA selection and capability diagnostics and document supported
    configurations. Preserve existing UI during this step.
 2. **Harden the native pipeline, then remove alternative host paths.** Test
    absent/old driver, unsupported GPU/codec/mode, hybrid adapter mismatch,
@@ -264,8 +278,9 @@ crash restore and DPI remain product work even after this platform reduction.
 4. **Migrate picker/settings/rows, then PIN and commands to SwiftUI.** Use a
    temporary hosting boundary if it keeps each step reviewable. Retain the
    native stream window/view until behavioral and latency comparisons pass.
-5. **Qualify releases.** Add arm64/current-OS bundle checks and UI automation;
-   test a 60 Hz Air, a 120 Hz Pro and an external display. Verify discovery,
+5. **Qualify releases.** Add arm64 bundle checks and UI automation on latest
+   stable macOS and the chosen minimum; test a 60 Hz Air, a 120 Hz Pro and an
+   external display. Verify discovery,
    permissions, pairing, focus, sleep/wake, screen changes and application updates.
 
 Windows tests should keep fast capability-selection/unit checks separate from
