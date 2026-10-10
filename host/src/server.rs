@@ -610,7 +610,7 @@ fn handle_session(
     tx.send(
         msg::SERVER_HELLO,
         0,
-        &protocol::server_hello(&cfg.name, hs.paired),
+        &protocol::server_hello_with_capabilities(&cfg.name, hs.paired),
     )?;
 
     // A known client may still send a PIN (it lost its copy of our key); an unknown one must.
@@ -633,14 +633,8 @@ fn handle_session(
         // The Mac confirms as soon as PAIR_REPLY arrives: the human part (the
         // PIN) was typed before PAIR.
         rx.set_read_timeout(Some(HELLO_TIMEOUT))?;
-        let store = || -> Result<()> {
-            if !hs.paired {
-                cfg.paired
-                    .lock()
-                    .unwrap()
-                    .add(hs.peer, &format!("paired {}", peer.ip()))?;
-            }
-            Ok(())
+        let store = |name: Option<&str>| -> Result<()> {
+            cfg.paired.lock().unwrap().add_pairing(hs.peer, name)
         };
         let paired = crypto::host_pairing(
             &mut tx,

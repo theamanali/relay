@@ -61,9 +61,18 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   with `probe`: not paired / pair / already paired / unpair / re-pair (PIN rotates),
   `--abandon-pair` and wrong PINs counted, the sixth attempt refused with 599 s, TXT `v=4`,
   and a 1080p60 session at 60.2 fps with encrypt/send avg 0.07 ms (max 0.38 ms).
-- Separate UI follow-up: pair-only stores “paired <IP>” in the host peer list;
-  the real Mac name arrives only with CLIENT_HELLO on the first stream. Do not fold
-  a protocol/name-exchange change into the topology fix.
+- Pair-only name fix (host-first, 2026-10-09): host advertises optional
+  SERVER_HELLO capability `0x01` and accepts PAIR = Ya + u8 name length + UTF-8.
+  The complete name suffix is CPace ADa; the name is stored only after valid
+  confirmation and before PAIR_RESULT. Legacy PAIR remains accepted; unnamed new
+  pairings use “Paired MacBook”, and unnamed re-pair preserves an existing name.
+  Probe supports `--name` / `--legacy-pair`; isolated probe tests cover named,
+  legacy, wrong-PIN and abandoned pairing without touching displays or the service.
+  Mac implementation, `docs/PROTOCOL.md` update and real-Mac verification are
+  pending in the Mac session at the user's request. See `host/PAIR-NAME-HANDOFF.md`
+  for the exact extension and shared named vector. Current Mac builds still send
+  the name only in CLIENT_HELLO; old “paired <IP>” entries need named re-pair or
+  streaming to refresh. Keep this rollout separate from topology work.
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)
