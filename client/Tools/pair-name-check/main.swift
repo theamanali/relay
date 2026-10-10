@@ -261,7 +261,18 @@ func run(_ root: URL) throws {
 
     let host = try FakeHost(root: root, label: "pair-then-stream", arguments: ["busy"])
     defer { host.stop() }
-    let (client, _) = try connect(host, pairOnly: false)
+    let (client, delegate) = try connect(host, pairOnly: false)
+    if HostConnection.hardwareCodecs == 0 {
+        // Virtual Macs (GitHub's macos-14 runners) have no hardware decoder:
+        // pairing must still complete, then the client stops before streaming.
+        try check(ClientState.knownHosts()[try host.key] != nil, "pair-then-stream did not pair without a decoder")
+        try check(delegate.reason.contains("no supported hardware"), "pair-then-stream: \(delegate.reason)")
+        try host.waitForLog("-- closed")
+        try check(!host.log.contains("next message 0x81"), "pair-then-stream sent CLIENT_HELLO without a decoder")
+        try check(host.log.contains("confirmed peer name: Aman’s MacBook Pro"), "pair-then-stream omitted name")
+        print("PASS pair-then-stream (no hardware decoder): named pairing, no CLIENT_HELLO")
+        return
+    }
     try check(client.hostBusy && ClientState.knownHosts()[try host.key] != nil, "pair-then-stream did not pair before BUSY")
     try host.waitForLog("next message 0x81")
     try check(host.log.contains("confirmed peer name: Aman’s MacBook Pro"), "pair-then-stream omitted name")
