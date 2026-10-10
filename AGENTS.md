@@ -54,9 +54,13 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   and through the picker's launch-time check (still paired → digest stored; forgot →
   forgotten locally; a different key behind the advertised `pk` → closed after msg2, no msg3)
   and PC ▸ Forget in the bundled app (UNPAIR straight after msg3 → UNPAIRED, the row back to
-  Available, "Forgot Fake PC"). Real Mac/PC verified 2026-10-09: existing pairing,
-  fresh CPace pairing, wrong-PIN rejection, Forget from either side, reconnect without
-  a PIN, and 3024×1964@120 streaming; normal disconnect restores monitors and layout.
+  Available, "Forgot Fake PC"). Real PC ↔ Mac v4 streaming with the existing pairing
+  verified 2026-10-09: 3024x1964@120, host measured 118.2 fps, encrypt/send avg 0.05 ms,
+  and physical monitors/layout restored on disconnect; reconnect without a PIN also passed.
+  Mac-side Forget (UNPAIR), wrong-PIN rejection, fresh CPace pairing with the correct PIN,
+  streaming afterwards and PC-side Forget propagating to the Mac picker also passed.
+  Picker flicker during these transitions was fixed by holding TXT withdrawals through
+  the discovery grace period; verified by the user with section-header animations retained.
   PC side verified against the installed service
   with `probe`: not paired / pair / already paired / unpair / re-pair (PIN rotates),
   `--abandon-pair` and wrong PINs counted, the sixth attempt refused with 599 s, TXT `v=4`,
@@ -305,7 +309,10 @@ documented there. What follows is only the mechanics that are easy to break:
   TTL (measured 2026-09-18: 53 s TXT-less on Wi-Fi, until the cable came back). That
   looks exactly like a host's goodbye (TXT gone, PTR still there), so `HostListDebouncer`
   tells them apart by whether the result's interface set changed in the same update and
-  carries the last key/facts forward. A picker row is re-rendered on every
+  carries the last key/facts forward. A same-link TXT withdrawal now gets the normal
+  2.5 s removal grace too: re-registering after a pairing digest or address change must
+  not briefly remove the host's row. Repeated TXT-less reports do not extend that grace;
+  a returning TXT updates the facts and cancels removal. A picker row is re-rendered on every
   `NWPathMonitor` update too: a freshly plugged cable is seen by Bonjour (IPv6
   link-local) seconds before it has an IPv4, and Bonjour never fires for the latter.
 - `StreamView.flagsChanged` decides press vs release from its own held-key record
