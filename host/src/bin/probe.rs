@@ -58,6 +58,12 @@ struct Args {
     /// Pair if needed, then close without requesting the display
     #[arg(long, conflicts_with = "unpair")]
     pair_only: bool,
+    /// Client name to send during pairing (when supported) and streaming
+    #[arg(long, default_value = "probe")]
+    name: String,
+    /// Test older v4 clients by omitting the pairing-name extension
+    #[arg(long)]
+    legacy_pair: bool,
     /// Send PAIR, read PAIR_REPLY, then close without confirming (the host
     /// must count it as a failed PIN)
     #[arg(long, requires = "pin", conflicts_with = "unpair")]
@@ -100,6 +106,7 @@ fn main() -> Result<()> {
     };
     let name = String::from_utf8_lossy(name).into_owned();
     let paired = paired != 0;
+    let named_pairing = p.get(name_end + 1).copied().unwrap_or(0) & protocol::CAP_PAIR_NAME != 0;
     println!(
         "host '{name}' protocol v{version}, {}",
         if paired {
@@ -125,7 +132,15 @@ fn main() -> Result<()> {
             .pin
             .clone()
             .context("not paired with this host: pass --pin <host PIN>")?;
-        crypto::client_pairing(&mut tx, &mut rx, &hs.keys, &pin, args.abandon_pair)?;
+        let pair_name = (named_pairing && !args.legacy_pair).then_some(args.name.as_str());
+        crypto::client_pairing(
+            &mut tx,
+            &mut rx,
+            &hs.keys,
+            &pin,
+            args.abandon_pair,
+            pair_name,
+        )?;
         if args.abandon_pair {
             println!("left after PAIR_REPLY without confirming; the host counts a failed PIN");
             return Ok(());
@@ -145,8 +160,7 @@ fn main() -> Result<()> {
     hello.extend_from_slice(&args.bitrate.to_be_bytes());
     hello.push(0x01); // wants input
     hello.push(Codec::H264.bit() | Codec::Hevc.bit());
-    hello.push(5);
-    hello.extend_from_slice(b"probe");
+    hello.extend_from_slice(&protocol::pair_name_ad(&args.name));
     tx.send(msg::CLIENT_HELLO, 0, &hello)?;
 
     let mut out = match &args.out {

@@ -223,12 +223,21 @@ ffplay -f hevc capture.hevc
 | `--wiggle` | | Move the mouse while connected (tests input injection). |
 | `--pin <digits>` | | Pair first if this probe isn't paired yet. |
 | `--pair-only` / `--unpair` | | Pair and leave, or ask the host to forget this probe. |
+| `--name <name>` | `probe` | Name sent in pairing when the host supports it, and in CLIENT_HELLO when streaming. |
+| `--legacy-pair` | | Omit the pairing-name extension to test older v4 client behavior. |
 | `--abandon-pair` | | With `--pin`: send `PAIR`, read `PAIR_REPLY` and leave without confirming, the way a Mac with the wrong PIN does. The host must count it as a failed PIN. |
 | `--fresh-identity` | | Use a throwaway key instead of `probe-identity.key`. |
 
 A probe session takes the display like a real Mac does, so **your monitors go
 dark** while it runs. Against a `--no-vdd` host it streams the primary monitor
 instead.
+
+Pair-only name support is staged on the host; the Mac change and wire-spec update
+are described in [PAIR-NAME-HANDOFF.md](PAIR-NAME-HANDOFF.md). The current Mac app
+still sends its name only when it streams. New unnamed pairings use “Paired
+MacBook” plus the fingerprint in the tray; named pairings save the name before
+reporting success. The automated probe fixture tests this without touching the
+installed service or any display.
 
 ### `browse`: what this PC advertises
 

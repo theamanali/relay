@@ -9,6 +9,46 @@ pub const MAX_PAYLOAD: u32 = 64 * 1024 * 1024;
 pub const DEFAULT_BITRATE_MBPS: u16 = 120;
 pub const MIN_BITRATE_MBPS: u16 = 1;
 pub const MAX_BITRATE_MBPS: u16 = 1_000;
+/// Optional SERVER_HELLO capability byte, after `paired`.
+/// See host/PAIR-NAME-HANDOFF.md until the Mac/spec rollout is complete.
+pub const CAP_PAIR_NAME: u8 = 0x01;
+
+/// PAIR's optional name suffix is also CPace's ADa, byte for byte. Binding
+/// it into confirmation prevents even a channel intermediary changing the name.
+pub struct PairRequest<'a> {
+    pub share: &'a [u8; 32],
+    pub name: Option<&'a str>,
+    pub ad: &'a [u8],
+}
+
+impl<'a> PairRequest<'a> {
+    pub fn parse(payload: &'a [u8]) -> Option<Self> {
+        let share = payload.get(..32)?.try_into().ok()?;
+        let ad = &payload[32..];
+        let name = if ad.is_empty() {
+            None // legacy v4 PAIR
+        } else {
+            if ad.len() != 1 + usize::from(ad[0]) {
+                return None;
+            }
+            Some(std::str::from_utf8(&ad[1..]).ok()?)
+        };
+        Some(Self { share, name, ad })
+    }
+}
+
+/// u8 byte length + UTF-8, truncated only at a character boundary. An empty
+/// name has the one-byte ADa [0]; a legacy request has empty ADa instead.
+pub fn pair_name_ad(name: &str) -> Vec<u8> {
+    let mut n = name.len().min(255);
+    while !name.is_char_boundary(n) {
+        n -= 1;
+    }
+    let mut out = Vec::with_capacity(n + 1);
+    out.push(n as u8);
+    out.extend_from_slice(&name.as_bytes()[..n]);
+    out
+}
 
 #[allow(dead_code)] // the full table documents the protocol even where the host has no use yet
 pub mod msg {
@@ -195,6 +235,14 @@ pub fn server_hello(name: &str, paired: bool) -> Vec<u8> {
     p
 }
 
+/// Older v4 clients read through `paired` and ignore the optional suffix.
+/// Keep server_hello() as the legacy form for the original v4 test vector.
+pub fn server_hello_with_capabilities(name: &str, paired: bool) -> Vec<u8> {
+    let mut p = server_hello(name, paired);
+    p.push(CAP_PAIR_NAME);
+    p
+}
+
 pub fn stream_start(width: u16, height: u16, fps: u16, bitrate_mbps: u16, codec: Codec) -> Vec<u8> {
     let mut p = Vec::with_capacity(10);
     p.extend_from_slice(&width.to_be_bytes());
@@ -225,6 +273,49 @@ pub fn read_msg(r: &mut impl Read) -> io::Result<(u8, u8, Vec<u8>)> {
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+
+    #[test]
+    fn pairing_name_encoding_is_bounded_and_preserves_unicode() {
+        for name in [
+            "Aman’s MacBook Pro",
+            "",
+            &"界".repeat(86),
+            &format!("{}🦀", "a".repeat(254)),
+        ] {
+            let ad = pair_name_ad(name);
+            let payload = [&[7; 32][..], &ad].concat();
+            let parsed = PairRequest::parse(&payload).unwrap();
+            assert!(payload.len() <= 288);
+            assert_eq!(parsed.ad, ad);
+            assert!(name.starts_with(parsed.name.unwrap()));
+            assert_eq!(parsed.name.unwrap().len(), usize::from(ad[0]));
+        }
+        assert_eq!(pair_name_ad(&format!("{}🦀", "a".repeat(254)))[0], 254);
+    }
+
+    #[test]
+    fn pairing_accepts_legacy_but_rejects_malformed_names() {
+        let legacy = PairRequest::parse(&[7; 32]).unwrap();
+        assert!(legacy.name.is_none() && legacy.ad.is_empty());
+        assert!(PairRequest::parse(&[7; 31]).is_none());
+        for suffix in [&[1][..], &[0, 1], &[1, 0xff], &[2, b'a']] {
+            assert!(PairRequest::parse(&[&[7; 32][..], suffix].concat()).is_none());
+        }
+        assert_eq!(
+            PairRequest::parse(&[&[7; 32][..], &[0]].concat())
+                .unwrap()
+                .name,
+            Some("")
+        );
+    }
+
+    #[test]
+    fn name_capability_follows_the_legacy_server_hello() {
+        let legacy = server_hello("Test PC", true);
+        let extended = server_hello_with_capabilities("Test PC", true);
+        assert_eq!(&extended[..legacy.len()], legacy);
+        assert_eq!(extended[legacy.len()], CAP_PAIR_NAME);
+    }
 
     #[test]
     fn frame_timing_round_trips() {

@@ -179,8 +179,9 @@ pending; see the
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
-- [ ] Pair-only peer name: currently stored as “paired <IP>”; the Mac name arrives
-      in CLIENT_HELLO on the first streaming connection (separate UI follow-up)
+- [ ] Pair-only peer name: host support and probe tests are ready; the Mac must
+      send its name during pairing. See the [Mac handoff](host/PAIR-NAME-HANDOFF.md).
+      Current Mac builds still supply the name only on the first streaming connection.
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app
@@ -225,8 +226,8 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
-real handshake and pairing. Unit tests (134 Rust plus one opt-in Windows desktop
-test, 92 Swift),
+real handshake and pairing. Unit tests (142 Rust plus one opt-in Windows desktop
+test and a probe integration test, 92 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)

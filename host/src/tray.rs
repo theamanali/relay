@@ -515,7 +515,8 @@ impl Tray {
             )?;
         }
         for (n, (key, name)) in self.open_menu_peers.iter().enumerate() {
-            let mut label = format!("{name}  ({})", fingerprint(key));
+            // Device names are text, not Win32 menu accelerator markers.
+            let mut label = format!("{}  ({})", name.replace('&', "&&"), fingerprint(key));
             if active == Some(*key) {
                 label.push_str(" \u{2014} streaming");
             }

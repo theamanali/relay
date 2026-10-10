@@ -217,6 +217,24 @@ impl PeerList {
         self.save()
     }
 
+    /// Called only after CPace confirmation, before acknowledging success.
+    /// A legacy/blank-name re-pair must not erase a name learned earlier.
+    pub fn add_pairing(&mut self, key: Key32, name: Option<&str>) -> Result<()> {
+        let name: String = name
+            .unwrap_or_default()
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let name = name.trim();
+        if !name.is_empty() {
+            self.add(key, name)
+        } else if self.contains(&key) {
+            Ok(())
+        } else {
+            self.add(key, "Paired MacBook")
+        }
+    }
+
     pub fn remove(&mut self, key: &Key32) -> Result<bool> {
         let removed = self.peers.remove(key).is_some();
         self.save()?;
@@ -753,7 +771,8 @@ impl SecureReader {
 // Pairing (CPace inside the channel)
 // ---------------------------------------------------------------------------
 
-/// The host's side of pairing, once PAIR has arrived carrying `ya`. Every
+/// The host's side of pairing, once PAIR has arrived carrying a share and
+/// optional name (the name suffix is CPace ADa). Every
 /// attempt counts as a failed PIN until the client's confirmation proves
 /// otherwise, so a client that walks away after seeing Tb (which is also how
 /// a Mac with the wrong PIN leaves) has still spent its guess. `store`
@@ -766,10 +785,10 @@ pub fn host_pairing(
     tx: &mut SecureWriter,
     rx: &mut SecureReader,
     keys: &SessionKeys,
-    ya: &[u8],
+    payload: &[u8],
     pin: &str,
     limiter: &Mutex<PairLimiter>,
-    store: impl FnOnce() -> Result<()>,
+    store: impl FnOnce(Option<&str>) -> Result<()>,
 ) -> Result<bool> {
     let failure = {
         let mut limiter = limiter.lock().unwrap();
@@ -785,10 +804,17 @@ pub fn host_pairing(
         }
         limiter.record_failure()
     };
-    let ya: cpace::Point = ya
-        .try_into()
-        .map_err(|_| anyhow!("PAIR carried {} bytes, not a share", ya.len()))?;
-    let b = cpace::Responder::new(pin.as_bytes(), &keys.ci, &keys.h, &ya, b"", b"", None)?;
+    let request = protocol::PairRequest::parse(payload)
+        .ok_or_else(|| anyhow!("malformed PAIR share/name ({} bytes)", payload.len()))?;
+    let b = cpace::Responder::new(
+        pin.as_bytes(),
+        &keys.ci,
+        &keys.h,
+        request.share,
+        request.ad,
+        b"",
+        None,
+    )?;
     let mut reply = b.share.to_vec();
     reply.extend_from_slice(&b.tag);
     tx.send(msg::PAIR_REPLY, 0, &reply)?;
@@ -806,7 +832,7 @@ pub fn host_pairing(
         bail!("wrong PIN");
     }
     limiter.lock().unwrap().undo_failure(failure);
-    store()?;
+    store(request.name)?;
     tx.send(msg::PAIR_RESULT, 0, &[pair_result::PAIRED])?;
     Ok(true)
 }
@@ -814,16 +840,20 @@ pub fn host_pairing(
 /// The client's side of pairing, as `probe` runs it: PAIR, check the
 /// host's proof, PAIR_CONFIRM, PAIR_RESULT. With `abandon_after_reply` it
 /// stops after PAIR_REPLY without confirming, which the host must count as a
-/// failed PIN.
+/// failed PIN. Pass a name only when SERVER_HELLO advertises CAP_PAIR_NAME.
 pub fn client_pairing(
     tx: &mut SecureWriter,
     rx: &mut SecureReader,
     keys: &SessionKeys,
     pin: &str,
     abandon_after_reply: bool,
+    name: Option<&str>,
 ) -> Result<()> {
-    let a = cpace::Initiator::new(pin.as_bytes(), &keys.ci, &keys.h, b"", None)?;
-    tx.send(msg::PAIR, 0, &a.share)?;
+    let ad = name.map(protocol::pair_name_ad).unwrap_or_default();
+    let a = cpace::Initiator::new(pin.as_bytes(), &keys.ci, &keys.h, &ad, None)?;
+    let mut payload = a.share.to_vec();
+    payload.extend_from_slice(&ad);
+    tx.send(msg::PAIR, 0, &payload)?;
     let (ty, _, reply) = rx.recv().context("waiting for PAIR_REPLY")?;
     if ty != msg::PAIR_REPLY {
         return Err(pairing_refusal(ty, &reply));
@@ -1178,6 +1208,44 @@ mod tests {
 
     const PIN: &str = "123456";
 
+    #[test]
+    fn named_pairing_vector() {
+        // Same identities, Noise transcript, PIN and scalars as the legacy
+        // v4 vector; only ADa changes. Shared with the Mac-session handoff.
+        let ad = protocol::pair_name_ad("Aman’s MacBook Pro");
+        let ci = hex::decode(vector::CI).unwrap();
+        let sid = hex::decode(vector::H).unwrap();
+        let a = cpace::Initiator::new(PIN.as_bytes(), &ci, &sid, &ad, Some([0x55; 32])).unwrap();
+        let b = cpace::Responder::new(
+            PIN.as_bytes(),
+            &ci,
+            &sid,
+            &a.share,
+            &ad,
+            b"",
+            Some([0x66; 32]),
+        )
+        .unwrap();
+        let (isk, ta) = a.finish(&b.share, b"", &b.tag).unwrap();
+        assert_eq!(isk, b.isk);
+        assert!(b.verify(&ta));
+        assert_eq!(hex::encode(a.share), vector::YA);
+        assert_eq!(hex::encode(b.share), vector::YB);
+        assert_eq!(
+            hex::encode(ad),
+            "14416d616ee2809973204d6163426f6f6b2050726f"
+        );
+        assert_eq!(hex::encode(isk), "babe000cfe7c4fd314c375fed097aa1d24fe6378e76301176e789efc7d1028bc6b478776897e730bd39f59a00f4229e177eb7237545ba54c9fe9109b3eaab508");
+        assert_eq!(
+            hex::encode(b.tag),
+            "499bc005e3877364ce6002d9fcecf22d02d1a0f76019e9f6f042150add403315"
+        );
+        assert_eq!(
+            hex::encode(ta),
+            "921c83bc4d09122459355ac523326b048f5bae10859d4584543415d41b946e2d"
+        );
+    }
+
     /// One pairing attempt over loopback: the host waits for PAIR and runs
     /// `host_pairing`; the client runs `client`. Returns the client's result,
     /// the host's, and whether the host stored the client.
@@ -1193,7 +1261,7 @@ mod tests {
             let (ty, _, ya) = rx.recv().unwrap();
             assert_eq!(ty, msg::PAIR);
             let mut stored = false;
-            let result = host_pairing(&mut tx, &mut rx, &hs.keys, &ya, PIN, &limiter, || {
+            let result = host_pairing(&mut tx, &mut rx, &hs.keys, &ya, PIN, &limiter, |_| {
                 stored = true;
                 Ok(())
             });
@@ -1210,7 +1278,7 @@ mod tests {
     }
 
     fn client_with(pin: &'static str, abandon: bool) -> impl FnOnce(&mut Side) -> Result<()> {
-        move |mac| client_pairing(&mut mac.tx, &mut mac.rx, &mac.hs.keys, pin, abandon)
+        move |mac| client_pairing(&mut mac.tx, &mut mac.rx, &mac.hs.keys, pin, abandon, None)
     }
 
     #[test]
@@ -1240,6 +1308,68 @@ mod tests {
         assert!(client.unwrap_err().to_string().contains("did not match"));
         // The Mac closed without confirming.
         assert!(!host.unwrap());
+        assert!(!stored);
+        assert_eq!(failures(&limiter), 1);
+    }
+
+    #[test]
+    fn named_pairing_failures_never_store_a_name() {
+        for (pin, abandon) in [("654321", false), (PIN, true)] {
+            let limiter = Arc::new(Mutex::new(PairLimiter::new()));
+            let (_, host, stored) = pair_attempt(&limiter, |mac| {
+                client_pairing(
+                    &mut mac.tx,
+                    &mut mac.rx,
+                    &mac.hs.keys,
+                    pin,
+                    abandon,
+                    Some("Unconfirmed Mac"),
+                )
+            });
+            assert!(!host.unwrap());
+            assert!(!stored);
+            assert_eq!(failures(&limiter), 1);
+        }
+    }
+
+    #[test]
+    fn changing_the_pairing_name_breaks_confirmation() {
+        let limiter = Arc::new(Mutex::new(PairLimiter::new()));
+        let (client, host, stored) = pair_attempt(&limiter, |mac| {
+            let original = protocol::pair_name_ad("Aman’s MacBook Pro");
+            let a = cpace::Initiator::new(
+                PIN.as_bytes(),
+                &mac.hs.keys.ci,
+                &mac.hs.keys.h,
+                &original,
+                None,
+            )?;
+            let mut payload = a.share.to_vec();
+            payload.extend_from_slice(&protocol::pair_name_ad("Different Mac"));
+            mac.tx.send(msg::PAIR, 0, &payload)?;
+            let (ty, _, reply) = mac.rx.recv()?;
+            assert_eq!(ty, msg::PAIR_REPLY);
+            assert!(a
+                .finish(reply[..32].try_into().unwrap(), b"", &reply[32..])
+                .is_err());
+            Ok(()) // no PAIR_CONFIRM
+        });
+        client.unwrap();
+        assert!(!host.unwrap());
+        assert!(!stored);
+        assert_eq!(failures(&limiter), 1);
+    }
+
+    #[test]
+    fn malformed_named_pairing_counts_a_failure_without_storing() {
+        let limiter = Arc::new(Mutex::new(PairLimiter::new()));
+        let (_, host, stored) = pair_attempt(&limiter, |mac| {
+            let mut payload = vec![7; 32];
+            payload.extend_from_slice(&[2, b'a']); // truncated name
+            mac.tx.send(msg::PAIR, 0, &payload)?;
+            Ok(())
+        });
+        assert!(host.unwrap_err().to_string().contains("malformed PAIR"));
         assert!(!stored);
         assert_eq!(failures(&limiter), 1);
     }
@@ -1314,6 +1444,28 @@ mod tests {
         let again = PeerList::load(&path).unwrap();
         assert!(again.contains(&key));
         assert_eq!(again.name_of(&key), Some("Aman's MacBook "));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairing_names_persist_without_erasing_a_known_name_or_changing_digest() {
+        let dir = std::env::temp_dir().join(format!("relay-pair-names-{}", std::process::id()));
+        let path = dir.join("paired.txt");
+        let mut list = PeerList::load(&path).unwrap();
+        let key = [9; 32];
+        list.add_pairing(key, None).unwrap();
+        assert_eq!(list.name_of(&key), Some("Paired MacBook"));
+        let digest = list.digest();
+        list.add_pairing(key, Some("  Aman’s MacBook Pro\n\t\0 "))
+            .unwrap();
+        assert_eq!(list.name_of(&key), Some("Aman’s MacBook Pro"));
+        list.add_pairing(key, None).unwrap();
+        list.add_pairing(key, Some(" \n\t")).unwrap();
+        assert_eq!(
+            PeerList::load(&path).unwrap().name_of(&key),
+            Some("Aman’s MacBook Pro")
+        );
+        assert_eq!(list.digest(), digest);
         let _ = fs::remove_dir_all(dir);
     }
 
