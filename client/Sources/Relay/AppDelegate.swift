@@ -467,22 +467,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 case .busy:
                     p.flash("Forgot \(shown) on this MacBook only")
                     self.explainHostSideForget(host: shown, because: "is in another session", fingerprint: myFingerprint, on: p)
-                case .unreachable:
+                case .localNetworkDenied:
                     p.flash("Forgot \(shown) on this MacBook only")
-                    self.explainHostSideForget(host: shown, because: "couldn’t be reached", fingerprint: myFingerprint, on: p)
+                    self.explainHostSideForget(host: shown, because: "couldn’t be asked to forget this MacBook",
+                                              detail: SessionText.localNetworkHelp, fingerprint: myFingerprint, on: p)
+                case .unreachable(let reason):
+                    p.flash("Forgot \(shown) on this MacBook only")
+                    self.explainHostSideForget(host: shown, because: "didn’t confirm forgetting this MacBook",
+                                              detail: SessionText.ended(reason, streamed: false), fingerprint: myFingerprint, on: p)
                 }
             }
         }
     }
 
-    /// The PC did not take the UNPAIR (`because` says why), so its half of
-    /// the pairing is still there; give the user the one command that
-    /// removes it.
-    private func explainHostSideForget(host: String, because: String, fingerprint: String, on p: HostPickerWindowController) {
+    /// No success reply: the request or its reply may have been lost, so
+    /// the PC's remaining pairing state is unknown.
+    private func explainHostSideForget(host: String, because: String, detail: String? = nil,
+                                       fingerprint: String, on p: HostPickerWindowController) {
         guard let window = p.window else { return }
         let alert = NSAlert()
         alert.messageText = "“\(host)” \(because)."
-        alert.informativeText = "Your MacBook has forgotten this PC, but the PC still remembers your MacBook. To remove the pairing there, run this on the PC:\n\nrelay-host paired --forget \(fingerprint)"
+        alert.informativeText = SessionText.hostSideForgetHelp(detail: detail, fingerprint: fingerprint)
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }

@@ -72,7 +72,7 @@ A row's context menu, and the **PC** menu for the selected row, have:
 | Connect / Pair | ⌘↩ | Same as the footer button. |
 | Rename | ⌘R | Edit the name in place, like Finder. The nickname is stored on this Mac only; an empty name means the PC's own. |
 | Revert Name to "‹PC name›" | ⇧⌘R | Shown while a nickname is set. |
-| Forget | ⌘⌫ or Delete | Remove the pairing on both sides. If the PC can't be reached, it's removed here anyway and the footer shows the `relay-host paired --forget` command to run on the PC. |
+| Forget | ⌘⌫ or Delete | Ask the PC to remove the pairing, and remove it here regardless. If the PC doesn't confirm, a sheet explains the failure and how to remove it through the PC's tray menu or `relay-host paired --forget`. |
 
 ### Picture settings
 
@@ -186,7 +186,9 @@ The unit tests cover:
 `Tools/test-pair-name.sh` builds fakehost and a small harness using the real
 `HostConnection`. It checks pair-only (named, legacy host, busy host, empty
 name, Unicode truncation, controls and emoji), wrong PIN, rate limit without a fallback retry,
-already-paired, verify-only, UNPAIR and pair-then-stream. Its temporary fixed
+already-paired, verify-only, UNPAIR and pair-then-stream. Forget runs through
+the actual `UnpairTask`, including a busy host, no confirmation before timeout,
+and a changed identity refused before msg3. Its temporary fixed
 Foundation home keeps identities and pairings isolated from the app's state;
 it asserts that isolation before constructing a client and deletes it on exit.
 No PC, display, installed service or real pairing is touched.
@@ -223,6 +225,13 @@ both sides. `--paired` makes it claim the Mac is already paired, and
 By default it advertises `CAP_PAIR_NAME`, accepts named and legacy PAIR, and
 prints the confirmed name before success. `--legacy-pair` omits the capability
 and rejects extended PAIR, to test a new Mac against an older v4 host.
+`--ignore-unpair` withholds the Forget reply to test the unconfirmed outcome.
+
+If macOS blocks local devices, enable Relay in **System Settings → Privacy &
+Security → Local Network**. If it is already enabled, quit and reopen Relay,
+particularly after rebuilding the app bundle. A Forget timeout means the
+PC's pairing state is unconfirmed; it does not establish that the PC still
+remembers this Mac.
 
 ### `ctcheck`: timing of the PIN-to-point map
 

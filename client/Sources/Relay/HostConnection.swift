@@ -7,6 +7,7 @@ import CryptoKit
 import CoreMedia
 import Foundation
 import Network
+import dnssd
 
 protocol HostConnectionDelegate: AnyObject {
     func connection(_ c: HostConnection, didChangeStatus status: String)
@@ -106,6 +107,7 @@ final class HostConnection {
     /// The host answered our CLIENT_HELLO with STREAM_STOP(BUSY): another
     /// client owns the display. Older hosts may send this before our request.
     private(set) var hostBusy = false
+    private(set) var localNetworkDenied = false
     /// Actual bitrate returned by STREAM_START; requested value before that.
     private(set) var activeBitrateMbps: Int
     private var bitrateExceeded = false
@@ -202,6 +204,7 @@ final class HostConnection {
         pairing = false
         cpace = nil
         hostBusy = false
+        localNetworkDenied = false
         nextFrameSequence = 0
         reader.reset()
         receiving = false
@@ -219,9 +222,11 @@ final class HostConnection {
                 self.status("Connected, securing…")
                 self.startHandshake(c, attempt: thisAttempt)
             case .waiting(let err):
+                if self.finishIfLocalNetworkDenied(err, c, attempt: thisAttempt) { return }
                 if self.retryUnpinned(endpoint, c, attempt: thisAttempt, reason: err.localizedDescription) { return }
                 self.status("Waiting for host: \(err.localizedDescription)")
             case .failed(let err):
+                if self.finishIfLocalNetworkDenied(err, c, attempt: thisAttempt) { return }
                 if self.retryUnpinned(endpoint, c, attempt: thisAttempt, reason: err.localizedDescription) { return }
                 self.finish("connection failed: \(err.localizedDescription)", from: c, attempt: thisAttempt)
             case .cancelled:
@@ -231,6 +236,21 @@ final class HostConnection {
             }
         }
         c.start(queue: queue)
+    }
+
+    /// A privacy denial is not a cable failure; retrying on Wi-Fi cannot fix
+    /// it. Some OS versions report the DNS policy error instead of a path reason.
+    static func isLocalNetworkDenied(_ error: NWError, pathReason: NWPath.UnsatisfiedReason?) -> Bool {
+        if pathReason == .localNetworkDenied { return true }
+        if case .dns(let code) = error { return code == kDNSServiceErr_PolicyDenied }
+        return false
+    }
+
+    private func finishIfLocalNetworkDenied(_ error: NWError, _ c: NWConnection, attempt: UInt64) -> Bool {
+        guard Self.isLocalNetworkDenied(error, pathReason: c.currentPath?.unsatisfiedReason) else { return false }
+        localNetworkDenied = true
+        finish("macOS blocked Relay's local network access", from: c, attempt: attempt)
+        return true
     }
 
     /// A pinned attempt that cannot get through (cable unplugged mid-browse,
@@ -253,6 +273,7 @@ final class HostConnection {
         guard !stopped, let current = connection else { return }
         if let expected, current !== expected { return }
         if let expectedAttempt, attempt != expectedAttempt { return }
+        NSLog("HostConnection: %@ ended: %@", serviceName, reason)
         current.stateUpdateHandler = nil
         current.cancel()
         connection = nil

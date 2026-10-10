@@ -5,6 +5,12 @@
 import Foundation
 
 enum SessionText {
+    static let localNetworkHelp = "macOS blocked Relay’s local network access. Enable Relay in System Settings → Privacy & Security → Local Network. If it is already enabled, quit and reopen Relay."
+
+    static func hostSideForgetHelp(detail: String?, fingerprint: String) -> String {
+        let explanation = detail.map { $0 + "\n\n" } ?? ""
+        return explanation + "Your MacBook has forgotten this PC. The PC may still remember your MacBook because Relay did not receive confirmation. To remove the pairing there, use the PC’s tray menu or run:\n\nrelay-host paired --forget \(fingerprint)"
+    }
     /// The footer is one line; anything longer than this is clipped there.
     static let footerLimit = 45
     /// Room a PC's name may take inside a footer sentence.
@@ -29,6 +35,7 @@ enum SessionText {
         let r = reason.lowercased()
         func has(_ needle: String) -> Bool { r.contains(needle) }
 
+        if has("local network access") { return "Enable Relay’s Local Network access" }
         if has("too many wrong pins") { return "Too many wrong PINs — try again later" }
         if has("rejected the pin") { return "Wrong PIN — try again" }
         if has("pairing cancelled") { return "Pairing cancelled" }

@@ -62,4 +62,20 @@ final class SessionTextTests: XCTestCase {
         XCTAssertNil(SessionText.footerStatus("Secure channel to 04F6A881", hostName: "PC"))
         XCTAssertEqual(SessionText.footerStatus("Waiting for host: Connection refused", hostName: "Desk PC"), "Waiting for Desk PC…")
     }
+
+    func testUnconfirmedForgetDoesNotAssertThePCStillHasThePairing() {
+        let text = SessionText.hostSideForgetHelp(detail: "The PC didn't answer", fingerprint: "1234ABCD")
+        XCTAssertTrue(text.contains("may still remember"))
+        XCTAssertFalse(text.contains("still remembers"))
+        XCTAssertTrue(text.contains("relay-host paired --forget 1234ABCD"))
+        XCTAssertTrue(text.hasPrefix("The PC didn't answer\n\n"))
+    }
+
+    func testLocalNetworkDenialExplainsPermissionAndRelaunch() {
+        XCTAssertEqual(SessionText.ended("macOS blocked Relay's local network access", streamed: false),
+                       "Enable Relay’s Local Network access")
+        let help = SessionText.hostSideForgetHelp(detail: SessionText.localNetworkHelp, fingerprint: "1234ABCD")
+        XCTAssertTrue(help.contains("Privacy & Security → Local Network"))
+        XCTAssertTrue(help.contains("quit and reopen Relay"))
+    }
 }
