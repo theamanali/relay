@@ -66,4 +66,17 @@ final class PickerRowsTests: XCTestCase {
         let new = PickerRows.build(hosts: [host("A", key: keyA), host("B", key: keyB)], known: [keyB: "B"])
         XCTAssertTrue(PickerRows.diff(old: old, new: new).needsFullReload)
     }
+
+    func testSingleHostChangingSectionAnimatesOnlyHeaders() {
+        let hosts = [host("A", key: keyA)]
+        let available = PickerRows.build(hosts: hosts, known: [:])
+        let paired = PickerRows.build(hosts: hosts, known: [keyA: "A"])
+        for diff in [PickerRows.diff(old: available, new: paired),
+                     PickerRows.diff(old: paired, new: available)] {
+            XCTAssertFalse(diff.needsFullReload)
+            XCTAssertEqual(diff.removed, IndexSet([0]))
+            XCTAssertEqual(diff.inserted, IndexSet([0]))
+            XCTAssertEqual(diff.reloaded, IndexSet([1]))
+        }
+    }
 }

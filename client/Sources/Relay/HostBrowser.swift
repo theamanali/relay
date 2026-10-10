@@ -188,8 +188,8 @@ enum PairingClassifier {
 struct HostListDebouncer {
     let grace: TimeInterval
     private var lastSeen: [String: (host: DiscoveredHost, vanishedAt: Date?)] = [:]
-    /// Hosts dropped on a goodbye whose TXT-less result Bonjour may still be
-    /// reporting; ignored until they are absent or come back with a TXT.
+    /// TXT withdrawals may be a re-registration, not shutdown. Keep the last
+    /// row through grace, without renewing it from repeated TXT-less reports.
     private var saidGoodbye: Set<String> = []
 
     init(grace: TimeInterval = 2.5) {
@@ -201,13 +201,13 @@ struct HostListDebouncer {
         let seenNames = Set(seen.map(\.name))
         saidGoodbye = saidGoodbye.intersection(seenNames)
         for var host in seen {
+            if !host.hasTXT, saidGoodbye.contains(host.name) { continue }
             let previous = lastSeen[host.name]?.host
             if Self.isGoodbye(host, previous: previous) {
-                lastSeen[host.name] = nil
+                if let previous { lastSeen[host.name] = (previous, now) }
                 saidGoodbye.insert(host.name)
                 continue
             }
-            if !host.hasTXT, saidGoodbye.contains(host.name) { continue }
             if !host.hasTXT, let previous, previous.publicKey != nil {
                 // A link change (or a report after one): keep what the TXT said.
                 host.publicKey = previous.publicKey
@@ -217,7 +217,7 @@ struct HostListDebouncer {
             saidGoodbye.remove(host.name)
             lastSeen[host.name] = (host, nil)
         }
-        for (name, entry) in lastSeen where !seenNames.contains(name) {
+        for (name, entry) in lastSeen where !seenNames.contains(name) || saidGoodbye.contains(name) {
             if let since = entry.vanishedAt {
                 if now.timeIntervalSince(since) >= grace { lastSeen[name] = nil }
             } else {

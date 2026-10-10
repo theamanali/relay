@@ -10,17 +10,15 @@ final class HostListDebouncerTests: XCTestCase {
 
     private let key = Data(repeating: 0xAB, count: 32)
 
-    func testGoodbyeDropsAPairedHostImmediately() {
+    func testTXTWithdrawalExpiresWithoutRenewingGrace() {
         var d = HostListDebouncer(grace: 2)
         let t0 = Date()
         XCTAssertEqual(d.update(seen: [host("PC", pk: key)], now: t0).map(\.name), ["PC"])
-        // TXT goodbye lands: same service, no TXT record at all. Gone now, no hold.
-        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.1)).isEmpty)
-        XCTAssertFalse(d.hasPendingRemovals)
-        // Bonjour may keep reporting the TXT-less result for a beat: still gone.
-        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.3)).isEmpty)
-        // PTR removal: still gone, nothing pending.
-        XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(0.6)).isEmpty)
+        XCTAssertEqual(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(0.1)).map(\.publicKey), [key])
+        XCTAssertTrue(d.hasPendingRemovals)
+        XCTAssertEqual(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(1)).count, 1)
+        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false)], now: t0.addingTimeInterval(2.2)).isEmpty)
+        XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(2.3)).isEmpty)
         XCTAssertFalse(d.hasPendingRemovals)
         // The host starting again is a fresh appearance.
         XCTAssertEqual(d.update(seen: [host("PC", pk: key)], now: t0.addingTimeInterval(5)).map(\.name), ["PC"])
@@ -62,11 +60,16 @@ final class HostListDebouncerTests: XCTestCase {
         XCTAssertTrue(d.update(seen: [], now: t0.addingTimeInterval(7.5)).isEmpty)
     }
 
-    func testGoodbyeOnUnchangedLinksStillDropsAtOnce() {
+    func testReregistrationKeepsHostAndUpdatesDigest() {
         var d = HostListDebouncer(grace: 2)
         let t0 = Date()
         _ = d.update(seen: [host("PC", pk: key, links: ["en7", "en0"])], now: t0)
-        XCTAssertTrue(d.update(seen: [host("PC", hasTXT: false, links: ["en7", "en0"])], now: t0.addingTimeInterval(0.1)).isEmpty)
+        XCTAssertEqual(d.update(seen: [host("PC", hasTXT: false, links: ["en7", "en0"])], now: t0.addingTimeInterval(0.1)).map(\.publicKey), [key])
+        var refreshed = host("PC", pk: key, links: ["en7", "en0"])
+        refreshed.pairingDigest = "12345678"
+        let shown = d.update(seen: [refreshed], now: t0.addingTimeInterval(0.5))
+        XCTAssertEqual(shown.map(\.publicKey), [key])
+        XCTAssertEqual(shown.first?.pairingDigest, "12345678")
         XCTAssertFalse(d.hasPendingRemovals)
     }
 
