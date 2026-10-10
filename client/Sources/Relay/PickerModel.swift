@@ -169,14 +169,12 @@ final class PickerModel {
 final class PINPrompt: Identifiable {
     let id = UUID()
     let host: String
-    let fingerprint: String
     let explanation: String
     var code = ""
     @ObservationIgnored private var answer: ((String?) -> Void)?
 
-    init(host: String, fingerprint: String, explanation: String, answer: @escaping (String?) -> Void) {
+    init(host: String, explanation: String, answer: @escaping (String?) -> Void) {
         self.host = host
-        self.fingerprint = fingerprint
         self.explanation = explanation
         self.answer = answer
     }
