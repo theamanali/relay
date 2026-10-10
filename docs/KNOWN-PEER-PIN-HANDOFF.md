@@ -3,8 +3,8 @@
 The user initially requested a Windows-session handoff on 2026-10-09, then
 authorized proceeding with the fix. The Mac session applied the host source
 change and added production-handler regression tests on 2026-10-10.
-**Windows checks and deployment passed on 2026-10-10; real-Mac retesting remains
-pending.** Source commit `ae249f4` needed no further code changes. See the
+**Windows checks, deployment and all five user-run real-Mac retests passed on
+2026-10-10.** Source commit `ae249f4` needed no further code changes. See the
 verification record below for the installed build and scope of the checks.
 
 ## Reproduction and cause
@@ -64,8 +64,8 @@ would fail at five seconds with the old timeout condition.
 The inert driver panics on any display operation. Tests assert the existing
 display claim and session are preserved. All three passed on Windows, along
 with existing crypto regressions for wrong PIN, abandoned confirmation and rate
-limiting. Immediate known-client Connect still needs the user's streaming test;
-the agent does not run exclusive display tests from the active PC session.
+limiting. The user also confirmed ordinary Connect/disconnect on the installed
+build; the agent did not run exclusive display tests from the active PC session.
 
 Run on the Windows PC from `host/`:
 
@@ -88,8 +88,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\tools\install-host.ps1 -SkipDriver
 ```
 
-The current real Mac is already in the half-forgotten state, so no pairing
-reset should be needed for the first check. Choose Pair, leave the PIN sheet
+At the initial retest the real Mac was already in the half-forgotten state,
+so no pairing reset was needed for the first check. To repeat: choose Pair, leave the PIN sheet
 open for 10–15 seconds, then enter the correct PC PIN. It must pair successfully
 with the displays untouched, and the PC tray must name the Mac before Connect.
 Also verify wrong-PIN retry gives a full entry window, Forget from the Mac is
@@ -142,6 +142,38 @@ beyond the old five-second cutoff; the full 120-second expiry was not timed.
 Busy pairing was verified by the production-handler regression, not a real
 concurrent stream. No new host source changes were required.
 
-Real-Mac PIN-sheet behavior, wrong-PIN retry UI, confirmed Forget, pair-only
-name presentation in the tray, and ordinary Connect/disconnect remain unverified
-on this deployed build. No streaming/exclusive-display test was run by the agent.
+## Real-Mac verification — 2026-10-10
+
+The user reported **“All of these tests worked”** for the five requested checks
+on the deployed `ae249f4` build:
+
+| User-run check | Result |
+|---|---|
+| Local-only Forgotten state: Pair, leave PIN sheet open 10–15 seconds, then enter correct PIN | Passed. |
+| Wrong PIN, retry, wait 10–15 seconds again, then correct PIN | Passed. |
+| Mac Forget removes its entry from the PC | Passed. |
+| Pair without Connect; PC Forget submenu immediately shows Mac name | Passed. |
+| Ordinary Connect, then disconnect; physical monitors and layout return | Passed. |
+
+Supporting host log evidence (UTC timestamps, Mac fingerprint `5625D9A7`):
+
+- `20:08:24.987` connection → `20:08:59.732` successful known-key pairing,
+  then pair-only disconnect: about 34.7 seconds from connection to success.
+- `20:09:47.660` failed-PIN/abandoned-proof event, followed by a fresh connection
+  at `20:09:47.949` and successful pairing at `20:11:32.937` (about 105 seconds).
+  The user report identifies the failed attempt as the wrong-PIN check; the host
+  log alone cannot distinguish a wrong PIN from abandoning confirmation.
+- UNPAIR confirmed at `20:09:21.983` and `20:12:01.876`.
+- At `20:12:45.439`, tray Forget logged `Aman’s MacBook Pro`, before any stream
+  on this deployed build. Pair-only completions precede this event.
+- Streaming began at `20:13:31.706`, requested 3024×1964@120, and measured
+  119.7–120.5 fps. Physical monitor devices were restored at `20:13:56.105`,
+  both saved display paths at `20:13:56.849`, and the VDD was disabled at
+  `20:13:56.985`; the connection ended normally.
+
+These connection-to-pairing intervals include handshake/confirmation time and
+are not exact PIN-sheet measurements. The installed SHA-256 was rechecked and
+still matches the deployment record. Repeat counts were not specified. Full
+120-second expiry, pairing during a real concurrent stream, and real-Mac name
+persistence across a service restart remain unverified. No streaming/exclusive-
+display test was run by the agent.

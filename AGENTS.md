@@ -81,9 +81,12 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   `Tools/test-pair-name.sh` (pair-only named/legacy/busy/empty/Unicode, wrong PIN,
   rate limit, already-paired, verify-only, UNPAIR and pair-then-stream), and
   `./bundle.sh` all passed; the bundle's ad-hoc signature verifies.
-  See `host/PAIR-NAME-HANDOFF.md` for the original handoff. Real-Mac/installed-host
-  verification of the extension remains pending; old “paired <IP>” entries need
-  named re-pair or streaming to refresh. Keep this rollout separate from topology work.
+  Real-Mac/installed-host pair-only naming passed on 2026-10-10: the user confirmed
+  the Mac name appeared in the PC's Forget submenu before Connect; the host log
+  names the Mac in a tray Forget before the first stream on this build. A real-Mac
+  service-restart persistence check remains unreported. See `host/PAIR-NAME-HANDOFF.md`
+  for the original handoff; old “paired <IP>” entries need named re-pair or streaming
+  to refresh. Keep this rollout separate from topology work.
 - The README status table is the source of truth for status; keep it current.
 - Forget diagnostics (2026-10-09): a real Mac attempt remained preparing and
   timed out after 6 s; Network.framework logs showed every resolved endpoint
@@ -117,9 +120,15 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   delayed wrong-PIN rejection and delayed correct retry, immediate UNPAIR.
   A temporary loopback proxy delayed the unchanged probe's first encrypted
   request; no CLIENT_HELLO was sent. Only a dedicated temporary identity was
-  paired and then removed; the original peer list was preserved. Real-Mac
-  PIN-sheet/retry/Forget/tray-name and ordinary Connect/disconnect checks remain
-  pending. See `docs/KNOWN-PEER-PIN-HANDOFF.md` for the installed hash and results.
+  paired and then removed; the original peer list was preserved. On 2026-10-10
+  the user reported all five real-Mac checks passed: delayed PIN-sheet entry,
+  wrong-PIN retry, confirmed Forget, pair-only tray naming, and ordinary
+  Connect/disconnect with physical monitors/layout restored. Logs support delayed
+  known-key pairing, a failed-PIN attempt followed by successful pairing, UNPAIR,
+  the Mac name before streaming, 3024×1964@120 streaming and successful restore.
+  Full 120-second expiry and real concurrent-stream pairing were not exercised;
+  repeat counts were not specified. See `docs/KNOWN-PEER-PIN-HANDOFF.md` for the
+  installed hash and evidence.
 
 ## How the host and client work (details you need before changing them)
 
