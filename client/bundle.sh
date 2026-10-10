@@ -23,10 +23,12 @@ if xcrun --find actool >/dev/null 2>&1 && xcrun actool Assets/AppIcon.icon --com
         && [ -f "$APP/Contents/Resources/Assets.car" ]; then
     plutil -replace CFBundleIconFile -string AppIcon "$APP/Contents/Info.plist"
     plutil -replace CFBundleIconName -string AppIcon "$APP/Contents/Info.plist"
-    rm -f "$APP/icon.plist"
 else
     cp Assets/Relay.icns "$APP/Contents/Resources/Relay.icns"
 fi
+# actool leaves its partial plist even when it fails (Xcode before 26 cannot
+# read an .icon); anything left at the bundle root fails code signing.
+rm -f "$APP/icon.plist"
 # The About panel's build number: commits on this branch, so a report can
 # name the exact build. The marketing version stays what Info.plist says.
 if BUILD=$(git rev-list --count HEAD 2>/dev/null); then
