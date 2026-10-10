@@ -259,7 +259,7 @@ troubleshooting, are [host/README.md](host/README.md) and
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
 real handshake and pairing. Unit tests (145 Rust plus one opt-in Windows desktop
-test and a probe integration test, 107 Swift),
+test and a probe integration test, 112 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)

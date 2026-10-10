@@ -10,7 +10,33 @@ final class PickerModel {
         let nickname: String?
         var id: String { host.name }
         var name: String { nickname ?? host.name }
+        /// How the PC will be reached: "via Ethernet", or "This MacBook".
+        var detail: String {
+            let link = host.connectLink
+            return link == "This MacBook" ? link : "via \(link)"
+        }
+        /// Facts about the PC only: what it advertises, then how we see it.
+        /// A renamed host's real name lives here, not in the row.
+        var hoverRows: [(label: String, value: String)] {
+            var rows: [(label: String, value: String)] = []
+            if nickname != nil { rows.append(("Name:", host.name)) }
+            rows += host.facts.rows
+            // One line per way the PC can be reached from here; the row's
+            // subtitle already says which of these the connection takes.
+            let reachable = host.reachableAddresses
+            for entry in reachable {
+                // The link only needs naming when there is more than one to tell apart.
+                rows.append(("Host IP:", reachable.count > 1 ? "\(entry.address) (\(entry.link))" : entry.address))
+            }
+            if let key = host.publicKey { rows.append(("Key:", fingerprint(key))) }
+            return rows
+        }
     }
+
+    static let sections: [PickerSection] = [.paired, .available]
+    /// Windows' own limit on a computer name (NetBIOS); a nickname stands in
+    /// for one, so it gets the same room and the row never has to truncate.
+    static let maxNameLength = 15
 
     var rows: [Row] = []
     var selection: String?
@@ -39,8 +65,25 @@ final class PickerModel {
     var selected: Row? { rows.first { $0.id == selection } }
     var canConfigure: Bool { selected?.paired == true && !connecting }
     var refreshRates: [Int] { StreamMode.refreshRates(max: maxRefresh) }
-    var connectTitle: String { connecting ? "Cancel" : selected?.paired == true ? "Connect" : "Pair" }
-    var footer: String { status.isEmpty ? (rows.isEmpty ? "" : "\(rows.count) PC\(rows.count == 1 ? "" : "s") found") : status }
+    /// Pair only for a selected available PC; Connect otherwise, as before SwiftUI.
+    var connectTitle: String { connecting ? "Cancel" : selected?.paired == false ? "Pair" : "Connect" }
+    var pairedRows: [Row] { rows.filter(\.paired) }
+    var availableRows: [Row] { rows.filter { !$0.paired } }
+    /// The topmost section, which needs no gap above its title. Available is
+    /// always listed (its spinner says discovery is running), Paired only when
+    /// there is one.
+    var firstSection: PickerSection { rows.contains(where: \.paired) ? .paired : .available }
+    var listHeight: CGFloat { PickerLayout.listHeight(paired: pairedRows.count, available: availableRows.count) }
+    var listOverflows: Bool { PickerLayout.overflows(paired: pairedRows.count, available: availableRows.count) }
+
+    /// "Native (3024 × 1964)", "75% (2268 × 1474)": the footer popup and the
+    /// View menu say the same thing. Built as a plain string so SwiftUI does
+    /// not group the digits.
+    func resolutionTitle(_ scale: Double) -> String {
+        let size = StreamMode.size(native: nativePixelSize, scale: scale)
+        return "\(scale == 1 ? "Native" : "\(Int(scale * 100))%") (\(size.width) × \(size.height))"
+    }
+
 
     func update(hosts: [DiscoveredHost], known: [Data: String], nicknames: [Data: String]) {
         let next = PickerRows.build(hosts: hosts, known: known, nicknames: nicknames).compactMap { row -> Row? in
