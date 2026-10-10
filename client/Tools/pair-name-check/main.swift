@@ -19,7 +19,7 @@ final class Delegate: HostConnectionDelegate {
     var reason = ""
     var prompted = false
     func connection(_ c: HostConnection, didChangeStatus status: String) {}
-    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
+    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping @Sendable (String?) -> Void) {
         prompted = true
         completion(nil)
     }
@@ -114,30 +114,48 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     return (client, delegate)
 }
 
+// Shared only between the callback and test thread; every access takes the lock.
+final class TaskResult<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private var outcome: Value?
+    func record(_ result: Value) { lock.withLock { calls += 1; outcome = result } }
+    func snapshot() -> (Int, Value?) { lock.withLock { (calls, outcome) } }
+}
+
 func unpair(_ host: FakeHost, timeout: Double = 5, expectedKey: Data? = nil) throws -> UnpairTask.Outcome {
     var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
     options.expectedHostKey = try expectedKey ?? host.key
     let task = try UnpairTask(options: options)
     defer { withExtendedLifetime(task) {} }
     let ended = DispatchSemaphore(value: 0)
-    let lock = NSLock()
-    var calls = 0
-    var outcome: UnpairTask.Outcome?
+    let state = TaskResult<UnpairTask.Outcome>()
     task.run(timeout: timeout) { result in
-        lock.lock()
-        calls += 1
-        outcome = result
-        lock.unlock()
+        state.record(result)
         ended.signal()
     }
     try check(ended.wait(timeout: .now() + 10) == .success, "UnpairTask did not complete")
     // Host closure proves the timed-out connection was canceled too.
     try host.waitForLog("-- closed")
-    lock.lock()
-    let total = calls
-    let result = outcome
-    lock.unlock()
+    let (total, result) = state.snapshot()
     try check(total == 1, "UnpairTask completed more than once")
+    return result!
+}
+
+func verify(_ host: FakeHost, timeout: Double) throws -> VerifyTask.Outcome {
+    var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
+    options.expectedHostKey = try host.key
+    let task = try VerifyTask(options: options)
+    defer { withExtendedLifetime(task) {} }
+    let ended = DispatchSemaphore(value: 0)
+    let state = TaskResult<VerifyTask.Outcome>()
+    task.run(timeout: timeout) { result in state.record(result); ended.signal() }
+    try check(ended.wait(timeout: .now() + 10) == .success, "VerifyTask did not complete")
+    try host.waitForLog("-- closed")
+    // Let the canceled deadline expire too: it must not deliver a second result.
+    Thread.sleep(forTimeInterval: timeout + 0.1)
+    let (count, result) = state.snapshot()
+    try check(count == 1, "VerifyTask delivered both timeout and response")
     return result!
 }
 
@@ -150,6 +168,21 @@ func run(_ root: URL) throws {
     let actual = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.resolvingSymlinksInPath()
     try check(actual.path == expected.path && expected.path.hasPrefix(root.resolvingSymlinksInPath().path + "/"),
               "Foundation did not honor the isolated test home: expected \(expected.path), got \(actual.path)")
+
+    for (label, args) in [("verify-paired", ["accept", "--paired"]),
+                          ("verify-forgotten", ["accept"]),
+                          ("verify-timeout", ["accept", "--paired", "--ignore-hello"])] {
+        let host = try FakeHost(root: root, label: label, arguments: args)
+        defer { host.stop() }
+        let result = try verify(host, timeout: 0.5)
+        switch (label, result) {
+        case ("verify-paired", .paired), ("verify-forgotten", .forgotten), ("verify-timeout", .unreachable): break
+        default: throw CheckFailure(description: "unexpected VerifyTask result for \(label)")
+        }
+        try check(!host.log.contains("CLIENT_HELLO") && !host.log.contains("first message 0x81"),
+                  "VerifyTask requested a streaming display")
+        print("PASS \(label): real VerifyTask, one completion, no CLIENT_HELLO")
+    }
 
     for (label, arguments, name, stored) in [
         ("named", ["accept"], "Aman’s MacBook Pro", "Aman’s MacBook Pro"),

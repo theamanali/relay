@@ -13,7 +13,7 @@ piece of ceremony and it is intentional.
 | `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
-| `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
+| `client/` | Swift 6 package, Apple silicon/macOS 14+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
 | `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
@@ -24,6 +24,15 @@ Protocol changes go host-first (verified with `probe` + tests), then the spec, t
 client. Never change `docs/PROTOCOL.md` and only one side.
 
 ## Status
+
+- Platform migration 2026-10-10: Mac SwiftUI/Swift 6, Apple silicon/macOS 14,
+  mandatory Metal/hardware decoding implemented. 107 unit tests, isolated
+  fakehost checks, local release/signature and picker/PIN/Forget smoke tests
+  pass on macOS 27.0. Real-PC latency/input/display regressions and minimum /
+  latest stable OS qualification remain pending. Windows NVIDIA enforcement
+  and backend cleanup are **not implemented** in the Mac session; execute
+  `docs/WINDOWS-PLATFORM-HANDOFF.md` on the PC. Details and acceptance gates:
+  `docs/PLATFORM-REVIEW.md#implementation-status`.
 
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
@@ -278,22 +287,26 @@ documented there. What follows is only the mechanics that are easy to break:
   "Controlling/Observing <PC>". ⌃⌥⌘K sits on whichever item is not current, so it always
   switches.
 - A dropped session returns to the picker; the kiosk window opens on the first decoded frame.
-- Rename edits in place like Finder: the name becomes a bezeled field with its text selected,
-  sized to the text (measured; a truncating NSTextField has no intrinsic width). Return or
-  any loss of focus commits, Escape restores, an empty name means the PC's own.
-- Row context-menu items carry SF Symbols with no configuration so AppKit sizes them like
-  Finder's.
-- The menu bar is built in code (`MainMenu.swift`): Relay/Edit/Window/Help plus **PC** in
-  File's slot and **View**. The Refresh Rate submenu is hidden on a one-rate panel; the
-  Bitrate submenu is rebuilt on open so an off-preset slider value appears checked in sorted
-  place. PC/View/Settings… actions are nil-targeted and validated by the picker controller, so
-  they disable themselves while the kiosk window is key, and
-  `StreamView.performKeyEquivalent` swallows ⌘-shortcuts before the menu bar sees them during
-  a session. Without a main menu ⌘Q/⌘W/⌘H and ⌘A/⌘C/⌘V in text fields do nothing.
-- AppKit's automatic items: "Close All" is paired with any `performClose:` item (Close Window
-  uses its own selector to avoid it) and "Enter Full Screen" is added to any View menu unless
-  `NSFullScreenMenuItemEverywhere` is false *before* `NSApplication.shared` (`main.swift`, not
-  the menu code).
+- The picker is now SwiftUI (`RelayApp`, `PickerModel`, `HostPickerView`);
+  `HostPickerWindowController` only adapts native window/screen callbacks.
+  `PickerModel` and UI callbacks are main-actor isolated. `SessionPipeline`
+  keeps frame/config/decoder work off the main actor, serializes reset with
+  cancellation, and rejects retired connection callbacks. First-frame and
+  frame-size UI updates also verify the decoder generation.
+- Rename commits on Return/focus loss and cancels on Escape. Do not let the
+  default Connect/Pair button consume Return while editing. Row single taps
+  explicitly select the host; the double-tap handler alone consumes native
+  list selection. Details use an info-button popover instead of a hover card.
+- Menus are SwiftUI commands in `RelayApp.swift`; contribute to the existing
+  View command group to avoid duplicate View menus. Validate against picker
+  focus. `StreamView.performKeyEquivalent` still swallows command shortcuts
+  during streaming; the local monitor handles exit/control/latency shortcuts.
+- The stream still uses the native `StreamWindow`/`StreamView` and Metal layer.
+  SwiftUI never wraps the full-screen video or observes individual frames.
+- Build arm64 only, minimum macOS 14 (Observation). Latest stable OS is the
+  qualification target, not automatically the deployment floor. Never claim
+  qualification from compiling with that deployment target. Metal and hardware
+  VideoToolbox decoding are required; no AVSampleBufferDisplayLayer fallback.
 
 ## Hard-won facts — do not relearn these
 
@@ -363,21 +376,15 @@ documented there. What follows is only the mechanics that are easy to break:
   **and** the event's flags: the record alone tells left from right, but forwards the
   release of a modifier it never sent down (control turned on by ⌃⌥⌘K with ⌃⌥⌘ still
   held) as a press, which sticks on Windows.
-- NSTextField ends editing (and sends its action) for *any* reason, including
-  `makeFirstResponder` moving focus away. The in-place rename leans on that —
-  Finder commits on focus loss too — and cancels only through Escape's
-  `cancelOperation` + `abortEditing`. While the field editor is up, the footer's
-  default button gives up its `\r` key equivalent or Return would Connect;
-  `isBezeled = true` switches `drawsBackground` on and `false` does not switch it
-  off; and `apply` commits an in-progress rename before any reload that touches
-  its row (the delegate's own reload is dispatched async so it never runs inside
-  that `apply`).
-- **The PIN sheet belongs to one connection attempt.** Current hosts allow PAIR while
-  the display is busy, but older hosts can send STREAM_STOP(BUSY) with the sheet up;
-  the host's 120 s PAIR_TIMEOUT can also close the socket under a sheet left open. A
-  PIN typed into either dead attempt goes nowhere. `AppDelegate.dismissPINPrompt` closes it from
-  `connectionDidEnd` (`endSheet` in the picker, `abortModal` in `--host` mode with a
-  flag so that abort is not read as the user's Cancel, which quits there).
+- **The PIN sheet belongs to one connection attempt.** `PINPrompt` is one-shot;
+  invalidate it before dismissing when the socket ends, so the SwiftUI
+  `onDisappear` callback cannot cancel a later attempt. The picker uses a
+  SwiftUI sheet and `--host` uses the same view inside a native sheet. Preserve
+  six-digit paste/autosubmit, wrong-PIN retry and cancellation. Do not reset
+  connection deadlines merely because the sheet redraws.
+- `ClientState` uses a recursive lock around read/modify/write transactions to
+  preserve its existing file formats across UI/network concurrency. VerifyTask
+  and UnpairTask serialize timeouts and delegate replies on connection.queue.
 - **A final STREAM_STOP must be half-closed and drained when client data can be in
   flight.** Closing with unread bytes can draw a Windows RST that discards the stop
   from the receive buffer (probe saw 10053, not the reason). BUSY is now a reply to
@@ -411,7 +418,7 @@ documented there. What follows is only the mechanics that are easy to break:
 ## Conventions
 
 - Rust: `anyhow` errors, `log` macros, no async (one thread per concern), Windows APIs via
-  the `windows` 0.58 crate, keep clippy clean. Swift: AppKit + Network.framework +
+  the `windows` 0.58 crate, keep clippy clean. Swift: SwiftUI + AppKit stream/window bridge + Network.framework +
   CryptoKit only, no third-party packages.
 - Defaults are 120 Hz and the Mac's native pixel size; `--scale 0.75`/`0.5` are the
   cheaper same-aspect modes.

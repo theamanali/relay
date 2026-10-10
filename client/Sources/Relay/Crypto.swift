@@ -32,7 +32,11 @@ func fingerprint(_ publicKey: Data) -> String {
 // MARK: - Persistent state (~/Library/Application Support/Relay)
 
 enum ClientState {
+    // Keep each read/modify/write transaction atomic across connection and UI queues.
+    private static let stateLock = NSRecursiveLock()
     static var directory: URL {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("Relay", isDirectory: true)
         let fm = FileManager.default
@@ -49,6 +53,8 @@ enum ClientState {
 
     /// Long-lived X25519 identity, created on first launch.
     static func identity() throws -> Curve25519.KeyAgreement.PrivateKey {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         let file = directory.appendingPathComponent("identity.key")
         if let raw = try? Data(contentsOf: file), raw.count == 32 {
             return try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
@@ -61,16 +67,22 @@ enum ClientState {
 
     /// Hosts paired with: public key (hex) -> name, one per line.
     static func knownHosts() -> [Data: String] {
-        load("hosts.txt")
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return load("hosts.txt")
     }
 
     static func remember(host key: Data, name: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         var hosts = knownHosts()
         hosts[key] = name.replacingOccurrences(of: "\n", with: " ")
         save(hosts, to: "hosts.txt")
     }
 
     static func forget(host key: Data) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         var hosts = knownHosts()
         if hosts.removeValue(forKey: key) != nil { save(hosts, to: "hosts.txt") }
         setNickname(nil, for: key)
@@ -81,10 +93,14 @@ enum ClientState {
     /// handshake last confirmed it still knows this Mac: public key (hex) ->
     /// digest. A host advertising any other value is asked again.
     static func verifiedDigests() -> [Data: String] {
-        load("verified-digests.txt")
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return load("verified-digests.txt")
     }
 
     static func setVerifiedDigest(_ digest: String?, for key: Data) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         var digests = verifiedDigests()
         if let digest {
             digests[key] = digest
@@ -97,10 +113,14 @@ enum ClientState {
     /// Names the user gave hosts on this Mac (public key -> name). Kept apart
     /// from hosts.txt, which the connection rewrites with the host's own name.
     static func nicknames() -> [Data: String] {
-        load("nicknames.txt")
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return load("nicknames.txt")
     }
 
     static func setNickname(_ name: String?, for key: Data) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         var names = nicknames()
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
@@ -112,6 +132,8 @@ enum ClientState {
     }
 
     private static func load(_ file: String) -> [Data: String] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         guard let text = try? String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8) else { return [:] }
         var map: [Data: String] = [:]
         for line in text.split(separator: "\n") {
@@ -123,6 +145,8 @@ enum ClientState {
     }
 
     private static func save(_ map: [Data: String], to file: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         let text = map.map { "\($0.key.hex) \($0.value)" }.joined(separator: "\n") + "\n"
         try? text.write(to: directory.appendingPathComponent(file), atomically: true, encoding: .utf8)
     }

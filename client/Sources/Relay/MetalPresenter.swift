@@ -9,7 +9,9 @@ import simd
 /// wrapped as two Metal textures over the same IOSurface (no copy) and
 /// converted to RGB by a fixed shader; the pixel buffer's attachments choose
 /// the matrix and range. No Core Image, no intermediates.
-final class MetalPresenter {
+// GPU resources are immutable after init; presentation work uses queue.
+// Mailbox, generation and metrics are lock-protected. Layer layout is UI-owned.
+final class MetalPresenter: @unchecked Sendable {
     let layer = CAMetalLayer()
     private let commands: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
@@ -17,11 +19,17 @@ final class MetalPresenter {
     private var textureCache: CVMetalTextureCache?
     private let queue = DispatchQueue(label: "relay.present", qos: .userInteractive)
     private let lock = NSLock()
-    private struct Frame {
+    /// Pixel buffers are retained and read-only after decoder submission.
+    private struct Frame: @unchecked Sendable {
         let image: CVPixelBuffer
         let pts: CMTime
         let sequence: UInt64
         let generation: Int
+    }
+    /// Immutable texture views retained solely to keep IOSurfaces alive until completion.
+    private struct TextureLifetime: @unchecked Sendable {
+        let luma: CVMetalTexture
+        let chroma: CVMetalTexture
     }
     private var mailbox = LatestFrame<Frame>()
     private var running = false
@@ -130,7 +138,7 @@ final class MetalPresenter {
             delays.removeAll()
             if clearMetrics { dropped = 0; unavailable = 0; gpuFailures = 0; invalidTimes = 0; unsupportedFormats = 0 }
         }
-        if let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
+        queue.async { if let cache = self.textureCache { CVMetalTextureCacheFlush(cache, 0) } }
     }
 
     func submit(_ image: CVPixelBuffer, pts: CMTime, sequence: UInt64, generation: Int) {
@@ -284,9 +292,10 @@ final class MetalPresenter {
                     }
                 }
             }
+            let resources = TextureLifetime(luma: luma, chroma: chroma)
             command.addCompletedHandler { [weak self] buffer in
                 // Keep the IOSurface and its texture views alive until GPU reads finish.
-                withExtendedLifetime((frame.image, luma, chroma)) {}
+                withExtendedLifetime((frame.image, resources)) {}
                 guard let self else { return }
                 if buffer.status == .error {
                     self.lock.withLock {

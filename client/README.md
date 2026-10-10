@@ -1,9 +1,9 @@
 # Relay for Mac (client)
 
-The Mac half of [Relay](../README.md): a native AppKit app that finds Relay PCs
+The Mac half of [Relay](../README.md): a native SwiftUI app that finds Relay PCs
 over Bonjour, pairs with them, and shows the PC's virtual monitor full screen.
 It decodes the stream in hardware with VideoToolbox, draws it with Metal, and
-sends the keyboard and trackpad back. It uses only Apple frameworks (AppKit,
+sends the keyboard and trackpad back. It uses only Apple frameworks (SwiftUI, AppKit,
 Network.framework, CryptoKit, VideoToolbox, Metal); there are no third-party
 packages.
 
@@ -18,8 +18,11 @@ packages.
 
 ## Requirements
 
-- macOS 13 or later. Developed on Apple silicon.
-- The Swift 5.9 toolchain or later (Xcode or the Command Line Tools).
+- An Apple silicon Mac (M1 or later) on macOS 14 or later. The minimum comes
+  from Observation, used by the SwiftUI interface. Intel Macs are not supported.
+- Metal and hardware H.264 or HEVC decoding are required; there is no software
+  decoder or AVSampleBufferDisplayLayer fallback.
+- The Swift 6.0 toolchain or later (Xcode or the Command Line Tools).
 - Optional: Xcode's `actool`, which `bundle.sh` uses to compile the layered app
   icon. Without it the bundle gets the flat `Relay.icns`.
 
@@ -38,13 +41,20 @@ attributes the Local Network permission prompt to it. Allow that prompt on first
 launch, or Relay can't see the PC. It's under System Settings → Privacy &
 Security → Local Network.
 
+Release signing is configurable: set `RELAY_SIGN_IDENTITY` to a Developer ID
+Application identity and optionally `RELAY_NOTARY_PROFILE` to an existing
+`notarytool` keychain profile. Signing and notarization errors fail the build.
+Without these variables the reproducible local build is ad-hoc signed, arm64
+only, and is not notarized. The binary declares the installed SDK separately
+from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchanged.
+
 ## Using it
 
 ### The PC list
 
 Relay opens a small window listing the PCs it finds, under **Paired** and
 **Available**. Each row shows the link the connection will use: Ethernet, Wi-Fi,
-or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
+or Direct cable when the PC gave itself a 169.254 address. The info button opens a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
 and its key fingerprint.
 
@@ -79,7 +89,7 @@ A row's context menu, and the **PC** menu for the selected row, have:
 The footer has a resolution popup (native, 75% or 50% of the screen the window
 is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
 rate). The **View** menu mirrors both and adds a **Bitrate** submenu of presets.
-**Advanced** in the footer opens:
+The **Settings** gear in the footer opens:
 
 - **Video bitrate**: a logarithmic slider from 1 to 1000 Mbps with exact entry;
   120 Mbps by default.
@@ -139,7 +149,6 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--modifiers mac\|physical` | Keyboard mapping (above). |
 | `--no-input` | Observe only. |
 | `--latency-stats` | Start with the latency overlay on. |
-| `--renderer metal\|avsbdl` | Presentation backend: Metal (default) or the older `AVSampleBufferDisplayLayer` path. |
 | `--metal-vsync` | Turn VSync on for Metal: no tearing, slightly more latency. Off by default. |
 | `--render-icons <dir>` | Write the PC's tray icons and exit (see [Icons](#icons)). |
 | `--render-app-icon <dir>` | Write the Mac app icon and exit. |
@@ -159,6 +168,17 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 The picker and session settings are in the app's user defaults.
 
 ## Testing
+
+On 2026-10-10, the Swift 6 build passed 107 tests on Apple silicon/macOS 27.0,
+including model selection/rename, one-shot and invalidated PIN prompts and
+renderer generation checks. The isolated real-HostConnection/fakehost suite
+also passed. CI now requests arm64 `macos-14` and `macos-latest`, prints the
+actual OS/toolchain, runs fakehost and verifies the release bundle/signature.
+GitHub's latest runner is not necessarily Apple's latest stable OS; see the
+[runner documentation](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Pending release/hardware checks are tracked in
+[platform implementation status](../docs/PLATFORM-REVIEW.md#implementation-status).
+
 
 ```sh
 swift test
@@ -183,7 +203,9 @@ The unit tests cover:
 - offscreen Metal renders of synthetic frames (colour range, orientation,
   letterboxing).
 
-`Tools/test-pair-name.sh` builds fakehost and a small harness using the real
+`Tools/test-pair-name.sh` also covers real VerifyTask success, forgotten state
+and a withheld greeting deadline: one completion, no streaming request. It
+builds fakehost and a small harness using the real
 `HostConnection`. It checks pair-only (named, legacy host, busy host, empty
 name, Unicode truncation, controls and emoji), wrong PIN, rate limit without a fallback retry,
 already-paired, verify-only, UNPAIR and pair-then-stream. Forget runs through
@@ -255,7 +277,7 @@ planted for comparison shows |t| 41.
 
 1. **Discover.** [`HostBrowser`](Sources/Relay/HostBrowser.swift) browses
    `_relay._tcp` and reads each PC's TXT record: identity key `pk`, pairing
-   digest `pg`, and facts for the hover card.
+   digest `pg`, and facts for the information popover.
 2. **Connect.** [`HostConnection`](Sources/Relay/HostConnection.swift) dials over
    Network.framework, pinned to wired Ethernet when the PC was seen there, and
    runs the Noise XX handshake ([`Noise.swift`](Sources/Relay/Noise.swift)). It
@@ -283,10 +305,10 @@ planted for comparison shows |t| 41.
 
 | area | files |
 |---|---|
-| App and windows | [`main.swift`](Sources/Relay/main.swift), [`AppDelegate`](Sources/Relay/AppDelegate.swift) (launch options, session lifecycle, kiosk window), [`MainMenu`](Sources/Relay/MainMenu.swift) |
-| PC list | [`HostPickerWindowController`](Sources/Relay/HostPickerWindowController.swift), [`HostRowView`](Sources/Relay/HostRowView.swift), [`PickerRows`](Sources/Relay/PickerRows.swift), [`HoverCard`](Sources/Relay/HoverCard.swift), [`PINEntryView`](Sources/Relay/PINEntryView.swift), [`SessionText`](Sources/Relay/SessionText.swift), [`Style`](Sources/Relay/Style.swift), [`Glyphs`](Sources/Relay/Glyphs.swift) |
+| UI and lifecycle | [`RelayApp`](Sources/Relay/RelayApp.swift), [`PickerModel`](Sources/Relay/PickerModel.swift), [`HostPickerView`](Sources/Relay/HostPickerView.swift), [`AppDelegate`](Sources/Relay/AppDelegate.swift), [`HostPickerWindowController`](Sources/Relay/HostPickerWindowController.swift) |
 | Discovery | [`HostBrowser`](Sources/Relay/HostBrowser.swift), [`BonjourReconfirm`](Sources/Relay/BonjourReconfirm.swift), [`LocalNetworks`](Sources/Relay/LocalNetworks.swift) |
 | Connection and pairing | [`HostConnection`](Sources/Relay/HostConnection.swift), [`Crypto`](Sources/Relay/Crypto.swift), [`Protocol`](Sources/Relay/Protocol.swift), [`FrameReader`](Sources/Relay/FrameReader.swift), [`PairingVerifier`](Sources/Relay/PairingVerifier.swift), [`VerifyTask`](Sources/Relay/VerifyTask.swift), [`UnpairTask`](Sources/Relay/UnpairTask.swift) |
+| Frame/control boundary | [`SessionPipeline`](Sources/Relay/SessionPipeline.swift) (frames remain off the main actor) |
 | Video | [`VideoRenderer`](Sources/Relay/VideoRenderer.swift), [`MetalPresenter`](Sources/Relay/MetalPresenter.swift), [`LatestFrame`](Sources/Relay/LatestFrame.swift), [`LatencyStats`](Sources/Relay/LatencyStats.swift) |
 | Input | [`StreamView`](Sources/Relay/StreamView.swift), [`KeyMap`](Sources/Relay/KeyMap.swift) |
 | Settings | [`SessionPrefs`](Sources/Relay/SessionPrefs.swift), [`StreamMode`](Sources/Relay/StreamMode.swift), [`VideoBitrate`](Sources/Relay/VideoBitrate.swift) |
@@ -312,8 +334,11 @@ output.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys.
 - With VSync off (the default) the picture can tear; `--metal-vsync` trades a
   little latency for no tearing.
-- The Metal presenter is verified for colour and orientation on a real stream.
-  Mode switches and reconnects are still being checked, and Metal versus
-  `avsbdl` latency numbers have not been recorded yet.
+- Earlier hardware runs verified Metal colour, orientation and streaming. The
+  SwiftUI migration still needs a real-PC streaming/latency comparison and
+  qualification on a 60 Hz Air, 120 Hz Pro and external display.
+- Development/testing currently uses macOS 27.0. Latest stable 27.0.1 and the
+  macOS 14 runtime floor still need qualification; declaring a deployment target
+  does not establish that those hardware/OS combinations have been tested.
 - The PC must run protocol v4 too. An older PC hangs up during the handshake,
   and the Mac says it may need the latest Relay.

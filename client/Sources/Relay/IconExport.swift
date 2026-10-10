@@ -16,6 +16,7 @@
 
 import AppKit
 
+@MainActor
 enum IconExport {
     /// Pixel sizes Windows may ask for, from a 16 px tray at 100 % DPI to the
     /// 256 px Explorer tile.

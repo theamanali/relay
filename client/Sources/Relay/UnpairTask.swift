@@ -6,8 +6,9 @@
 import CoreMedia
 import Foundation
 
-final class UnpairTask: HostConnectionDelegate {
-    enum Outcome {
+/// Completion and deadline are owned exclusively by connection.queue.
+final class UnpairTask: HostConnectionDelegate, @unchecked Sendable {
+    enum Outcome: Sendable {
         /// The host answered UNPAIR: the pairing is gone on both sides.
         case confirmed
         /// The host is in a session with another client and read nothing
@@ -20,7 +21,7 @@ final class UnpairTask: HostConnectionDelegate {
     }
 
     private let connection: HostConnection
-    private var completion: ((Outcome) -> Void)?
+    private var completion: (@Sendable (Outcome) -> Void)?
     private var timeout: DispatchWorkItem?
 
     init(options: HostConnection.Options) throws {
@@ -33,7 +34,7 @@ final class UnpairTask: HostConnectionDelegate {
 
     /// `completion` runs once, on an arbitrary queue. A host that has not
     /// answered by `timeout` counts as unreachable.
-    func run(timeout seconds: Double, completion: @escaping (Outcome) -> Void) {
+    func run(timeout seconds: Double, completion: @escaping @Sendable (Outcome) -> Void) {
         connection.queue.async { [self] in
             self.completion = completion
             let work = DispatchWorkItem { [weak self] in
@@ -61,7 +62,7 @@ final class UnpairTask: HostConnectionDelegate {
 
     func connection(_ c: HostConnection, didChangeStatus status: String) {}
 
-    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
+    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping @Sendable (String?) -> Void) {
         // Unpair mode never asks; if it somehow does, decline.
         completion(nil)
     }

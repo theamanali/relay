@@ -26,9 +26,7 @@ final class LatestFrameTests: XCTestCase {
         XCTAssertEqual(mailbox.dropped, 0)
     }
 
-    func testRendererSelection() {
-        XCTAssertEqual(LaunchOptions.parse(["Relay"]).renderer, "metal")
-        XCTAssertEqual(LaunchOptions.parse(["Relay", "--renderer", "avsbdl"]).renderer, "avsbdl")
+    @MainActor func testMetalVSyncOption() async {
         XCTAssertFalse(LaunchOptions.parse(["Relay"]).metalVSync)
         XCTAssertTrue(LaunchOptions.parse(["Relay", "--metal-vsync"]).metalVSync)
     }

@@ -1,5 +1,5 @@
 // Hardware decode through an owned VTDecompressionSession, display through
-// Metal (or AVSampleBufferDisplayLayer with --renderer avsbdl). Frames arrive in the length-prefixed
+// Metal. Frames arrive in the length-prefixed
 // layout VideoToolbox wants, so each FRAME message becomes one CMSampleBuffer
 // with no rewriting.
 //
@@ -12,7 +12,7 @@
 // waiting for its in-flight frames, build a new one, resync on the next
 // keyframe, and drop whatever the old session still emits.
 
-import AVFoundation
+import QuartzCore
 import CoreMedia
 import Foundation
 import VideoToolbox
@@ -21,7 +21,7 @@ struct VideoPerformanceSnapshot {
     let clientMilliseconds: Double?
     let droppedFrames: Int
     var clientP95: Double? = nil
-    var backend = "avsbdl"
+    var backend = "metal"
     var replaced = 0
     var late = 0
     var unavailable = 0
@@ -30,21 +30,27 @@ struct VideoPerformanceSnapshot {
     var invalidTimes = 0
 }
 
-final class VideoRenderer {
-    private let displayLayer = AVSampleBufferDisplayLayer()
-    private let metal: MetalPresenter?
-    var layer: CALayer { metal?.layer ?? displayLayer }
+/// Session mutations are serialized by SessionPipeline; decoder output shares
+/// only lock-protected counters/generation. Handlers are installed before start.
+final class VideoRenderer: @unchecked Sendable {
+    private let metal: MetalPresenter
+    var layer: CALayer { metal.layer }
+    private(set) var failure: String?
+    enum InitializationError: LocalizedError {
+        case metalUnavailable
+        var errorDescription: String? { "Relay requires Metal on an Apple silicon Mac. The Metal presenter could not be initialized." }
+    }
 
     /// Called (on a decoder thread) when the first frame is submitted for display.
-    var firstFrameHandler: (() -> Void)?
+    var firstFrameHandler: (@Sendable (Int) -> Void)?
     /// Called (on a decoder thread) when the decoded picture size changes,
     /// including for the first frame. The host does not resend STREAM_START
     /// when its encoder restarts at a new display mode, so this is how the
     /// view learns the size it must letterbox pointer positions against.
-    var frameSizeHandler: ((CGSize) -> Void)?
+    var frameSizeHandler: (@Sendable (Int, CGSize) -> Void)?
     /// Receive-to-decode-and-display-enqueue timing for each completed frame.
-    /// Final presentation timing comes from AVFoundation performance metrics.
-    var frameDecodedHandler: ((UInt64, Double) -> Void)?
+    /// Final presentation timing comes from Metal drawable callbacks.
+    var frameDecodedHandler: (@Sendable (UInt64, Double) -> Void)?
 
     /// Size announced in STREAM_START; the decoded size may differ later.
     private(set) var streamSize = CGSize.zero
@@ -56,7 +62,6 @@ final class VideoRenderer {
     private var formatDescription: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
     private var waitingForKeyframe = true
-    private var layerWasFailed = false
 
     // Shared with the decoder output handlers, which run on VideoToolbox threads.
     private let lock = NSLock()
@@ -71,34 +76,34 @@ final class VideoRenderer {
     private var sessionLost = false
     private var displayedCount = 0
     private var displayedSize = CGSize.zero
-    private var displayFormat: CMVideoFormatDescription?
 
-    init(renderer: String = "metal", metalVSync: Bool = false) {
-        metal = renderer == "metal" ? MetalPresenter(vsync: metalVSync) : nil
-        displayLayer.videoGravity = .resizeAspect
-        layer.backgroundColor = CGColor(gray: 0, alpha: 1)
-        NSLog("VideoRenderer: %@", metal == nil ? "avsbdl" : "metal")
+    init(metalVSync: Bool = false) throws {
+        guard let metal = MetalPresenter(vsync: metalVSync) else { throw InitializationError.metalUnavailable }
+        self.metal = metal
     }
+
+    func isCurrent(generation: Int) -> Bool { lock.withLock { self.generation == generation } }
 
     deinit {
         if let session { VTDecompressionSessionInvalidate(session) }
     }
 
     func streamDidStart(_ start: Proto.StreamStart) {
+        failure = nil
         codec = start.codec
         streamSize = CGSize(width: start.width, height: start.height)
         formatDescription = nil
         replaceSession()
-        metal?.reset(generation: generation, clearMetrics: true)
+        metal.reset(generation: generation, clearMetrics: true)
         lock.withLock {
             displayedCount = 0
             displayedSize = .zero
-            displayFormat = nil
         }
         flush(removeImage: true)
     }
 
     func reset() {
+        failure = nil
         formatDescription = nil
         replaceSession()
         flush(removeImage: true)
@@ -111,6 +116,7 @@ final class VideoRenderer {
     /// never a comparison against the last one.
     func setParameterSets(_ sets: [Data]) {
         let previous = formatDescription.map(CMVideoFormatDescriptionGetDimensions)
+        failure = nil
         formatDescription = makeFormatDescription(sets)
         if let formatDescription {
             let d = CMVideoFormatDescriptionGetDimensions(formatDescription)
@@ -118,6 +124,7 @@ final class VideoRenderer {
             if let previous { note += " (was \(previous.width)x\(previous.height))" }
             NSLog("%@", note + ", rebuilding decoder")
         } else {
+            failure = "The PC sent an unsupported video configuration."
             NSLog("VideoRenderer: could not build a format description from %d parameter sets", sets.count)
         }
         replaceSession()
@@ -184,7 +191,7 @@ final class VideoRenderer {
         // across the VideoToolbox call: an output handler may be blocked on it.
         lock.withLock {
             generation += 1
-            metal?.reset(generation: generation)
+            metal.reset(generation: generation)
             resyncRequested = false
             sessionLost = false
         }
@@ -197,13 +204,13 @@ final class VideoRenderer {
 
     private func makeSession(_ fd: CMVideoFormatDescription) -> VTDecompressionSession? {
         let decoderSpec: [CFString: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true,
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true,
         ]
         // IOSurface-backed output so the layer displays it without a copy.
         var imageAttrs: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
         ]
-        if metal != nil {
+        do {
             imageAttrs[kCVPixelBufferMetalCompatibilityKey] = true
             // The shader reads 8-bit biplanar planes directly; this is the
             // hardware decoder's native output, so no conversion is added.
@@ -219,6 +226,7 @@ final class VideoRenderer {
             decompressionSessionOut: &s
         )
         guard status == noErr, let s else {
+            failure = "Hardware video decoding could not start (VideoToolbox \(status))."
             NSLog("VideoRenderer: decoder session failed: %d", status)
             return nil
         }
@@ -250,7 +258,6 @@ final class VideoRenderer {
         } else if resync {
             waitingForKeyframe = true
         }
-        serviceLayer()
         if waitingForKeyframe {
             guard keyframe else { return }
             waitingForKeyframe = false
@@ -286,9 +293,8 @@ final class VideoRenderer {
 
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            // AVFoundation's presentation metrics compare this requested time
-            // with the actual display time. Starting at network receipt makes
-            // the reported delay the client portion of the pipeline.
+            // Metal presentation compares this receipt time with the actual
+            // drawable presentation time to measure the client pipeline.
             presentationTimeStamp: receivedAt,
             decodeTimeStamp: .invalid
         )
@@ -359,8 +365,8 @@ final class VideoRenderer {
         lock.lock()
         defer {
             lock.unlock()
-            if first { firstFrameHandler?() }
-            if sizeChanged { frameSizeHandler?(size) }
+            if first { firstFrameHandler?(gen) }
+            if sizeChanged { frameSizeHandler?(gen, size) }
             if let decodedMilliseconds {
                 frameDecodedHandler?(sequence, decodedMilliseconds)
             }
@@ -374,49 +380,13 @@ final class VideoRenderer {
         }
         guard let image else { return } // nothing to show for this frame
 
-        if let metal {
-            displayedCount += 1
-            first = displayedCount == 1
-            size = CGSize(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))
-            sizeChanged = size != displayedSize
-            displayedSize = size
-            decodedMilliseconds = CMTimeGetSeconds(CMTimeSubtract(decodedAt, pts)) * 1_000
-            metal.submit(image, pts: pts, sequence: sequence, generation: gen)
-            return
-        }
-
-        if displayFormat.map({ !CMVideoFormatDescriptionMatchesImageBuffer($0, imageBuffer: image) }) ?? true {
-            var fd: CMVideoFormatDescription?
-            CMVideoFormatDescriptionCreateForImageBuffer(
-                allocator: kCFAllocatorDefault, imageBuffer: image, formatDescriptionOut: &fd
-            )
-            displayFormat = fd
-        }
-        guard let displayFormat else { return }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-        var sampleBuffer: CMSampleBuffer?
-        let created = CMSampleBufferCreateReadyWithImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: image,
-            formatDescription: displayFormat,
-            sampleTiming: &timing,
-            sampleBufferOut: &sampleBuffer
-        )
-        guard created == noErr, let sampleBuffer else { return }
-        // Show each frame as soon as it is decoded; the host paces the stream.
-        setAttachment(kCMSampleAttachmentKey_DisplayImmediately, on: sampleBuffer)
-        enqueueOnLayer(sampleBuffer)
-
         displayedCount += 1
         first = displayedCount == 1
         size = CGSize(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))
         sizeChanged = size != displayedSize
         displayedSize = size
-        let completedAt = decodedAt
-        decodedMilliseconds = max(
-            0,
-            CMTimeGetSeconds(CMTimeSubtract(completedAt, pts)) * 1_000
-        )
+        decodedMilliseconds = CMTimeGetSeconds(CMTimeSubtract(decodedAt, pts)) * 1_000
+        metal.submit(image, pts: pts, sequence: sequence, generation: gen)
     }
 
     private func setAttachment(_ key: CFString, on sampleBuffer: CMSampleBuffer) {
@@ -430,86 +400,15 @@ final class VideoRenderer {
         )
     }
 
-    // MARK: layer plumbing (the renderer API moved in macOS 14)
-
-    /// The layer no longer decodes, so it has little reason to fail; if it
-    /// does, or asks for a flush after a display reconfiguration, flush it.
-    private func serviceLayer() {
-        guard metal == nil else { return }
-        let failed: Bool
-        let wantsFlush: Bool
-        let error: Error?
-        if #available(macOS 14.0, *) {
-            let r = displayLayer.sampleBufferRenderer
-            failed = r.status == .failed
-            wantsFlush = r.requiresFlushToResumeDecoding
-            error = r.error
-        } else {
-            failed = displayLayer.status == .failed
-            wantsFlush = displayLayer.requiresFlushToResumeDecoding
-            error = displayLayer.error
-        }
-        if failed, !layerWasFailed {
-            NSLog("VideoRenderer: display layer failed (%@)", error?.localizedDescription ?? "unknown")
-        }
-        layerWasFailed = failed
-        if failed || wantsFlush {
-            flush(removeImage: false)
-        }
-    }
-
-    private func enqueueOnLayer(_ sb: CMSampleBuffer) {
-        if #available(macOS 14.0, *) {
-            displayLayer.sampleBufferRenderer.enqueue(sb)
-        } else {
-            displayLayer.enqueue(sb)
-        }
-    }
-
     private func flush(removeImage: Bool) {
-        if metal != nil {
-            DispatchQueue.main.async { self.layer.isHidden = removeImage }
-            return
-        }
-        if #available(macOS 14.0, *) {
-            if removeImage {
-                displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true)
-            } else {
-                displayLayer.sampleBufferRenderer.flush()
-            }
-        } else {
-            if removeImage {
-                displayLayer.flushAndRemoveImage()
-            } else {
-                displayLayer.flush()
-            }
+        let gen = lock.withLock { generation }
+        DispatchQueue.main.async {
+            guard self.isCurrent(generation: gen) else { return }
+            self.layer.isHidden = removeImage
         }
     }
 
-    /// AVFoundation exposes actual-vs-requested presentation delay on current
-    /// macOS releases. Older systems keep streaming and report decode/enqueue
-    /// timing, but cannot expose the display layer's final presentation delay.
-    func loadPerformanceSnapshot(_ completion: @escaping (VideoPerformanceSnapshot?) -> Void) {
-        if let metal { completion(metal.snapshot()); return }
-        let gen = lock.withLock { generation }
-        if #available(macOS 14.4, *) {
-            displayLayer.sampleBufferRenderer.loadVideoPerformanceMetrics { metrics in
-                guard self.lock.withLock({ self.generation == gen }) else { return }
-                guard let metrics, metrics.totalNumberOfFrames > 0 else {
-                    completion(nil)
-                    return
-                }
-                let displayed = metrics.totalNumberOfFrames - metrics.numberOfDroppedFrames
-                guard displayed > 0 else { completion(nil); return }
-                completion(VideoPerformanceSnapshot(
-                    clientMilliseconds: metrics.totalAccumulatedFrameDelay * 1_000
-                        / Double(displayed),
-                    droppedFrames: metrics.numberOfDroppedFrames,
-                    samples: displayed
-                ))
-            }
-        } else {
-            completion(nil)
-        }
+    func loadPerformanceSnapshot(_ completion: (VideoPerformanceSnapshot?) -> Void) {
+        completion(metal.snapshot())
     }
 }

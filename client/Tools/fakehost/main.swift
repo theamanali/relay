@@ -38,6 +38,7 @@
 // `--legacy-pair` omits CAP_PAIR_NAME and accepts only the legacy 32-byte PAIR.
 // Otherwise named PAIR and legacy PAIR are both accepted, like the real host.
 // `--ignore-unpair` reads UNPAIR but sends no reply, for Forget timeout tests.
+// `--ignore-hello` withholds SERVER_HELLO for VerifyTask timeout tests.
 //
 //   swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift
 //   ./fakehost 8470 busy                      # prints the dns-sd line to run
@@ -54,7 +55,7 @@ setbuf(stdout, nil)
 
 let args = CommandLine.arguments
 guard args.count >= 3, let port = UInt16(args[1]) else {
-    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--pin <digits>] [--paired | --forget] [--pg <8 hex>] [--legacy-pair] [--ignore-unpair]"); exit(2)
+    print("usage: fakehost <port> busy|ratelimit <s>|wrong|accept|hang|notpaired [--pin <digits>] [--paired | --forget] [--pg <8 hex>] [--legacy-pair] [--ignore-unpair] [--ignore-hello]"); exit(2)
 }
 let mode = args[2]
 let limitSecs = mode == "ratelimit" && args.count > 3 ? UInt16(args[3]) ?? 599 : 0
@@ -150,6 +151,11 @@ func serve(_ fd: Int32) {
     } catch { print("msg3 failed: \(error)"); return }
     let fp = SHA256.hash(data: clientKey).prefix(4).map { String(format: "%02X", $0) }.joined()
     print("-- handshake done with client \(fp) (paired=\(claimPaired))")
+    if args.contains("--ignore-hello") {
+        print("-- withholding SERVER_HELLO")
+        while readExact(fd, 1) != nil {}
+        return
+    }
     var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     hello.append(claimPaired ? 1 : 0)
     if !legacyPair { hello.append(Proto.capPairName) }

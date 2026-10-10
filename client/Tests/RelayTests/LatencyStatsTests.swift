@@ -4,7 +4,7 @@ import XCTest
 final class LatencyStatsTests: XCTestCase {
     func testBackendMetricsCannotMasqueradeAsSameLatency() {
         let stats = LatencyStats()
-        stats.recordVideoPerformance(VideoPerformanceSnapshot(clientMilliseconds: 2, droppedFrames: 0))
+        stats.recordVideoPerformance(VideoPerformanceSnapshot(clientMilliseconds: 2, droppedFrames: 0, backend: "avsbdl"))
         let av = stats.snapshot().overlayText
         XCTAssertTrue(av.contains("AV scheduling delay"))
         XCTAssertTrue(av.contains("Rx→present unavailable"))

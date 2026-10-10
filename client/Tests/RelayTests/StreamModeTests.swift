@@ -37,7 +37,7 @@ final class StreamModeTests: XCTestCase {
         XCTAssertEqual(StreamMode(scale: 0.6, refresh: 90).clamped(toMaxRefresh: 120), StreamMode(scale: 1.0, refresh: 120))
     }
 
-    func testFlagsRecordWhetherGiven() {
+    @MainActor func testFlagsRecordWhetherGiven() async {
         XCTAssertFalse(LaunchOptions.parse(["Relay"]).scaleGiven)
         XCTAssertFalse(LaunchOptions.parse(["Relay"]).maxFPSGiven)
         let o = LaunchOptions.parse(["Relay", "--scale", "0.5", "--max-fps", "60"])

@@ -33,7 +33,7 @@ final class PairingClassifierTests: XCTestCase {
         XCTAssertNil(PairingClassifier.expectedKey(for: host("Desk PC"), known: known))
     }
 
-    func testFixedHostFlagStillParses() {
+    @MainActor func testFixedHostFlagStillParses() async {
         let o = LaunchOptions.parse(["Relay", "--host", "192.168.1.5:8468"])
         XCTAssertNotNil(o.fixedHost)
         XCTAssertNil(LaunchOptions.parse(["Relay"]).fixedHost)
