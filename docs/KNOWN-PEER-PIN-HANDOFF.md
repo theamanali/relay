@@ -1,8 +1,11 @@
 # Windows handoff: allow time to enter the PIN when re-pairing
 
-The user requested a Windows-session handoff on 2026-10-09. The Mac session
-has prepared the patch below; **host source has not been changed or built**.
-Start by pulling `main` and reading `AGENTS.md`.
+The user initially requested a Windows-session handoff on 2026-10-09, then
+authorized proceeding with the fix. The Mac session applied the host source
+change and added production-handler regression tests on 2026-10-10.
+**Windows build, tests, deployment and hardware verification remain pending.**
+Start by pulling `main` and reading `AGENTS.md`; no separate patch application
+is needed.
 
 ## Reproduction and cause
 
@@ -29,16 +32,9 @@ solve this: each connection starts another five-second window.
 
 ## Exact fix
 
-From the repo root, apply the companion patch:
-
-```powershell
-git apply --check docs/known-peer-pin-timeout.patch
-git apply docs/known-peer-pin-timeout.patch
-```
-
-The patch moves `rx.set_read_timeout(Some(PAIR_TIMEOUT))?` outside the
+The source change moves `rx.set_read_timeout(Some(PAIR_TIMEOUT))?` outside the
 `if !hs.paired` condition immediately before the first encrypted request is
-read. Keep the conditional log for an unknown client.
+read. The conditional log for an unknown client remains.
 
 Every client then has up to two minutes to send PAIR, CLIENT_HELLO or UNPAIR
 after SERVER_HELLO. This handles a known client that needs human PIN entry
@@ -57,23 +53,21 @@ without guessing from the host's half of the pairing state.
 
 ## Regression checks on Windows
 
-Add a loopback regression using the **production control prelude** in
-`server.rs::handle_session` (a unit test in that module can call it), with
-temporary identities, peer files and PIN state. Do not test a fixture that
-sets its own timeout: it would miss this bug.
+`server.rs::pairing_wait_tests` now exercises **production `handle_session`**
+over loopback with generated identities, temporary peer files and fixed test
+PIN state. Three cases wait six seconds **after SERVER_HELLO** before sending
+valid CPace PAIR and confirmation: a known key, an unknown key, and a known
+key while another session owns the display. Each checks the paired flag and
+durable name storage, then closes without CLIENT_HELLO. The known-key cases
+would fail at five seconds with the old timeout condition.
 
-Pre-populate the host's peer list with the client key, complete Noise and
-assert SERVER_HELLO says paired. Model the Mac as having forgotten the host:
-wait at least 6–8 seconds **after SERVER_HELLO**, then send a valid CPace PAIR
-and confirmation. Expect success and durable pairing/name storage, then close
-without CLIENT_HELLO. The unfixed code must fail this case at five seconds.
-
-Repeat with an unknown key, and with the display-claimed flag already true.
-Pair-only must succeed without acquiring/releasing that other session's lease
-or touching a driver/GPU/display. Retain coverage for immediate known-client
-Connect, UNPAIR, wrong PIN, abandoned confirmation and rate limiting. Use an
-inert config/driver that fails the test if display setup is attempted; do not
-run exclusive display tests from the agent's active PC session.
+The inert driver panics on any display operation. Tests assert the existing
+display claim and session are preserved. These new Rust tests have not been
+compiled or run on the Mac. Run them and the existing crypto regressions for
+wrong PIN, abandoned confirmation and rate limiting on Windows. Check immediate
+known-client Connect and UNPAIR against the installed host too; let the user
+perform streaming checks rather than running exclusive display tests from
+the agent's active PC session.
 
 Run on the Windows PC from `host/`:
 

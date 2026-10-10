@@ -100,13 +100,16 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   knows this key, so `server.rs` leaves the initial request at HELLO_TIMEOUT
   (5 s). The Mac's PIN sheet is closed by the PC before manual re-pair can
   complete. Unknown keys get PAIR_TIMEOUT (120 s). Clearing the old entry from
-  the PC tray is the current workaround; the Windows session must extend the
-  initial PIN wait for known clients too. The Mac must not send CLIENT_HELLO
+  the PC tray is the current workaround until the host fix is deployed.
+  The Mac must not send CLIENT_HELLO
   or guess a PIN just to hold that socket open.
-  The user requested a Windows-session handoff rather than host edits here:
-  `docs/KNOWN-PEER-PIN-HANDOFF.md` and its companion patch contain the exact
-  change, production-loopback regression requirements and deployment/retest
-  steps. The patch is prepared only; host source/build/deployment are unchanged.
+  The user initially requested a Windows-session handoff, then authorized the
+  source fix. On 2026-10-10 the Mac session moved PAIR_TIMEOUT before every
+  client's first encrypted request and added three production-handler loopback
+  regressions (known/unknown/busy, six-second PIN delay, durable name storage,
+  display/session preservation). No client or wire change. Windows compilation,
+  tests, deployment and real-Mac retest remain pending; see
+  `docs/KNOWN-PEER-PIN-HANDOFF.md` for the remaining checks.
 
 ## How the host and client work (details you need before changing them)
 

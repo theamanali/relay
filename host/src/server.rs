@@ -613,10 +613,12 @@ fn handle_session(
         &protocol::server_hello_with_capabilities(&cfg.name, hs.paired),
     )?;
 
-    // A known client may still send a PIN (it lost its copy of our key); an unknown one must.
+    // A known client can need the PIN too (it forgot us or lost hosts.txt).
+    // Give every client the human PIN-entry window before its first request;
+    // no display lease is held here. PAIR confirmation still uses HELLO_TIMEOUT.
+    rx.set_read_timeout(Some(PAIR_TIMEOUT))?;
     if !hs.paired {
         log::info!("unpaired client {client_fp} from {peer}: waiting for the PIN");
-        rx.set_read_timeout(Some(PAIR_TIMEOUT))?;
     }
     let (mut ty, mut flags, mut payload) = match rx.recv() {
         Ok(first) => first,
@@ -1275,6 +1277,194 @@ fn is_congested(elapsed: Duration, frames: u64, send_time: Duration, target_fps:
     let send_utilization = send_time.as_secs_f64() / seconds;
     achieved_fps < f64::from(target_fps) * CONGESTION_MIN_FPS_RATIO
         && send_utilization >= CONGESTION_MIN_SEND_UTILIZATION
+}
+
+#[cfg(test)]
+mod pairing_wait_tests {
+    use super::*;
+
+    struct TestState(PathBuf);
+
+    impl TestState {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "relay-pair-wait-{}-{}",
+                std::process::id(),
+                rand::random::<u64>()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestState {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// These pair-only tests must never reach display setup or cleanup.
+    struct NoDisplay;
+
+    impl VirtualDisplay for NoDisplay {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn pnp_id(&self) -> &'static str {
+            "test"
+        }
+
+        fn dynamic_modes(&self) -> bool {
+            true
+        }
+
+        fn attach(&self, _: Mode, _: &GpuInfo) -> Result<(Attachment, Monitor)> {
+            panic!("pair-only attempted to attach a display")
+        }
+
+        fn lock_physical_outputs(&self) -> Result<()> {
+            panic!("pair-only attempted to lock physical displays")
+        }
+
+        fn unlock_physical_outputs(&self) -> Result<()> {
+            panic!("pair-only attempted to unlock physical displays")
+        }
+
+        fn detach(&self, _: Attachment) -> Result<()> {
+            panic!("pair-only attempted to detach a display")
+        }
+
+        fn cleanup(&self) -> Result<()> {
+            panic!("pair-only attempted display cleanup")
+        }
+    }
+
+    fn delayed_pair(known: bool, busy: bool) {
+        let state = TestState::new();
+        let peer_path = state.0.join("peers.txt");
+        let client = Identity::generate();
+        let client_key = client.public.to_bytes();
+        let mut peers = PeerList::load(&peer_path).unwrap();
+        if known {
+            peers.add_pairing(client_key, Some("Old name")).unwrap();
+        }
+        let mut status = HostStatus::new("123456".into(), true, state.0.join("pin.txt"));
+        let end_request = Arc::new(AtomicU8::new(NO_END_REQUEST));
+        if busy {
+            status.session = Some(SessionInfo {
+                client: "Other Mac".into(),
+                client_key: [7; 32],
+                width: 1920,
+                height: 1080,
+                hz: 60,
+                end_request: Arc::clone(&end_request),
+            });
+        }
+        let cfg = ServerConfig {
+            port: 0,
+            name: "Test PC".into(),
+            ffmpeg: PathBuf::new(),
+            bitrate_override_mbps: None,
+            fps: None,
+            codec: Codec::Hevc,
+            gop_seconds: 1,
+            quality: Quality::Speed,
+            intra_refresh: false,
+            prefer_ffmpeg: false,
+            lock_physical: true,
+            gpu: GpuInfo {
+                adapter_index: 0,
+                name: "Unused test GPU".into(),
+                vendor: crate::gpu::Vendor::Other,
+                dedicated_vram: 0,
+                luid: crate::gpu::Luid { low: 0, high: 0 },
+                kind: crate::gpu::AdapterKind::default(),
+            },
+            driver: Some(Arc::new(NoDisplay)),
+            allow_input: false,
+            identity: Arc::new(Identity::generate()),
+            paired: Arc::new(Mutex::new(peers)),
+            status: Arc::new(Mutex::new(status)),
+            pair_limiter: Arc::new(Mutex::new(PairLimiter::new())),
+            advertisement: Arc::new(Mutex::new(None)),
+        };
+        let claimed = Arc::new(AtomicBool::new(busy));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        stream.set_nodelay(true).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let (socket, peer) = listener.accept().unwrap();
+        let host_cfg = cfg.clone();
+        let host_claimed = Arc::clone(&claimed);
+        let host = thread::spawn(move || handle_session(&host_cfg, socket, peer, &host_claimed));
+        // Shutdown this clone even on a failed assertion, so the host thread
+        // cannot remain waiting for its full human-entry timeout.
+        let close = stream.try_clone().unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // No pinning models a Mac that forgot the PC but kept its identity.
+            let hs = crypto::client_handshake(&mut stream, &client, None).unwrap();
+            let mut tx = SecureWriter::new(stream.try_clone().unwrap(), &hs.keys);
+            let mut rx = SecureReader::new(stream, &hs.keys, MAX_CLIENT_PAYLOAD);
+            let (ty, _, hello) = rx.recv().unwrap();
+            assert_eq!(ty, msg::SERVER_HELLO);
+            let name_end = 3 + usize::from(hello[2]);
+            assert_eq!(hello[name_end] != 0, known);
+            assert_ne!(hello[name_end + 1] & protocol::CAP_PAIR_NAME, 0);
+
+            // Exceeds the old known-client deadline, through the production
+            // handler rather than a fixture that sets its own host timeout.
+            thread::sleep(Duration::from_secs(6));
+            crypto::client_pairing(
+                &mut tx,
+                &mut rx,
+                &hs.keys,
+                "123456",
+                false,
+                Some("Delayed Mac"),
+            )
+            .unwrap();
+            let saved = PeerList::load(&peer_path).unwrap();
+            assert!(saved.contains(&client_key));
+            assert_eq!(saved.name_of(&client_key), Some("Delayed Mac"));
+            tx.shutdown();
+        }));
+        let _ = close.shutdown(std::net::Shutdown::Both);
+        let host_result = host.join();
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+        host_result.unwrap().unwrap();
+        assert_eq!(claimed.load(Ordering::Acquire), busy);
+        let status = cfg.status.lock().unwrap();
+        assert_eq!(status.session.is_some(), busy);
+        if let Some(session) = &status.session {
+            assert_eq!(session.client, "Other Mac");
+            assert_eq!(session.client_key, [7; 32]);
+            assert!(Arc::ptr_eq(&session.end_request, &end_request));
+            assert_eq!(end_request.load(Ordering::Relaxed), NO_END_REQUEST);
+        }
+    }
+
+    #[test]
+    fn known_client_can_repair_after_six_seconds_without_requesting_a_display() {
+        delayed_pair(true, false);
+    }
+
+    #[test]
+    fn unknown_client_can_pair_after_six_seconds_without_requesting_a_display() {
+        delayed_pair(false, false);
+    }
+
+    #[test]
+    fn known_client_can_repair_after_six_seconds_while_another_session_owns_display() {
+        delayed_pair(true, true);
+    }
 }
 
 #[cfg(test)]
