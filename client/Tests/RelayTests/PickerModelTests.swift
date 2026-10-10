@@ -49,12 +49,12 @@ final class PickerModelTests: XCTestCase {
 
     @MainActor func testPINCompletionIsOneShotAndDeadAttemptCannotAnswer() async {
         var answers: [String?] = []
-        let prompt = PINPrompt(host: "PC", fingerprint: "test", explanation: "") { answers.append($0) }
+        let prompt = PINPrompt(host: "PC", explanation: "") { answers.append($0) }
         prompt.respond("123456")
         prompt.respond(nil) // dismissal must not cancel after submission
         XCTAssertEqual(answers.count, 1)
         XCTAssertEqual(answers[0], "123456")
-        let old = PINPrompt(host: "PC", fingerprint: "test", explanation: "") { answers.append($0) }
+        let old = PINPrompt(host: "PC", explanation: "") { answers.append($0) }
         old.invalidate()
         old.respond("654321")
         old.respond(nil)

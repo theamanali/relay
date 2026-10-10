@@ -412,7 +412,11 @@ documented there. What follows is only the mechanics that are easy to break:
   picker after launch when SwiftUI did not. Judge picker visuals with an
   SDK-stamped build (`bundle.sh`'s flags): debug builds render older control
   metrics (20 pt popups beside a 24 pt segmented control; all 24 pt on 27.0)
-  and a 28 pt title bar instead of 32.
+  and a 28 pt title bar instead of 32. Under the 26+ SDK, SwiftUI menus (the
+  row context menu and the PC/View commands) show text only, as the system's
+  own menus do on 27.0 (Finder keeps icons for just Move to Trash, Share, Tags
+  and Quick Actions). Do not force `.labelStyle(.titleAndIcon)`; debug builds
+  still draw the symbols, which is not what users see.
 - `ClientState` uses a recursive lock around read/modify/write transactions to
   preserve its existing file formats across UI/network concurrency. VerifyTask
   and UnpairTask serialize timeouts and delegate replies on connection.queue.

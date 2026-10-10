@@ -394,9 +394,10 @@ struct PINPromptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 64, height: 64)
+            // The PC being paired, in the accent color like the window's hero.
+            Image(nsImage: Glyphs.tower(pointSize: 44))
+                .renderingMode(.template)
+                .foregroundStyle(Color.accentColor)
                 .accessibilityHidden(true)
             Text("Enter the PIN for “\(prompt.host)”")
                 .font(.system(size: 13, weight: .bold))
@@ -407,14 +408,11 @@ struct PINPromptView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, Style.Space.s)
-            VStack(spacing: Style.Space.s) {
-                PINEntry(code: $prompt.code) { prompt.respond($0) }
-                    .fixedSize()
-                Text(verbatim: "Fingerprint \(prompt.fingerprint)")
-                    .font(Style.Font.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, Style.Space.l)
+            // No fingerprint here: CPace makes the PIN authenticate both
+            // sides, and the PC's tray shows none to compare it with.
+            PINEntry(code: $prompt.code) { prompt.respond($0) }
+                .fixedSize()
+                .padding(.top, Style.Space.l)
             HStack(spacing: Style.Space.s) {
                 Button(role: .cancel) { prompt.respond(nil) } label: {
                     Text("Cancel").frame(maxWidth: .infinity)

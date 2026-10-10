@@ -608,7 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String,
                     completion: @escaping @Sendable (String?) -> Void) {
         guard connection === c else { completion(nil); return }
-        let prompt = PINPrompt(host: host, fingerprint: fingerprint,
+        let prompt = PINPrompt(host: host,
                                explanation: pinError ?? "A pairing PIN is shown by Relay on the PC. Enter it to continue.") { [weak self] pin in
             guard let self, self.connection === c else { completion(nil); return }
             self.dismissPINPrompt(for: c)
