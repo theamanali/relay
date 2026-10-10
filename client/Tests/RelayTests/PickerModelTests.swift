@@ -76,4 +76,59 @@ final class PickerModelTests: XCTestCase {
         renderer.reset()
         XCTAssertFalse(renderer.isCurrent(generation: 0))
     }
+
+    @MainActor func testResolutionTitlesAreNotDigitGrouped() async {
+        let model = PickerModel()
+        model.configure(native: CGSize(width: 3024, height: 1964), maxRefresh: 120, initial: nil)
+        XCTAssertEqual(model.resolutionTitle(1), "Native (3024 × 1964)")
+        XCTAssertEqual(model.resolutionTitle(0.75), "75% (2268 × 1474)")
+    }
+
+    @MainActor func testRowDetailAndHoverCard() async {
+        var pc = host("DESKTOP-1", key: 7)
+        pc.facts.cpu = "Ryzen"
+        let row = PickerModel.Row(host: pc, paired: true, nickname: "Desk")
+        XCTAssertEqual(row.name, "Desk")
+        XCTAssertEqual(row.detail, "This MacBook") // seen on no interface
+        let labels = row.hoverRows.map(\.label)
+        XCTAssertEqual(labels.first, "Name:") // the PC's own name, since the row shows the nickname
+        XCTAssertTrue(labels.contains("CPU:"))
+        XCTAssertEqual(labels.last, "Key:")
+        XCTAssertFalse(PickerModel.Row(host: pc, paired: true, nickname: nil).hoverRows.contains { $0.label == "Name:" })
+    }
+
+    @MainActor func testOnlyTheTopSectionSkipsTheGapAboveItsTitle() async {
+        let model = PickerModel()
+        let a = host("A", key: 1), b = host("B", key: 2)
+        // Available is always listed, with its searching spinner.
+        XCTAssertEqual(model.firstSection, .available)
+        model.update(hosts: [a], known: [:], nicknames: [:])
+        XCTAssertEqual(model.firstSection, .available)
+        model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
+        XCTAssertEqual(model.firstSection, .paired)
+    }
+
+    func testListIsAsTallAsItsRowsUpToFive() {
+        let row = Style.rowHeight, title = Style.sectionRowHeight, insets = PickerLayout.listInsets
+        // Empty: the Available title and the first-run hint, held at a two-row floor.
+        let floor = insets + title + 2 * row
+        XCTAssertEqual(PickerLayout.listHeight(paired: 0, available: 0), floor)
+        // One paired PC and nothing available: both titles and the PC, under the floor.
+        XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 0), floor)
+        XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 2), insets + 2 * title + Style.Space.l + 3 * row)
+        // Past five PCs the list stops growing and scrolls.
+        let capped = insets + 2 * title + Style.Space.l + 5 * row
+        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 3), capped)
+        XCTAssertFalse(PickerLayout.overflows(paired: 2, available: 3))
+        XCTAssertEqual(PickerLayout.listHeight(paired: 3, available: 5), capped)
+        XCTAssertTrue(PickerLayout.overflows(paired: 3, available: 5))
+    }
+
+    @MainActor func testFooterButtonSaysPairOnlyForAnAvailablePC() async {
+        let model = PickerModel()
+        XCTAssertEqual(model.connectTitle, "Connect") // nothing selected
+        let a = host("A", key: 1)
+        model.update(hosts: [a], known: [:], nicknames: [:])
+        XCTAssertEqual(model.connectTitle, "Pair")
+    }
 }

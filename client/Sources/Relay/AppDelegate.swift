@@ -58,6 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     private var pendingSession: (screen: NSScreen, mode: StreamMode)?
     /// Remembered options, with this launch's flags applied on top.
     private var prefs = SessionPrefs()
+    /// Opens SwiftUI's picker window. SwiftUI opens it by itself only when
+    /// LaunchServices starts the app (Finder, Dock, `open`); started directly
+    /// (`Relay.app/Contents/MacOS/Relay --scale 0.75`) a binary built against
+    /// the macOS 26+ SDK gets no window at all.
+    private var openPicker: (@MainActor () -> Void)?
+
+    func registerPickerOpener(_ open: @escaping @MainActor () -> Void) { openPicker = open }
 
     override convenience init() { self.init(options: LaunchOptions.parse(CommandLine.arguments)) }
 
@@ -163,6 +170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             startSession(.init(endpoint: fixed, reconnects: true), screen: screen, mode: mode)
         } else {
             showPicker()
+            // After SwiftUI's own launch pass: open the picker if it did not.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.picker == nil, !self.kioskActive else { return }
+                self.openPicker?()
+            }
             browser.onChange = { [weak self] hosts in
                 guard let self else { return }
                 self.latestHosts = hosts
@@ -204,6 +216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     func attachPickerWindow(_ window: NSWindow) {
         guard picker == nil else { return }
+        // The picker window is not resizable or full-screen capable, and
+        // drags from anywhere that is not a control, as before SwiftUI.
+        window.isMovableByWindowBackground = true
+        window.styleMask.remove(.resizable)
+        window.collectionBehavior.insert(.fullScreenNone)
+        window.standardWindowButton(.zoomButton)?.isEnabled = false
         let p = HostPickerWindowController(window: window, model: pickerModel)
         p.pickerDelegate = self
         window.delegate = self
@@ -269,8 +287,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     }
 
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
-        guard unpairTask == nil,
-              let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else { return }
+        guard unpairTask == nil else { return }
+        guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
+            p.flash("\(SessionText.shortName(host.name)) isn't paired")
+            return
+        }
         forget(host: host, key: key, picker: p)
     }
 
@@ -588,7 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
                     completion: @escaping @Sendable (String?) -> Void) {
         guard connection === c else { completion(nil); return }
         let prompt = PINPrompt(host: host, fingerprint: fingerprint,
-                               explanation: pinError ?? "Enter the six-digit PIN shown by Relay on the PC.") { [weak self] pin in
+                               explanation: pinError ?? "A pairing PIN is shown by Relay on the PC. Enter it to continue.") { [weak self] pin in
             guard let self, self.connection === c else { completion(nil); return }
             self.dismissPINPrompt(for: c)
             completion(pin)
@@ -607,6 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             sheet.contentView = NSHostingView(rootView: PINPromptView(prompt: prompt))
             sheet.isReleasedWhenClosed = false
             pinWindow = sheet
+            // PINEntryView takes the keyboard once this sheet becomes key.
             window.beginSheet(sheet)
         }
     }

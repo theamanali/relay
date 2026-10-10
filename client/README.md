@@ -53,8 +53,10 @@ from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchange
 ### The PC list
 
 Relay opens a small window listing the PCs it finds, under **Paired** and
-**Available**. Each row shows the link the connection will use: Ethernet, Wi-Fi,
-or Direct cable when the PC gave itself a 169.254 address. The info button opens a
+**Available**. The window is as tall as the list and scrolls past five PCs.
+Available is always shown with a small spinner, since Relay keeps searching;
+with no PC at all it says what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
+or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
 and its key fingerprint.
 
@@ -277,7 +279,7 @@ planted for comparison shows |t| 41.
 
 1. **Discover.** [`HostBrowser`](Sources/Relay/HostBrowser.swift) browses
    `_relay._tcp` and reads each PC's TXT record: identity key `pk`, pairing
-   digest `pg`, and facts for the information popover.
+   digest `pg`, and facts for the hover card.
 2. **Connect.** [`HostConnection`](Sources/Relay/HostConnection.swift) dials over
    Network.framework, pinned to wired Ethernet when the PC was seen there, and
    runs the Noise XX handshake ([`Noise.swift`](Sources/Relay/Noise.swift)). It
@@ -305,7 +307,7 @@ planted for comparison shows |t| 41.
 
 | area | files |
 |---|---|
-| UI and lifecycle | [`RelayApp`](Sources/Relay/RelayApp.swift), [`PickerModel`](Sources/Relay/PickerModel.swift), [`HostPickerView`](Sources/Relay/HostPickerView.swift), [`AppDelegate`](Sources/Relay/AppDelegate.swift), [`HostPickerWindowController`](Sources/Relay/HostPickerWindowController.swift) |
+| UI and lifecycle | [`RelayApp`](Sources/Relay/RelayApp.swift) (window, menus), [`PickerModel`](Sources/Relay/PickerModel.swift), [`HostPickerView`](Sources/Relay/HostPickerView.swift), [`HoverCard`](Sources/Relay/HoverCard.swift), [`PINEntryView`](Sources/Relay/PINEntryView.swift), [`Style`](Sources/Relay/Style.swift), [`AppDelegate`](Sources/Relay/AppDelegate.swift), [`HostPickerWindowController`](Sources/Relay/HostPickerWindowController.swift) |
 | Discovery | [`HostBrowser`](Sources/Relay/HostBrowser.swift), [`BonjourReconfirm`](Sources/Relay/BonjourReconfirm.swift), [`LocalNetworks`](Sources/Relay/LocalNetworks.swift) |
 | Connection and pairing | [`HostConnection`](Sources/Relay/HostConnection.swift), [`Crypto`](Sources/Relay/Crypto.swift), [`Protocol`](Sources/Relay/Protocol.swift), [`FrameReader`](Sources/Relay/FrameReader.swift), [`PairingVerifier`](Sources/Relay/PairingVerifier.swift), [`VerifyTask`](Sources/Relay/VerifyTask.swift), [`UnpairTask`](Sources/Relay/UnpairTask.swift) |
 | Frame/control boundary | [`SessionPipeline`](Sources/Relay/SessionPipeline.swift) (frames remain off the main actor) |

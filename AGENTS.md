@@ -26,7 +26,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 ## Status
 
 - Platform migration 2026-10-10: Mac SwiftUI/Swift 6, Apple silicon/macOS 14,
-  mandatory Metal/hardware decoding implemented. 107 unit tests, isolated
+  mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
+  picker restoration below), isolated
   fakehost checks, local release/signature and picker/PIN/Forget smoke tests
   pass on macOS 27.0. Real-PC latency/input/display regressions and minimum /
   latest stable OS qualification remain pending. Windows NVIDIA enforcement
@@ -296,7 +297,26 @@ documented there. What follows is only the mechanics that are easy to break:
 - Rename commits on Return/focus loss and cancels on Escape. Do not let the
   default Connect/Pair button consume Return while editing. Row single taps
   explicitly select the host; the double-tap handler alone consumes native
-  list selection. Details use an info-button popover instead of a hover card.
+  list selection. PC ▸ Connect is disabled while renaming so Return reaches
+  the field. The picker keeps the pre-SwiftUI layout and wording (2026-10-10,
+  user request): hidden title bar, 410 wide (narrowed from the old 460 so the
+  footer mode row has even gaps; the resolution popup takes the slack) and as
+  tall as the list (`PickerLayout`: rows, titles, 20 pt of list insets, a
+  two-row floor, scrolling past five PCs, scroller hidden unless it overflows;
+  the window grows downward), Available always listed with a mini spinner (no
+  "Looking for PCs…" text, user request; only the first-run hint row when
+  there is no PC at all), no PC count in
+  the footer (status only), `Style` metrics, tower
+  glyph rows with "via <link>", plain header rows (not `Section`, whose header
+  floats on a band), hover card (`HoverCard`: AppKit panel, SwiftUI grid,
+  `HoverCardAnchor` tracking area behind each row), the old settings popover,
+  six-box PIN entry (`PINEntryView`, AppKit, wrapped by `PINEntry`) and Forget
+  alert wording. Keep the SwiftUI colors: the inset list's own background spans
+  the window (its selection inset is fixed at 10 pt; a painted background did
+  not match the list's translucent fill), and the footer has no material.
+  The gear icon replaces the old Advanced button at the end of the mode row.
+  Use `Text(verbatim:)` for numbers: SwiftUI's localized interpolation groups
+  digits ("3,024 × 1,964").
 - Menus are SwiftUI commands in `RelayApp.swift`; contribute to the existing
   View command group to avoid duplicate View menus. Validate against picker
   focus. `StreamView.performKeyEquivalent` still swallows command shortcuts
@@ -379,9 +399,20 @@ documented there. What follows is only the mechanics that are easy to break:
 - **The PIN sheet belongs to one connection attempt.** `PINPrompt` is one-shot;
   invalidate it before dismissing when the socket ends, so the SwiftUI
   `onDisappear` callback cannot cancel a later attempt. The picker uses a
-  SwiftUI sheet and `--host` uses the same view inside a native sheet. Preserve
-  six-digit paste/autosubmit, wrong-PIN retry and cancellation. Do not reset
+  SwiftUI sheet and `--host` uses the same view inside a native sheet;
+  `PINEntryView` takes the keyboard when its window becomes key, which is what
+  makes the native sheet work. Preserve six-digit paste/autosubmit, wrong-PIN
+  retry and cancellation; accessibility value/selected-text setters type into it. Do not reset
   connection deadlines merely because the sheet redraws.
+- **SwiftUI opens the picker only on a LaunchServices launch** (Finder, Dock,
+  `open`). Run directly (`Relay.app/Contents/MacOS/Relay --scale 0.75`), a
+  binary linked against the macOS 26+ SDK got no window at all; SDK-14-stamped
+  debug builds were unaffected, and `defaultLaunchBehavior(.presented)` did
+  not help. `RelayCommands` hands `openWindow` to `AppDelegate`, which opens the
+  picker after launch when SwiftUI did not. Judge picker visuals with an
+  SDK-stamped build (`bundle.sh`'s flags): debug builds render older control
+  metrics (20 pt popups beside a 24 pt segmented control; all 24 pt on 27.0)
+  and a 28 pt title bar instead of 32.
 - `ClientState` uses a recursive lock around read/modify/write transactions to
   preserve its existing file formats across UI/network concurrency. VerifyTask
   and UnpairTask serialize timeouts and delegate replies on connection.queue.

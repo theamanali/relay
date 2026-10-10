@@ -329,6 +329,27 @@ Mac implementation, 2026-10-10:
   row selection bug and duplicate View menu were fixed and retested. Fixed-host
   mode also showed the SwiftUI PIN sheet and exited cleanly on Cancel.
 
+Picker design restored, 2026-10-10 (user request): the SwiftUI picker now
+reproduces the pre-migration layout, wording, hover card, settings popover,
+six-box PIN sheet and menus while keeping the SwiftUI color treatment; the
+gear icon replaces the Advanced button. 110 unit tests and the isolated
+pairing suite pass. Checked in an isolated test bundle against fakehost:
+hover card, context menu, rename (15-character cap, Return commits without
+connecting), settings popover, Forget alert, PIN autosubmit, wrong-PIN retry,
+Cancel, and `--host` PIN focus and Cancel-to-quit. CI's `macos-14` job failed
+because that image defaults to Xcode 15 (Swift 5.10); the workflow now selects
+the newest installed Xcode 16+ there.
+
+Picker follow-up, 2026-10-10: the window height follows the list (two-row
+floor, scrolls past five PCs), Available is always listed with a spinner (plus
+a first-run hint when there is no PC at all), and the footer shows status only. A binary linked
+against the 27.0 SDK and started directly (not through LaunchServices) opened
+no picker; Codex's commit had the same behavior. The app now opens the picker
+itself when SwiftUI does not. 112 unit tests pass; SDK-27 builds were checked
+against fakehost with no PCs, one paired, paired plus available, eight PCs
+(scrolling), connecting/Cancel, light mode, direct launch, `open` launch and
+`--host`.
+
 Not complete: NVIDIA enforcement/capability preflight and host backend/driver
 cleanup. `AGENTS.md` assigns these modules and Windows validation to the PC
 session. Execute [the Windows handoff](WINDOWS-PLATFORM-HANDOFF.md); fallback

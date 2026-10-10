@@ -48,7 +48,12 @@ final class HostPickerWindowController: NSWindowController {
     func configure(nativePixelSize: CGSize, maxRefresh: Int, initial: StreamMode? = nil) {
         model.configure(native: nativePixelSize, maxRefresh: maxRefresh, initial: initial)
     }
-    func update(hosts: [DiscoveredHost]) { self.hosts = hosts; reloadPairing() }
+    func update(hosts: [DiscoveredHost]) {
+        // A result in the footer gives way once the list of PCs changes.
+        if hosts.map(\.name) != self.hosts.map(\.name) { status = "" }
+        self.hosts = hosts
+        reloadPairing()
+    }
     func reloadPairing() { model.update(hosts: hosts, known: ClientState.knownHosts(), nicknames: ClientState.nicknames()) }
     func preselect(key: Data?, name: String) { model.preselect(key: key, name: name) }
     func flash(_ message: String, for seconds: TimeInterval = 8) { model.flash(message, seconds: seconds) }
