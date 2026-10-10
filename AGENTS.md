@@ -103,6 +103,10 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   the PC tray is the current workaround; the Windows session must extend the
   initial PIN wait for known clients too. The Mac must not send CLIENT_HELLO
   or guess a PIN just to hold that socket open.
+  The user requested a Windows-session handoff rather than host edits here:
+  `docs/KNOWN-PEER-PIN-HANDOFF.md` and its companion patch contain the exact
+  change, production-loopback regression requirements and deployment/retest
+  steps. The patch is prepared only; host source/build/deployment are unchanged.
 
 ## How the host and client work (details you need before changing them)
 
