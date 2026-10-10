@@ -184,6 +184,10 @@ passed. Real-hardware verification of this extension remains pending.
 
 **Next:**
 
+- [ ] Allow the normal PIN-entry timeout when re-pairing a Mac the PC still
+      knows. After a local-only Forget, its five-second initial request timeout
+      closes the PIN sheet; clearing the old entry through the PC tray is the
+      current workaround.
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
