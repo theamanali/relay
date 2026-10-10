@@ -3,9 +3,9 @@
 The user initially requested a Windows-session handoff on 2026-10-09, then
 authorized proceeding with the fix. The Mac session applied the host source
 change and added production-handler regression tests on 2026-10-10.
-**Windows build, tests, deployment and hardware verification remain pending.**
-Start by pulling `main` and reading `AGENTS.md`; no separate patch application
-is needed.
+**Windows checks and deployment passed on 2026-10-10; real-Mac retesting remains
+pending.** Source commit `ae249f4` needed no further code changes. See the
+verification record below for the installed build and scope of the checks.
 
 ## Reproduction and cause
 
@@ -18,10 +18,10 @@ is needed.
 3. The PC closed the socket about five seconds after the handshake. The Mac
    correctly dismissed the PIN sheet belonging to that dead connection.
 
-`host/src/server.rs::handle_session` starts the socket at HELLO_TIMEOUT (5 s).
-After SERVER_HELLO, it switches to PAIR_TIMEOUT (120 s) **only if
-`!hs.paired`**. The PC still knows the Mac's key, so the five-second deadline
-remains even though the Mac no longer knows the PC and must ask for its PIN.
+Before the fix, `host/src/server.rs::handle_session` started the socket at
+HELLO_TIMEOUT (5 s). After SERVER_HELLO, it switched to PAIR_TIMEOUT (120 s)
+**only if `!hs.paired`**. The PC still knew the Mac's key, so the five-second
+deadline remained even though the Mac no longer knew the PC and needed its PIN.
 The same bug affects a Mac that loses `hosts.txt` while retaining `identity.key`.
 
 This timeout condition predates the recent pairing-name work (`git blame`
@@ -62,12 +62,10 @@ durable name storage, then closes without CLIENT_HELLO. The known-key cases
 would fail at five seconds with the old timeout condition.
 
 The inert driver panics on any display operation. Tests assert the existing
-display claim and session are preserved. These new Rust tests have not been
-compiled or run on the Mac. Run them and the existing crypto regressions for
-wrong PIN, abandoned confirmation and rate limiting on Windows. Check immediate
-known-client Connect and UNPAIR against the installed host too; let the user
-perform streaming checks rather than running exclusive display tests from
-the agent's active PC session.
+display claim and session are preserved. All three passed on Windows, along
+with existing crypto regressions for wrong PIN, abandoned confirmation and rate
+limiting. Immediate known-client Connect still needs the user's streaming test;
+the agent does not run exclusive display tests from the active PC session.
 
 Run on the Windows PC from `host/`:
 
@@ -102,7 +100,48 @@ If recreating the half-forgotten state is needed, have the user disconnect the
 link, Forget locally while the PC cannot be reached, then reconnect the link.
 Use their chosen test pairing; do not delete the Mac identity or other peers.
 
-Update this handoff, README status and AGENTS with the Windows checks, installed
-build and real-Mac results. Until deployment, the workaround is to remove the
-Mac through the PC tray's **Forget paired MacBook** submenu first; the PC then
-uses its existing two-minute timeout for that unknown key.
+Update this handoff, README status and AGENTS when real-Mac results arrive.
+The installed fix no longer requires clearing the PC's pairing to obtain the
+two-minute PIN-entry window.
+
+## Windows verification record — 2026-10-10
+
+- Source: `ae249f42b24d7da2d52c71999d8bc37628d9aa25`; no code repair needed.
+- `cargo fmt --check`: passed.
+- `cargo test`: 145 unit tests and one probe integration test passed; one
+  opt-in desktop test remained ignored. All three six-second timeout regressions
+  passed, including known-key re-pair while another session owns the display.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- `cargo build --release`: passed.
+- Elevated `tools/install-host.ps1 -SkipDriver`: exit 0 at 13:05 PDT.
+  Service Running; SYSTEM worker started in session 1 (PID 18920) and listened
+  on `[::]:8468`. Host fingerprint remains `04F6A881`.
+- Installed `C:\Program Files\Relay\relay-host.exe` matches the checked release
+  build, SHA-256:
+  `EEEEA9E0F2CC36ED4A9E3ADF7D5AB00B47FC22FD3754FF67DB809065B3A5C460`.
+
+Installed-service probe verification passed at 13:06–13:07 PDT. The unmodified
+release probe used a dedicated temporary identity (`9AEA10BE`) and a loopback
+proxy that forwarded Noise and SERVER_HELLO immediately, then held the first
+encrypted client request for 12 seconds. It did not decrypt or modify messages.
+The probe explicitly used `--pair-only` (or `--unpair`); no CLIENT_HELLO was sent.
+
+| Check | Result |
+|---|---|
+| Fresh named pair-only | Passed; name persisted without a streaming connection. |
+| Known-key re-pair, 12-second wait | Passed in 12.01 s; SERVER_HELLO reported already paired; Unicode replacement name persisted. |
+| Known-key wrong PIN, 12-second wait | Rejected in 12.02 s; saved peer/name unchanged. |
+| Known-key correct retry, another 12-second wait | Passed in 12.01 s. |
+| Immediate known-key UNPAIR | Confirmed in 0.03 s; test pairing removed. |
+
+The original two-peer list was preserved, and its advertised pairing digest
+returned to its initial value. Successful checks rotated the PIN normally; use
+the current tray PIN for the Mac retest. Logs confirm pair-only disconnects and
+UNPAIR, with no display setup during these checks. These tests verify waits
+beyond the old five-second cutoff; the full 120-second expiry was not timed.
+Busy pairing was verified by the production-handler regression, not a real
+concurrent stream. No new host source changes were required.
+
+Real-Mac PIN-sheet behavior, wrong-PIN retry UI, confirmed Forget, pair-only
+name presentation in the tray, and ordinary Connect/disconnect remain unverified
+on this deployed build. No streaming/exclusive-display test was run by the agent.
