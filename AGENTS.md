@@ -85,6 +85,16 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   verification of the extension remains pending; old “paired <IP>” entries need
   named re-pair or streaming to refresh. Keep this rollout separate from topology work.
 - The README status table is the source of truth for status; keep it current.
+- Forget diagnostics (2026-10-09): a real Mac attempt remained preparing and
+  timed out after 6 s; Network.framework logs showed every resolved endpoint
+  as `Local network prohibited`, even though Relay's Local Network switch was
+  enabled. The app was running across bundle rebuilds; it has been quit for an
+  update/relaunch, but real-PC retry is pending. The client now preserves
+  failure reasons, reports explicit local-network denials when Network.framework
+  exposes them, and says an unconfirmed PC may still remember the Mac rather
+  than asserting it does. UnpairTask's timeout/reply completion is serialized
+  on the connection queue. Swift tests (102) and isolated real-UnpairTask checks
+  (confirmed/busy/timeout/changed key) pass; no host or protocol change.
 
 ## How the host and client work (details you need before changing them)
 

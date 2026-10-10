@@ -114,6 +114,33 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     return (client, delegate)
 }
 
+func unpair(_ host: FakeHost, timeout: Double = 5, expectedKey: Data? = nil) throws -> UnpairTask.Outcome {
+    var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
+    options.expectedHostKey = try expectedKey ?? host.key
+    let task = try UnpairTask(options: options)
+    defer { withExtendedLifetime(task) {} }
+    let ended = DispatchSemaphore(value: 0)
+    let lock = NSLock()
+    var calls = 0
+    var outcome: UnpairTask.Outcome?
+    task.run(timeout: timeout) { result in
+        lock.lock()
+        calls += 1
+        outcome = result
+        lock.unlock()
+        ended.signal()
+    }
+    try check(ended.wait(timeout: .now() + 10) == .success, "UnpairTask did not complete")
+    // Host closure proves the timed-out connection was canceled too.
+    try host.waitForLog("-- closed")
+    lock.lock()
+    let total = calls
+    let result = outcome
+    lock.unlock()
+    try check(total == 1, "UnpairTask completed more than once")
+    return result!
+}
+
 func run(_ root: URL) throws {
     let fm = FileManager.default
     guard let fixedHome = ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] else {
@@ -157,13 +184,33 @@ func run(_ root: URL) throws {
             try check(verified.pairingVerified == true, "verify-only failed")
             try check(host.log.components(separatedBy: "first message 0xa0").count == before,
                       "known/verify-only sent PAIR")
-            let (forgotten, _) = try connect(host, unpairOnly: true)
-            try check(forgotten.hostConfirmedUnpair, "UNPAIR failed")
+            guard case .confirmed = try unpair(host) else { throw CheckFailure(description: "UNPAIR failed") }
             // The picker/UnpairTask owns local forgetting after the reply;
             // HostConnection only reports that the host confirmed it.
             ClientState.forget(host: try host.key)
             print("PASS already-paired, verify-only and UNPAIR")
         }
+    }
+
+    for (label, arguments, expectedKey) in [
+        ("unpair-busy", ["busy"], Optional<Data>.none),
+        ("unpair-timeout", ["accept", "--ignore-unpair"], nil),
+        ("unpair-key-change", ["accept"], Data(repeating: 9, count: 32)),
+    ] {
+        let host = try FakeHost(root: root, label: label, arguments: arguments)
+        defer { host.stop() }
+        let outcome = try unpair(host, timeout: 0.5, expectedKey: expectedKey)
+        switch (label, outcome) {
+        case ("unpair-busy", .confirmed): break
+        case ("unpair-timeout", .unreachable(let reason)):
+            try check(reason == "the PC didn't answer", "Forget lost timeout reason")
+            try check(host.log.contains("withholding confirmation"), "Forget timed out before sending UNPAIR")
+        case ("unpair-key-change", .unreachable(let reason)):
+            try check(reason.contains("host identity changed"), "Forget lost identity-change reason")
+            try check(!host.log.contains("first message"), "UNPAIR sent to a different host identity")
+        default: throw CheckFailure(description: "\(label): unexpected outcome \(outcome)")
+        }
+        print("PASS \(label): real UnpairTask, one completion, preserved reason")
     }
 
     for (label, arguments) in [("wrong", ["wrong"]), ("rate-limit", ["ratelimit", "599"])] {

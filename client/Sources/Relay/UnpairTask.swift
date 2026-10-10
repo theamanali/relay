@@ -13,8 +13,10 @@ final class UnpairTask: HostConnectionDelegate {
         /// The host is in a session with another client and read nothing
         /// of ours; its half of the pairing is still there.
         case busy
-        /// No usable answer before the timeout.
-        case unreachable
+        /// macOS explicitly denied access to local devices.
+        case localNetworkDenied
+        /// No confirmation, with the connection failure retained for the UI/log.
+        case unreachable(reason: String)
     }
 
     private let connection: HostConnection
@@ -32,15 +34,19 @@ final class UnpairTask: HostConnectionDelegate {
     /// `completion` runs once, on an arbitrary queue. A host that has not
     /// answered by `timeout` counts as unreachable.
     func run(timeout seconds: Double, completion: @escaping (Outcome) -> Void) {
-        self.completion = completion
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.connection.stop()
-            self.deliver(.unreachable)
+        connection.queue.async { [self] in
+            self.completion = completion
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.connection.stop()
+                self.deliver(.unreachable(reason: "the PC didn't answer"))
+            }
+            timeout = work
+            // Serialize the timeout with delegate replies: only one outcome
+            // may remove local state and open a result sheet.
+            connection.queue.asyncAfter(deadline: .now() + seconds, execute: work)
+            connection.start()
         }
-        timeout = work
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
-        connection.start()
     }
 
     private func deliver(_ outcome: Outcome) {
@@ -66,6 +72,9 @@ final class UnpairTask: HostConnectionDelegate {
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {}
 
     func connectionDidEnd(_ c: HostConnection, reason: String) {
-        deliver(c.hostConfirmedUnpair ? .confirmed : c.hostBusy ? .busy : .unreachable)
+        if c.hostConfirmedUnpair { deliver(.confirmed) }
+        else if c.hostBusy { deliver(.busy) }
+        else if c.localNetworkDenied { deliver(.localNetworkDenied) }
+        else { deliver(.unreachable(reason: reason)) }
     }
 }
