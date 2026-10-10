@@ -180,7 +180,8 @@ the Mac's name before pairing success; older hosts still pair with the new Mac
 and learn its name on the first stream. See the [wire contract](docs/PROTOCOL.md)
 and [Mac tests](client/README.md#testing). On 2026-10-09, all 99 Swift tests,
 isolated HostConnection/fakehost loopback checks and the Mac release bundle
-passed. Real Mac-to-PC verification of this extension remains pending.
+passed. On 2026-10-10 the user confirmed that Pair without Connect immediately
+shows the Mac's name in the PC's Forget submenu.
 
 On 2026-10-10, host commit `ae249f4` passed Windows formatting, 145 unit tests
 and the probe integration test, strict clippy and release build, and was deployed
@@ -188,22 +189,21 @@ with `install-host.ps1 -SkipDriver`. The installed executable matches that build
 Against the running service, a known probe identity re-paired after a 12-second
 wait, rejected a delayed wrong PIN, then paired on a delayed correct retry.
 Pair-only Unicode naming and immediate UNPAIR passed without requesting a display;
-the original peer list was preserved. The real Mac's PIN sheet and streaming
-retest remain pending. See the [verification record](docs/KNOWN-PEER-PIN-HANDOFF.md#windows-verification-record--2026-10-10).
+the original peer list was preserved. The user then reported all five real-Mac
+checks passed: delayed PIN entry, wrong-PIN retry, confirmed Forget, pair-only
+naming, and ordinary Connect/disconnect with physical monitors/layout restored.
+Host logs support delayed pairing, UNPAIR, the Mac name before streaming,
+3024×1964@120 streaming and successful restoration. See the
+[verification record](docs/KNOWN-PEER-PIN-HANDOFF.md#windows-verification-record--2026-10-10).
 
 **Next:**
 
-- [ ] Retest the deployed PIN-entry timeout fix on the real Mac: after local-only
-      Forget, leave the PIN sheet open for 10–15 seconds, then pair. Also check
-      wrong-PIN retry, confirmed Forget, pair-only naming and ordinary Connect /
-      disconnect restoration. Windows checks, deployment and installed-service
-      probe verification passed; see the [handoff](docs/KNOWN-PEER-PIN-HANDOFF.md).
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
-- [ ] Verify pair-only naming on the real Mac and updated Windows host:
-      Pair without Connect, inspect the tray's Forget submenu, and confirm
-      the name persists after a service restart. See the [Mac handoff](host/PAIR-NAME-HANDOFF.md).
+- [ ] Confirm the real Mac's pair-only name persists after a service restart;
+      immediate tray naming passed on 2026-10-10. See the
+      [Mac handoff](host/PAIR-NAME-HANDOFF.md).
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app

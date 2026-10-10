@@ -1,5 +1,14 @@
 # Mac handoff: show the Mac name immediately after Pair
 
+**Completion update, 2026-10-10:** the Mac implementation and wire spec landed;
+host build `ae249f4` was verified and deployed. The user confirmed pair-only
+naming in the PC tray before Connect, delayed PIN entry/retry, Forget, and
+ordinary streaming/disconnect restoration all passed on the real Mac and PC.
+Real-Mac name persistence across a service restart remains unreported. See
+[`KNOWN-PEER-PIN-HANDOFF.md`](../docs/KNOWN-PEER-PIN-HANDOFF.md) for the installed
+hash, Windows checks and supporting log evidence. The sections below retain
+the original host-first handoff and its rollout-time status.
+
 ## Scope and current state
 
 The Windows side is implemented. The user chose host changes plus a Mac-session
