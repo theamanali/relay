@@ -180,16 +180,24 @@ the Mac's name before pairing success; older hosts still pair with the new Mac
 and learn its name on the first stream. See the [wire contract](docs/PROTOCOL.md)
 and [Mac tests](client/README.md#testing). On 2026-10-09, all 99 Swift tests,
 isolated HostConnection/fakehost loopback checks and the Mac release bundle
-passed. Real-hardware verification of this extension remains pending.
+passed. Real Mac-to-PC verification of this extension remains pending.
+
+On 2026-10-10, host commit `ae249f4` passed Windows formatting, 145 unit tests
+and the probe integration test, strict clippy and release build, and was deployed
+with `install-host.ps1 -SkipDriver`. The installed executable matches that build.
+Against the running service, a known probe identity re-paired after a 12-second
+wait, rejected a delayed wrong PIN, then paired on a delayed correct retry.
+Pair-only Unicode naming and immediate UNPAIR passed without requesting a display;
+the original peer list was preserved. The real Mac's PIN sheet and streaming
+retest remain pending. See the [verification record](docs/KNOWN-PEER-PIN-HANDOFF.md#windows-verification-record--2026-10-10).
 
 **Next:**
 
-- [ ] Verify and deploy the normal PIN-entry timeout when re-pairing a Mac the
-      PC still knows. After a local-only Forget, the installed host's five-second timeout
-      closes the PIN sheet; clearing the old entry through the PC tray is the
-      current workaround. The [Windows handoff](docs/KNOWN-PEER-PIN-HANDOFF.md)
-      covers the applied source fix and three added regressions; Windows build,
-      tests, deployment and hardware retest remain pending.
+- [ ] Retest the deployed PIN-entry timeout fix on the real Mac: after local-only
+      Forget, leave the PIN sheet open for 10–15 seconds, then pair. Also check
+      wrong-PIN retry, confirmed Forget, pair-only naming and ordinary Connect /
+      disconnect restoration. Windows checks, deployment and installed-service
+      probe verification passed; see the [handoff](docs/KNOWN-PEER-PIN-HANDOFF.md).
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
@@ -240,8 +248,8 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
-real handshake and pairing. Unit tests (142 Rust plus one opt-in Windows desktop
-test and a probe integration test, 92 Swift),
+real handshake and pairing. Unit tests (145 Rust plus one opt-in Windows desktop
+test and a probe integration test, 102 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)

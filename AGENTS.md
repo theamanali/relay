@@ -97,19 +97,29 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   on the connection queue. Swift tests (102) and isolated real-UnpairTask checks
   (confirmed/busy/timeout/changed key) pass; no host or protocol change.
   A separate host gap was reproduced: after local-only Forget, the PC still
-  knows this key, so `server.rs` leaves the initial request at HELLO_TIMEOUT
-  (5 s). The Mac's PIN sheet is closed by the PC before manual re-pair can
-  complete. Unknown keys get PAIR_TIMEOUT (120 s). Clearing the old entry from
-  the PC tray is the current workaround until the host fix is deployed.
+  knew this key, so `server.rs` left the initial request at HELLO_TIMEOUT
+  (5 s). The PC closed the Mac's PIN sheet before manual re-pair could complete;
+  only unknown keys got PAIR_TIMEOUT (120 s). This is fixed in the installed
+  `ae249f4` build as of 2026-10-10; clearing the PC's entry is no longer needed
+  to obtain the full PIN-entry window.
   The Mac must not send CLIENT_HELLO
   or guess a PIN just to hold that socket open.
   The user initially requested a Windows-session handoff, then authorized the
   source fix. On 2026-10-10 the Mac session moved PAIR_TIMEOUT before every
   client's first encrypted request and added three production-handler loopback
   regressions (known/unknown/busy, six-second PIN delay, durable name storage,
-  display/session preservation). No client or wire change. Windows compilation,
-  tests, deployment and real-Mac retest remain pending; see
-  `docs/KNOWN-PEER-PIN-HANDOFF.md` for the remaining checks.
+  display/session preservation). No client or wire change. Windows verification
+  on 2026-10-10 passed: fmt, 145 unit tests plus the probe integration test (one
+  opt-in desktop test ignored), strict all-target clippy and release build.
+  Elevated `install-host.ps1 -SkipDriver` succeeded; service Running and installed
+  executable SHA-256 matches the release (`EEEEA9E0...B3A5C460`). Installed-service
+  probe checks passed: named pair-only, known-key re-pair after 12 seconds,
+  delayed wrong-PIN rejection and delayed correct retry, immediate UNPAIR.
+  A temporary loopback proxy delayed the unchanged probe's first encrypted
+  request; no CLIENT_HELLO was sent. Only a dedicated temporary identity was
+  paired and then removed; the original peer list was preserved. Real-Mac
+  PIN-sheet/retry/Forget/tray-name and ordinary Connect/disconnect checks remain
+  pending. See `docs/KNOWN-PEER-PIN-HANDOFF.md` for the installed hash and results.
 
 ## How the host and client work (details you need before changing them)
 
