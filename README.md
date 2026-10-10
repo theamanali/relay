@@ -184,11 +184,12 @@ passed. Real-hardware verification of this extension remains pending.
 
 **Next:**
 
-- [ ] Allow the normal PIN-entry timeout when re-pairing a Mac the PC still
-      knows. After a local-only Forget, its five-second initial request timeout
+- [ ] Verify and deploy the normal PIN-entry timeout when re-pairing a Mac the
+      PC still knows. After a local-only Forget, the installed host's five-second timeout
       closes the PIN sheet; clearing the old entry through the PC tray is the
       current workaround. The [Windows handoff](docs/KNOWN-PEER-PIN-HANDOFF.md)
-      includes the prepared patch, regression checks and deployment steps.
+      covers the applied source fix and three added regressions; Windows build,
+      tests, deployment and hardware retest remain pending.
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
