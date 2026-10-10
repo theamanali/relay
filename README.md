@@ -174,14 +174,22 @@ not independently established by that log. Repeat runs and crash recovery remain
 pending; see the
 [reboot and sign-out retest sequence](host/PRELOGIN-RETEST.md).
 
+Pair-only naming is implemented on the host and Mac, with an optional v4
+capability and the name bound into CPace confirmation. An updated host learns
+the Mac's name before pairing success; older hosts still pair with the new Mac
+and learn its name on the first stream. See the [wire contract](docs/PROTOCOL.md)
+and [Mac tests](client/README.md#testing). On 2026-10-09, all 99 Swift tests,
+isolated HostConnection/fakehost loopback checks and the Mac release bundle
+passed. Real-hardware verification of this extension remains pending.
+
 **Next:**
 
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
-- [ ] Pair-only peer name: host support and probe tests are ready; the Mac must
-      send its name during pairing. See the [Mac handoff](host/PAIR-NAME-HANDOFF.md).
-      Current Mac builds still supply the name only on the first streaming connection.
+- [ ] Verify pair-only naming on the real Mac and updated Windows host:
+      Pair without Connect, inspect the tray's Forget submenu, and confirm
+      the name persists after a service restart. See the [Mac handoff](host/PAIR-NAME-HANDOFF.md).
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app

@@ -34,6 +34,7 @@ enum Proto {
     }
 
     static let flagKeyframe: UInt8 = 0x01
+    static let capPairName: UInt8 = 0x01
 
     enum Codec: UInt8 {
         case h264 = 1
@@ -88,6 +89,9 @@ enum Proto {
         let version: UInt16
         let name: String
         let paired: Bool
+        let capabilities: UInt8
+
+        var supportsPairName: Bool { capabilities & Proto.capPairName != 0 }
 
         init?(_ p: Data) {
             guard p.count >= 3 else { return nil }
@@ -96,7 +100,41 @@ enum Proto {
             version = p.be16(at: 0)
             name = String(decoding: p.dropFirst(3).prefix(nameLength), as: UTF8.self)
             paired = p[p.startIndex + 3 + nameLength] != 0
+            capabilities = p.count > 4 + nameLength ? p[p.startIndex + 4 + nameLength] : 0
         }
+    }
+
+    /// PAIR's optional suffix is CPace ADa, including the length byte.
+    /// Used by fakehost too: reject malformed names before attempting CPace.
+    struct PairRequest {
+        let share: Data
+        let ad: Data
+        let name: String?
+
+        init?(_ payload: Data) {
+            guard payload.count >= 32 else { return nil }
+            share = Data(payload.prefix(32))
+            ad = Data(payload.dropFirst(32))
+            if ad.isEmpty {
+                name = nil // legacy v4: empty ADa
+            } else {
+                guard ad.count == 1 + Int(ad[0]),
+                      let name = String(data: ad.dropFirst(), encoding: .utf8) else { return nil }
+                self.name = name
+            }
+        }
+    }
+
+    /// Cap at 255 UTF-8 bytes without splitting a Unicode scalar. Preserve
+    /// the original text for confirmation; the host sanitizes it after proof.
+    static func pairNameAD(_ name: String) -> Data {
+        var bytes = Data()
+        for scalar in name.unicodeScalars {
+            let encoded = Data(String(scalar).utf8)
+            guard bytes.count + encoded.count <= 255 else { break }
+            bytes.append(encoded)
+        }
+        return Data([UInt8(bytes.count)]) + bytes
     }
 
     /// The host's answer to PAIR. Anything it does not spell out (a short

@@ -115,6 +115,34 @@ final class CryptoTests: XCTestCase {
 
     // MARK: records
 
+    /// host/PAIR-NAME-HANDOFF.md and crypto::tests::named_pairing_vector.
+    /// Same Noise and CPace secrets as v4; only the name AD changes the tags.
+    func testNamedPairingVector() throws {
+        let mac = Handshake.initiator(identity: try key(0x11), ephemeral: try key(0x22))
+        let pc = NoiseXX(role: .responder, staticKey: try key(0x33), prologue: Handshake.magic, ephemeral: try key(0x44))
+        _ = try pc.readMessage(try mac.writeMessage())
+        _ = try mac.readMessage(try pc.writeMessage())
+        _ = try pc.readMessage(try mac.writeMessage())
+        XCTAssertEqual(mac.handshakeHash.hex, "78c958b2116d50f7f7e07d8f7334849359c14d6e9d3524f8b091d25d172dfcbb")
+        let ci = CPace.channelIdentifier(clientStatic: try key(0x11).publicKey.rawRepresentation,
+                                         hostStatic: try key(0x33).publicKey.rawRepresentation)
+        let ad = Proto.pairNameAD("Aman’s MacBook Pro")
+        XCTAssertEqual(ad.hex, "14416d616ee2809973204d6163426f6f6b2050726f")
+        let a = try CPaceInitiator(prs: Data("123456".utf8), ci: ci, sid: mac.handshakeHash,
+                                   ad: ad, scalar: Data(repeating: 0x55, count: 32))
+        let request = try XCTUnwrap(Proto.PairRequest(a.share + ad))
+        let b = try CPaceResponder(prs: Data("123456".utf8), ci: ci, sid: pc.handshakeHash,
+                                   peerShare: request.share, peerAD: request.ad, scalar: Data(repeating: 0x66, count: 32))
+        XCTAssertEqual(a.share.hex, "d2ff03377c6866e7910d272a562919d586cc30c289a7e93baa6a11d16ae58c4a")
+        XCTAssertEqual(b.share.hex, "f9d2846618c6c5eba1b22562444d002b263dcea78848303ca2e07715f4044673")
+        XCTAssertEqual(b.tag.hex, "499bc005e3877364ce6002d9fcecf22d02d1a0f76019e9f6f042150add403315")
+        let (isk, tag) = try a.finish(peerShare: b.share, peerTag: b.tag)
+        XCTAssertEqual(isk, b.isk)
+        XCTAssertEqual(isk.hex, "babe000cfe7c4fd314c375fed097aa1d24fe6378e76301176e789efc7d1028bc6b478776897e730bd39f59a00f4229e177eb7237545ba54c9fe9109b3eaab508")
+        XCTAssertEqual(tag.hex, "921c83bc4d09122459355ac523326b048f5bae10859d4584543415d41b946e2d")
+        XCTAssertTrue(b.verify(peerTag: tag))
+    }
+
     private func channelPair(maxPayload: Int = Int(Proto.maxPayload)) -> (SecureChannel, SecureChannel) {
         let key = SymmetricKey(size: .bits256)
         return (SecureChannel(cipher: NoiseCipherState(key: key)),

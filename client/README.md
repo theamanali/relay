@@ -51,6 +51,9 @@ and its key fingerprint.
 - **Pair** (an available PC): enter the 6-digit PIN from the PC's tray icon. The
   PC moves to Paired; nothing is streamed yet. A wrong PIN reopens the sheet,
   and after too many the sheet says how long the PC will refuse them.
+  Updated hosts learn this Mac's computer name immediately after successful
+  pairing, so their Forget submenu can name it before the first stream. Older
+  v4 hosts learn the name on the first Connect.
 - **Connect** (a paired PC; also Return or a double-click): progress shows in the
   footer, the button becomes **Cancel**, and the full-screen window opens with
   the first decoded frame. When the session ends, the list comes back with the
@@ -159,6 +162,7 @@ The picker and session settings are in the app's user defaults.
 
 ```sh
 swift test
+./Tools/test-pair-name.sh
 ```
 
 The unit tests cover:
@@ -169,6 +173,8 @@ The unit tests cover:
   against the vectors in draft-irtf-cfrg-cpace-21, and the field arithmetic
   behind CPace's PIN-to-point map against big-integer reference values;
 - message parsing, record splitting at 65,519 bytes and reassembly;
+- pairing-name capability negotiation, Unicode-safe name truncation, malformed
+  names, the shared named CPace vector and name tampering;
 - the picker's row model, pairing classification and the debouncer that tells a
   PC's goodbye from a cable being unplugged;
 - the pairing-check scheduler and Bonjour reconfirm;
@@ -176,6 +182,14 @@ The unit tests cover:
 - latency statistics and the newest-frame mailbox;
 - offscreen Metal renders of synthetic frames (colour range, orientation,
   letterboxing).
+
+`Tools/test-pair-name.sh` builds fakehost and a small harness using the real
+`HostConnection`. It checks pair-only (named, legacy host, busy host, empty
+name, Unicode truncation, controls and emoji), wrong PIN, rate limit without a fallback retry,
+already-paired, verify-only, UNPAIR and pair-then-stream. Its temporary fixed
+Foundation home keeps identities and pairings isolated from the app's state;
+it asserts that isolation before constructing a client and deletes it on exit.
+No PC, display, installed service or real pairing is touched.
 
 ### `fakehost`: a fake PC
 
@@ -185,7 +199,7 @@ plays one host behaviour per run, so the connect and pairing paths can be
 tested with no PC:
 
 ```sh
-swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift
+swiftc -O -o fakehost Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift
 ./fakehost 8470 busy            # prints the dns-sd line to advertise it
 dns-sd -R "Fake PC" _relay._tcp . 8470 v=4 pk=<hex> pg=<hex>
 ```
@@ -206,6 +220,9 @@ Its PIN is `000000` unless `--pin <digits>` sets one: CPace needs the real PIN o
 both sides. `--paired` makes it claim the Mac is already paired, and
 `--forget`, `--pg <hex>` change the advertised pairing digest to exercise the
 "PC forgot this MacBook" path. The header of the file has worked examples.
+By default it advertises `CAP_PAIR_NAME`, accepts named and legacy PAIR, and
+prints the confirmed name before success. `--legacy-pair` omits the capability
+and rejects extended PAIR, to test a new Mac against an older v4 host.
 
 ### `ctcheck`: timing of the PIN-to-point map
 

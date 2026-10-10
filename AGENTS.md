@@ -14,7 +14,7 @@ piece of ceremony and it is intentional.
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift package, macOS 13+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
-| `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`) |
+| `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
@@ -68,11 +68,18 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   pairings use “Paired MacBook”, and unnamed re-pair preserves an existing name.
   Probe supports `--name` / `--legacy-pair`; isolated probe tests cover named,
   legacy, wrong-PIN and abandoned pairing without touching displays or the service.
-  Mac implementation, `docs/PROTOCOL.md` update and real-Mac verification are
-  pending in the Mac session at the user's request. See `host/PAIR-NAME-HANDOFF.md`
-  for the exact extension and shared named vector. Current Mac builds still send
-  the name only in CLIENT_HELLO; old “paired <IP>” entries need named re-pair or
-  streaming to refresh. Keep this rollout separate from topology work.
+  Mac implementation and `docs/PROTOCOL.md` are now updated: HostConnection
+  negotiates the capability per attempt, binds the Unicode-safe suffix to CPace,
+  and keeps legacy hosts on empty ADa. The shared named vector, malformed names,
+  Unicode boundaries and tampering are covered by Swift tests; fakehost advertises
+  the capability by default and offers `--legacy-pair` for old-host checks.
+  Mac verification on 2026-10-09: `swift test` (99 tests), isolated
+  `Tools/test-pair-name.sh` (pair-only named/legacy/busy/empty/Unicode, wrong PIN,
+  rate limit, already-paired, verify-only, UNPAIR and pair-then-stream), and
+  `./bundle.sh` all passed; the bundle's ad-hoc signature verifies.
+  See `host/PAIR-NAME-HANDOFF.md` for the original handoff. Real-Mac/installed-host
+  verification of the extension remains pending; old “paired <IP>” entries need
+  named re-pair or streaming to refresh. Keep this rollout separate from topology work.
 - The README status table is the source of truth for status; keep it current.
 
 ## How the host and client work (details you need before changing them)
