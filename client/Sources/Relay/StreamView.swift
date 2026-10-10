@@ -5,6 +5,7 @@ import AppKit
 import Foundation
 import QuartzCore
 
+@MainActor
 protocol StreamViewDelegate: AnyObject {
     func streamView(_ v: StreamView, send data: Data)
     func streamViewRequestedExit(_ v: StreamView)

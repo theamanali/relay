@@ -3,7 +3,7 @@
 **Use a MacBook as a 120 Hz monitor for a Windows PC, over one Ethernet cable.**
 
 [![Host: Rust on Windows](https://img.shields.io/badge/host-Rust%20%C2%B7%20Windows-CE422B)](host/)
-[![Client: Swift on macOS](https://img.shields.io/badge/client-Swift%20%C2%B7%20macOS%2013%2B-F05138)](client/)
+[![Client: Swift on macOS](https://img.shields.io/badge/client-Swift%20%C2%B7%20macOS%2014%2B-F05138)](client/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Host CI](https://github.com/theamanali/relay/actions/workflows/host.yml/badge.svg)](https://github.com/theamanali/relay/actions/workflows/host.yml)
 [![Client CI](https://github.com/theamanali/relay/actions/workflows/client.yml/badge.svg)](https://github.com/theamanali/relay/actions/workflows/client.yml)
@@ -23,7 +23,7 @@ deliberately smaller than Sunshine + Moonlight: no game launcher, no settings
 UI, and pairing is one PIN, once.
 
 **Built with:** Rust · Swift · Win32 / DXGI / Direct3D 11 · NVENC · VideoToolbox ·
-Metal · AppKit · Network.framework · Noise · CPace · X25519 / ChaCha20-Poly1305 ·
+Metal · SwiftUI / AppKit · Network.framework · Noise · CPace · X25519 / ChaCha20-Poly1305 ·
 mDNS / Bonjour · Windows services · GitHub Actions
 
 ## Highlights
@@ -147,6 +147,16 @@ were measured and rejected; both are written up in
 
 ## Status
 
+**Platform migration (2026-10-10):** the Mac now uses SwiftUI for the picker,
+settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
+bundle with a macOS 14 minimum (Observation). Metal and hardware decoding are
+required. All 107 Mac unit tests, isolated fakehost checks and the signed local
+release bundle pass on macOS 27.0. Windows NVIDIA enforcement and backend
+removal remain assigned to the PC session; see the
+[Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md). Real-PC regression/latency,
+minimum/latest-stable OS qualification and Developer ID notarization are still
+pending. Older hardware streaming results below predate this UI migration.
+
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
 and NVENC encode at 3024×1964 @ 120 in exclusive-fullscreen games; pairing,
@@ -211,8 +221,8 @@ Host logs support delayed pairing, UNPAIR, the Mac name before streaming,
 
 ## Getting started
 
-You need a Windows 11 PC with an NVIDIA GPU (AMD and Intel untested), a
-Mac on macOS 13 or later, and an Ethernet cable (a USB-C Ethernet adapter on the
+You need a Windows 11 PC with an NVIDIA GPU (the supported target), a
+Apple silicon Mac on macOS 14 or later, and an Ethernet cable (a USB-C Ethernet adapter on the
 Mac is fine; no crossover cable or switch needed).
 
 **Windows** (Rust with the MSVC toolchain), from the repo root:
@@ -241,7 +251,7 @@ troubleshooting, are [host/README.md](host/README.md) and
 | path | what |
 |---|---|
 | [`host/`](host/) | Windows host (Rust): virtual display control, capture and encode, Windows service and tray, protocol server |
-| [`client/`](client/) | macOS client (Swift, AppKit): discovery, pairing, decode, Metal presenter, input |
+| [`client/`](client/) | macOS client (SwiftUI, AppKit stream adapter): discovery, pairing, decode, Metal presenter, input |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | wire protocol spec, the contract both sides implement |
 | [`docs/LATENCY.md`](docs/LATENCY.md) | how the latency was measured and tuned, including what didn't work |
 | [`tools/`](tools/) | Windows installer and driver settings template |
@@ -249,7 +259,7 @@ troubleshooting, are [host/README.md](host/README.md) and
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
 real handshake and pairing. Unit tests (145 Rust plus one opt-in Windows desktop
-test and a probe integration test, 102 Swift),
+test and a probe integration test, 107 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)
@@ -257,7 +267,8 @@ on every push that touches that side.
 
 ## Known limitations
 
-- Only NVIDIA encoding is tested. AMD (AMF) and Intel (Quick Sync) go through
+- NVIDIA is the supported Windows target. Pending the Windows migration, legacy
+  AMD (AMF) and Intel (Quick Sync) paths still go through
   `ffmpeg` and are implemented but unverified, as is
   [parsec-vdd](https://github.com/nomi-san/parsec-vdd) as an alternative
   display driver.

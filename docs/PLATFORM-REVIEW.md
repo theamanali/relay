@@ -1,7 +1,7 @@
 # NVIDIA, Apple silicon and SwiftUI review
 
-Reviewed 2026-10-10 at source commit `1d0118e`. This is a proposed implementation
-plan, not a record of completed platform or UI changes.
+Reviewed 2026-10-10 at source commit `1d0118e`. The review below records the original plan;
+implementation progress and remaining acceptance gates are recorded at the end.
 
 The requested policy is NVIDIA-only on Windows and Apple-silicon-only on Mac,
 with SwiftUI wherever practical. Develop and fully test on the latest stable
@@ -298,3 +298,46 @@ The Mac UI/state migration is the largest change. NVIDIA enforcement is a
 moderate host change; platform metadata cleanup is small. Release qualification
 must remain a separate gate because passing unit tests does not prove hardware
 compatibility or full-screen input/presentation behavior.
+
+## Implementation status
+
+Mac implementation, 2026-10-10:
+
+- Swift 6 language mode; arm64-only app, package and bundle minimum macOS 14
+  because the UI adopts Observation. Build and bundle use the same floor;
+  the bundled binary separately declares the actual build SDK (27.0 locally).
+- SwiftUI App, observable picker state, rows/details, settings, PIN sheet and
+  commands. The native stream window/input/Metal surface remains outside the
+  SwiftUI view hierarchy. No new compositing layer covers the stream.
+- SessionPipeline separates main-actor control events from network/decoder
+  frames. Cancellation serializes decoder reset and drops retired connections;
+  frame notifications check decoder generation before presenting UI.
+- Mandatory Metal and hardware VideoToolbox decoding, hardware-derived codec
+  advertisement and session-visible decoder initialization failures. Removed
+  the AVSampleBufferDisplayLayer alternative. No wire-version or state-file
+  changes, so existing identities and pairings survive.
+- Serialized pairing-file transactions; VerifyTask timeout and replies now
+  share the connection queue, matching UnpairTask's one-completion behavior.
+- arm64 release/signature checks, fatal signing errors and opt-in Developer ID /
+  notarytool profile support. CI matrix covers macOS 14 and GitHub's latest
+  arm64 image (actual OS/toolchain printed; latest image is not OS qualification).
+- Verified locally: 107 unit tests, real-HostConnection/fakehost integration,
+  release build and ad-hoc signature on Apple silicon/macOS 27.0, and manual
+  picker discovery/settings/rename cancellation. Isolated bundled-app UI tests
+  passed row selection, wrong-PIN retry, spaced-PIN paste/autosubmit, pair-only,
+  Forget and dismissal of a PIN sheet when the fake host closes. The initial
+  row selection bug and duplicate View menu were fixed and retested. Fixed-host
+  mode also showed the SwiftUI PIN sheet and exited cleanly on Cancel.
+
+Not complete: NVIDIA enforcement/capability preflight and host backend/driver
+cleanup. `AGENTS.md` assigns these modules and Windows validation to the PC
+session. Execute [the Windows handoff](WINDOWS-PLATFORM-HANDOFF.md); fallback
+removal remains gated on native failure/recovery and display restoration.
+
+Release qualification is still pending: macOS 14 hardware and latest stable
+27.0.1, 60 Hz Air/120 Hz Pro/external screen, real-PC pairing/Forget/reconnect,
+input release on focus loss, sleep/wake/mode changes, upgrade/network permission
+behavior and same-settings latency comparison. The present Mac runs 27.0.
+Developer ID signing/notarization is implemented as an opt-in build path but
+has not run without the user's identity and keychain profile. No release has
+been published and no claim of the full hardware matrix is made.

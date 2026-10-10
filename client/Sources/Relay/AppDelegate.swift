@@ -3,6 +3,7 @@
 import AppKit
 import CoreMedia
 import Network
+import SwiftUI
 
 /// Borderless windows must opt in to keyboard focus; ordering one in front
 /// alone does not make AppKit deliver keyboard events to its content view.
@@ -11,129 +12,17 @@ final class StreamWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-struct LaunchOptions {
-    var fixedHost: NWEndpoint? = nil
-    var maxFPS = 120
-    var scale = 1.0
-    /// Whether --max-fps / --scale were given; they override the remembered mode.
-    var maxFPSGiven = false
-    var scaleGiven = false
-    var modifiers: ModifierMapping = .mac
-    var modifiersGiven = false
-    var noInput = false
-    var pin: String? = nil
-    var showLatency = false
-    var renderer = "metal"
-    var metalVSync = false
-    var bitrateMbps = VideoBitrate.defaultValue
-    var bitrateGiven = false
-
-    static func parse(_ args: [String]) -> LaunchOptions {
-        var o = LaunchOptions()
-        var it = args.dropFirst().makeIterator()
-        while let a = it.next() {
-            switch a {
-            case "--host":
-                // host:port or [v6]:port; skips Bonjour.
-                if let v = it.next() {
-                    let (host, port) = splitHostPort(v)
-                    o.fixedHost = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? .init(rawValue: Proto.defaultPort)!)
-                }
-            case "--max-fps":
-                if let v = it.next(), let n = Int(v) { o.maxFPS = n; o.maxFPSGiven = true }
-            case "--scale":
-                if let v = it.next(), let s = Double(v) { o.scale = s; o.scaleGiven = true }
-            case "--modifiers":
-                if let v = it.next(), let m = ModifierMapping(rawValue: v) {
-                    o.modifiers = m
-                    o.modifiersGiven = true
-                }
-            case "--no-input":
-                o.noInput = true
-            case "--pin":
-                if let v = it.next() { o.pin = v }
-            case "--latency-stats":
-                o.showLatency = true
-            case "--bitrate":
-                guard let value = it.next(), let bitrate = Int(value),
-                      (VideoBitrate.minimum...VideoBitrate.maximum).contains(bitrate) else {
-                    print("--bitrate requires a whole number from 1 through 1000 Mbps")
-                    exit(2)
-                }
-                o.bitrateMbps = bitrate
-                o.bitrateGiven = true
-            case "--renderer":
-                guard let value = it.next(), ["metal", "avsbdl"].contains(value) else {
-                    print("--renderer requires metal or avsbdl")
-                    exit(2)
-                }
-                o.renderer = value
-            case "--metal-vsync":
-                o.metalVSync = true
-            case "--render-icons":
-                // Host tray icons from the picker's glyph; see host/assets/README.md.
-                guard let dir = it.next() else {
-                    print("--render-icons requires a directory")
-                    exit(2)
-                }
-                exit(IconExport.run(into: dir))
-            case "--render-app-icon":
-                // AppIcon.icon and Relay.icns for bundle.sh; see client/Assets.
-                guard let dir = it.next() else {
-                    print("--render-app-icon requires a directory")
-                    exit(2)
-                }
-                exit(IconExport.renderAppIcon(into: dir))
-            case "--help", "-h":
-                print("""
-                Relay client
-                  --host <addr[:port]>       connect directly instead of browsing Bonjour
-                  --max-fps <n>              cap the requested refresh rate (default 120)
-                  --scale <f>                request f x native pixel size (0.75 or 0.5 keep the aspect)
-                                             (the picker offers both and remembers the last choice;
-                                             these flags override it for this launch)
-                  --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
-                  --no-input                 view only (toggle control with ⌃⌥⌘K)
-                  --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
-                  --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
-                  --bitrate <1...1000>       request this video bitrate in Mbps (default 120)
-                  --renderer metal|avsbdl    presentation backend (default metal)
-                  --metal-vsync              enable Metal VSync (default off; avoids tearing)
-                  --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
-                  --render-app-icon <dir>    write the Mac app icon (AppIcon.icon, Relay.icns) and exit
-                Exit with ⌃⌥⌘Q.
-                """)
-                exit(0)
-            default:
-                break
-            }
-        }
-        return o
-    }
-
-    private static func splitHostPort(_ s: String) -> (String, UInt16) {
-        if s.hasPrefix("["), let close = s.firstIndex(of: "]") {
-            let host = String(s[s.index(after: s.startIndex)..<close])
-            let rest = s[s.index(after: close)...]
-            let port = rest.hasPrefix(":") ? UInt16(rest.dropFirst()) ?? Proto.defaultPort : Proto.defaultPort
-            return (host, port)
-        }
-        let parts = s.split(separator: ":")
-        if parts.count == 2, let port = UInt16(parts[1]) {
-            return (String(parts[0]), port)
-        }
-        return (s, Proto.defaultPort)
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate, StreamViewDelegate, NSWindowDelegate, HostPickerDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NSWindowDelegate, HostPickerDelegate {
     private let options: LaunchOptions
     private var window: NSWindow!
     private var view: StreamView!
-    private let renderer: VideoRenderer
+    private var renderer: VideoRenderer!
     private var connection: HostConnection?
+    private lazy var pipeline = SessionPipeline(owner: self, renderer: renderer, stats: latencyStats)
     private let browser = HostBrowser()
     private var picker: HostPickerWindowController?
+    let pickerModel = PickerModel()
     /// The host of the current or last session, for reselecting it in the picker.
     private var currentHost: DiscoveredHost?
     /// Set when the host refused a PIN from the picker: the re-dial's PIN
@@ -143,9 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// If that connection ends first (including an older host reporting BUSY
     /// before PAIR, or giving up waiting) the prompt is closed: a PIN typed
     /// into it would go nowhere.
-    private var pinPrompt: (alert: NSAlert, connection: HostConnection)?
-    /// The modal (--host) prompt was closed by the connection, not the user.
-    private var pinPromptEndedByConnection = false
+    private var pinPrompt: (prompt: PINPrompt, connection: HostConnection)?
+    private var pinWindow: NSWindow?
     private var kioskActive = false
     /// Held while the stream window is up: without it the Mac's display
     /// sleeps and the screen saver starts on top of the picture as soon as
@@ -171,14 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// Remembered options, with this launch's flags applied on top.
     private var prefs = SessionPrefs()
 
+    override convenience init() { self.init(options: LaunchOptions.parse(CommandLine.arguments)) }
+
     init(options: LaunchOptions) {
         self.options = options
-        renderer = VideoRenderer(renderer: options.renderer, metalVSync: options.metalVSync)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainMenu.install()
         // A `swift run` has no bundle and so no icon: give the Dock the
         // flattened drawing. Never for Relay.app — setting this overrides
         // the tile, and the bundle's icon is what the system renders for the
@@ -187,16 +75,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
            Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil {
             NSApp.applicationIconImage = IconExport.appIcon()
         }
+        do { renderer = try VideoRenderer(metalVSync: options.metalVSync) }
+        catch {
+            let alert = NSAlert()
+            alert.messageText = "Relay could not start"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         view = StreamView(frame: screen.frame)
         view.delegate = self
         prefs = SessionPrefs.load().overridden(by: options)
+        pickerModel.prefs = prefs
         applyPrefs()
         view.attach(videoLayer: renderer.layer)
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
-        renderer.firstFrameHandler = { [weak self] in
+        renderer.firstFrameHandler = { [weak self] generation in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.renderer.isCurrent(generation: generation) else { return }
                 self.view.status = ""
                 if let pending = self.pendingSession, !self.kioskActive {
                     self.pendingSession = nil
@@ -207,11 +105,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
                 }
             }
         }
-        renderer.frameSizeHandler = { [weak self] size in
-            DispatchQueue.main.async { self?.view.streamSize = size }
+        renderer.frameSizeHandler = { [weak self] generation, size in
+            DispatchQueue.main.async {
+                guard let self, self.renderer.isCurrent(generation: generation) else { return }
+                self.view.streamSize = size
+            }
         }
-        renderer.frameDecodedHandler = { [weak self] sequence, milliseconds in
-            self?.latencyStats.recordFrame(
+        let stats = latencyStats
+        renderer.frameDecodedHandler = { sequence, milliseconds in
+            stats.recordFrame(
                 sequence: sequence,
                 decodeMilliseconds: milliseconds
             )
@@ -236,8 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         exitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if StreamView.isLatencyHotkey(event) {
-                self.view.latencyVisible.toggle()
-                self.refreshLatencyOverlay()
+                self.prefs.showLatency.toggle()
+                self.prefs.save()
+                self.pickerModel.prefs = self.prefs
+                self.applyPrefs()
                 return nil
             }
             if StreamView.isControlHotkey(event) {
@@ -249,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             return nil
         }
         latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.refreshLatencyOverlay()
+            Task { @MainActor [weak self] in self?.refreshLatencyOverlay() }
         }
 
         if let fixed = options.fixedHost {
@@ -298,28 +202,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     // MARK: picker <-> kiosk
 
-    private func showPicker() {
-        if picker == nil {
-            let p = HostPickerWindowController()
-            p.pickerDelegate = self
-            p.window?.delegate = self
-            picker = p
-            let screen = p.window?.screen ?? NSScreen.main ?? NSScreen.screens[0]
-            configurePicker(for: screen, initial: initialMode(for: screen))
-            p.onModeChange = { mode in mode.save() }
-            p.prefs = prefs
-            p.onPrefsChange = { [weak self] prefs in
-                guard let self else { return }
-                self.prefs = prefs
-                prefs.save()
-                self.applyPrefs()
-            }
-            // Display plugged/unplugged or the window dragged to another
-            // screen: offer that screen's sizes and rates.
-            screenObserver = NotificationCenter.default.addObserver(
-                forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-            ) { [weak self] _ in self?.pickerScreenChanged() }
+    func attachPickerWindow(_ window: NSWindow) {
+        guard picker == nil else { return }
+        let p = HostPickerWindowController(window: window, model: pickerModel)
+        p.pickerDelegate = self
+        window.delegate = self
+        picker = p
+        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        configurePicker(for: screen, initial: initialMode(for: screen))
+        p.onModeChange = { mode in mode.save() }
+        p.prefs = prefs
+        p.onPrefsChange = { [weak self] prefs in
+            guard let self else { return }
+            self.prefs = prefs
+            prefs.save()
+            self.applyPrefs()
         }
+        p.update(hosts: latestHosts)
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in Task { @MainActor [weak self] in self?.pickerScreenChanged() } }
+        if options.fixedHost != nil || kioskActive { window.orderOut(nil); pickerModel.pickerActive = false }
+    }
+
+    private func showPicker() {
+        pickerModel.pickerActive = true
         picker?.showWindow(nil)
         picker?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -362,22 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func picker(_ p: HostPickerWindowController, forget host: DiscoveredHost) {
-        guard unpairTask == nil, let window = p.window else { return }
-        guard let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else {
-            p.flash("\(SessionText.shortName(host.name)) isn't paired")
-            return
-        }
-        let shown = ClientState.nicknames()[key] ?? host.name
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Are you sure you want to forget “\(shown)”?"
-        alert.informativeText = "Your MacBook will no longer be paired with this PC. To connect again, you’ll need to enter its PIN."
-        alert.addButton(withTitle: "Forget").hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.forget(host: host, key: key, picker: p)
-        }
+        guard unpairTask == nil,
+              let key = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts()) else { return }
+        forget(host: host, key: key, picker: p)
     }
 
     private func applyPrefs() {
@@ -417,10 +311,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     }
 
     func pickerDidCancelConnect(_ p: HostPickerWindowController) {
+        if let connection { dismissPINPrompt(for: connection) }
         connection?.stop()
+        pipeline.deactivate()
         connection = nil
         pendingSession = nil
-        renderer.reset()
+        pipeline.reset()
         p.connecting = false
         p.status = ""
         checkPairings()
@@ -484,12 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// the PC's remaining pairing state is unknown.
     private func explainHostSideForget(host: String, because: String, detail: String? = nil,
                                        fingerprint: String, on p: HostPickerWindowController) {
-        guard let window = p.window else { return }
-        let alert = NSAlert()
-        alert.messageText = "“\(host)” \(because)."
-        alert.informativeText = SessionText.hostSideForgetHelp(detail: detail, fingerprint: fingerprint)
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window) { _ in }
+        p.model.notice = .init(title: "“\(host)” \(because).",
+                               message: SessionText.hostSideForgetHelp(detail: detail, fingerprint: fingerprint))
     }
 
     /// Ask one known host at a time whether it still has this Mac paired,
@@ -541,6 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
 
     private func enterKiosk(on screen: NSScreen, mode: StreamMode) {
         kioskActive = true
+        pickerModel.pickerActive = false
         window.setFrame(screen.frame, display: false)
         view.status = pendingSession == nil && options.fixedHost != nil
             ? "Starting \(mode.label(native: Self.nativePixelSize(of: screen)))…"
@@ -563,9 +456,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     /// so Return reconnects.
     private func leaveKiosk(reason: String) {
         kioskActive = false
+        if let connection { dismissPINPrompt(for: connection) }
         connection?.stop()
+        pipeline.deactivate()
         connection = nil
-        renderer.reset()
+        pipeline.reset()
         view.releaseAllInput()
         view.streamSize = .zero
         window.orderOut(nil)
@@ -606,7 +501,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
             view.status = "Cannot create this MacBook's identity key: \(error.localizedDescription)"
             return
         }
-        c.delegate = self
+        c.delegate = pipeline
+        pipeline.activate(c)
         connection = c
         c.start()
     }
@@ -640,8 +536,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         }
         latencyTimer?.invalidate()
         latencyTimer = nil
-        view.releaseAllInput()
+        view?.releaseAllInput()
         connection?.stop()
+        browser.stop()
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        if let keepAwake { ProcessInfo.processInfo.endActivity(keepAwake) }
         setCursorHidden(false)
     }
 
@@ -650,7 +549,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
     // MARK: window focus -> cursor / stuck keys
 
     func windowDidBecomeKey(_ notification: Notification) {
+        if (notification.object as? NSWindow) === picker?.window { pickerModel.pickerActive = true }
         guard (notification.object as? NSWindow) === window else { return }
+        pickerModel.pickerActive = false
         window.makeFirstResponder(view)
         setCursorHidden(true)
     }
@@ -672,188 +573,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate, HostConnectionDelegate
         if hidden { NSCursor.hide() } else { NSCursor.unhide() }
     }
 
-    // MARK: HostConnectionDelegate (called on the connection queue)
+    // MARK: Control events forwarded to the main actor by SessionPipeline
 
     func connection(_ c: HostConnection, didChangeStatus status: String) {
-        DispatchQueue.main.async {
-            guard self.connection === c else { return }
-            if self.kioskActive {
-                self.view.status = status
-            } else if let shown = SessionText.footerStatus(status, hostName: self.currentHostLabel) {
-                self.picker?.status = shown
-            }
+        guard self.connection === c else { return }
+        if self.kioskActive {
+            self.view.status = status
+        } else if let shown = SessionText.footerStatus(status, hostName: self.currentHostLabel) {
+            self.picker?.status = shown
         }
     }
 
-    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
-        DispatchQueue.main.async {
-            guard self.connection === c else {
-                completion(nil)
-                return
-            }
-            // Shaped like Apple's verification-code sheet: six boxes that
-            // submit on the last digit; Pair only as the Return fallback.
-            let alert = NSAlert()
-            alert.messageText = "Enter the PIN for “\(host)”"
-            alert.informativeText = self.pinError ?? "A pairing PIN is shown by Relay on the PC. Enter it to continue."
-            self.pinError = nil
-            let pair = alert.addButton(withTitle: "Pair")
-            pair.isEnabled = false
-            alert.addButton(withTitle: "Cancel")
-
-            let field = PINEntryView()
-            field.onChange = { pair.isEnabled = $0.count == PINEntryView.length }
-            field.onComplete = { _ in pair.performClick(nil) }
-            let check = NSTextField(labelWithString: "Fingerprint \(fingerprint)")
-            check.font = Style.Font.caption
-            check.textColor = .secondaryLabelColor
-            let stack = NSStackView(views: [field, check])
-            stack.orientation = .vertical
-            stack.alignment = .centerX
-            stack.spacing = Style.Space.s
-            stack.edgeInsets = NSEdgeInsets(top: Style.Space.xs, left: 0, bottom: 0, right: 0)
-            stack.frame.size = stack.fittingSize
-            alert.accessoryView = stack
-            alert.window.initialFirstResponder = field
-
-            self.pinPrompt = (alert, c)
-            if !self.kioskActive, let pickerWindow = self.picker?.window, pickerWindow.isVisible {
-                // Connecting from the list: ask as a sheet on it.
-                alert.beginSheetModal(for: pickerWindow) { response in
-                    if self.pinPrompt?.alert === alert { self.pinPrompt = nil }
-                    guard self.connection === c else { return completion(nil) }
-                    guard response == .alertFirstButtonReturn else { return completion(nil) }
-                    completion(field.code)
-                }
-                return
-            }
-
-            // --host mode: runModal() pins the alert to the modal-panel level,
-            // which is below our kiosk window, so step out of kiosk while it is up.
-            let kioskLevel = self.window.level
-            self.window.level = .normal
+    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String,
+                    completion: @escaping @Sendable (String?) -> Void) {
+        guard connection === c else { completion(nil); return }
+        let prompt = PINPrompt(host: host, fingerprint: fingerprint,
+                               explanation: pinError ?? "Enter the six-digit PIN shown by Relay on the PC.") { [weak self] pin in
+            guard let self, self.connection === c else { completion(nil); return }
+            self.dismissPINPrompt(for: c)
+            completion(pin)
+            if pin == nil, self.options.fixedHost != nil { NSApp.terminate(nil) }
+        }
+        pinError = nil
+        pinPrompt = (prompt, c)
+        if let picker, options.fixedHost == nil {
+            picker.model.pinPrompt = prompt
+        } else {
+            // Fixed-host mode uses the same SwiftUI prompt in a native sheet.
+            window.level = .normal
             NSApp.presentationOptions = []
-            self.setCursorHidden(false)
-            NSApp.activate(ignoringOtherApps: true)
-            self.pinPromptEndedByConnection = false
-            let response = alert.runModal()
-            let endedByConnection = self.pinPromptEndedByConnection
-            if self.pinPrompt?.alert === alert { self.pinPrompt = nil }
-
-            self.window.level = kioskLevel
-            NSApp.presentationOptions = [.hideDock, .hideMenuBar]
-            self.window.makeKeyAndOrderFront(nil)
-            self.window.makeFirstResponder(self.view)
-            self.setCursorHidden(true)
-            guard response == .alertFirstButtonReturn else {
-                // Cancel means "let me out": the connection ends with
-                // "pairing cancelled", which returns to the picker, or quits
-                // in --host mode where there is no list to go back to. A
-                // prompt the connection closed under the user is neither;
-                // --host mode re-dials and asks again.
-                completion(nil)
-                if self.options.fixedHost != nil, !endedByConnection { NSApp.terminate(nil) }
-                return
-            }
-            completion(field.code)
+            setCursorHidden(false)
+            let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.contentView = NSHostingView(rootView: PINPromptView(prompt: prompt))
+            sheet.isReleasedWhenClosed = false
+            pinWindow = sheet
+            window.beginSheet(sheet)
         }
     }
 
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
         guard connection === c else { return }
-        latencyStats.reset()
-        renderer.streamDidStart(stream)
-        DispatchQueue.main.async {
-            guard self.connection === c else { return }
-            if let pending = self.pendingSession, !self.kioskActive {
-                self.window.setFrame(pending.screen.frame, display: false)
-                self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
-            } else {
-                self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
-            }
-            self.view.streamSize = self.renderer.streamSize
+        if let pending = self.pendingSession, !self.kioskActive {
+            self.window.setFrame(pending.screen.frame, display: false)
+            self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
+        } else {
+            self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
+        self.view.streamSize = CGSize(width: stream.width, height: stream.height)
     }
 
-    func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data]) {
-        guard connection === c else { return }
-        renderer.setParameterSets(parameterSets)
-    }
-
-    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {
-        guard connection === c else { return }
-        renderer.enqueue(
-            frame: nalUnits,
-            keyframe: keyframe,
-            sequence: sequence,
-            receivedAt: receivedAt
-        )
-    }
-
-    func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {
-        guard connection === c else { return }
-        latencyStats.record(timing)
-    }
-
-    /// Close the PIN prompt that belongs to `c`, whose connection is gone:
-    /// the sheet's handler sees Cancel and the answer is dropped as stale.
     private func dismissPINPrompt(for c: HostConnection) {
-        guard let prompt = pinPrompt, prompt.connection === c else { return }
+        guard let current = pinPrompt, current.connection === c else { return }
+        current.prompt.invalidate()
         pinPrompt = nil
-        let sheet = prompt.alert.window
-        if let parent = sheet.sheetParent {
-            parent.endSheet(sheet, returnCode: .cancel)
-        } else if NSApp.modalWindow === sheet {
-            pinPromptEndedByConnection = true
-            NSApp.abortModal()
+        picker?.model.pinPrompt = nil
+        if let sheet = pinWindow {
+            window.endSheet(sheet)
+            sheet.orderOut(nil)
+            pinWindow = nil
+            if kioskActive {
+                window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
+                NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(view)
+                setCursorHidden(true)
+            }
         }
     }
 
-    func connectionDidEnd(_ c: HostConnection, reason: String) {
-        DispatchQueue.main.async {
-            guard self.connection === c else { return }
-            self.dismissPINPrompt(for: c)
-            self.renderer.reset()
-            self.view.releaseAllInput()
-            self.view.status = "Disconnected: \(reason)"
-            guard self.options.fixedHost == nil else { return }
-            if self.kioskActive {
-                self.leaveKiosk(reason: SessionText.ended(
-                    reason,
-                    streamed: true,
-                    bitrateMbps: c.activeBitrateMbps
-                ))
-            } else if let p = self.picker {
-                // The attempt is over: nothing below sends on `c` again.
-                self.connection = nil
-                self.pendingSession = nil
-                p.connecting = false
-                if !c.everConnected, let host = self.currentHost {
-                    // Nobody took the socket: the row may be a stale Bonjour
-                    // entry for a PC that went away without a goodbye. Have
-                    // mDNSResponder re-check it, so it leaves the list now
-                    // rather than when its TTL runs out.
-                    BonjourReconfirm.reconfirm(host)
-                }
-                if c.pinRejected, self.options.pin == nil, let host = self.currentHost {
-                    // The host closes after a refusal, so trying again is a new
-                    // connection; keep the sheet's flow, not the footer's.
-                    self.pinError = c.pairRetryAfter.map {
-                        "Too many wrong PINs. Try again in \(SessionText.retryWait(seconds: $0))."
-                    } ?? "That PIN wasn’t correct. Check the PIN shown by Relay on the PC and try again."
-                    self.picker(p, didChoose: host)
-                    return
-                }
-                if c.pairingCompleted {
-                    p.flash("Paired with \(self.currentHostLabel)")
-                    if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }
-                } else {
-                    p.flash(SessionText.ended(reason, streamed: false, bitrateMbps: c.activeBitrateMbps))
-                }
-                // Pairing, or a host that forgot us, changes the split.
-                p.reloadPairing()
-                self.checkPairings()
+    func connectionDidEnd(_ c: HostConnection, reason: String, outcome: ConnectionOutcome) {
+        guard self.connection === c else { return }
+        self.dismissPINPrompt(for: c)
+        self.pipeline.reset()
+        self.view.releaseAllInput()
+        self.view.status = "Disconnected: \(reason)"
+        guard self.options.fixedHost == nil else { return }
+        if self.kioskActive {
+            self.leaveKiosk(reason: SessionText.ended(
+                reason,
+                streamed: true,
+                bitrateMbps: outcome.activeBitrateMbps
+            ))
+        } else if let p = self.picker {
+            // The attempt is over: nothing below sends on `c` again.
+            self.connection = nil
+            self.pendingSession = nil
+            p.connecting = false
+            if !outcome.everConnected, let host = self.currentHost {
+                // Nobody took the socket: the row may be a stale Bonjour
+                // entry for a PC that went away without a goodbye. Have
+                // mDNSResponder re-check it, so it leaves the list now
+                // rather than when its TTL runs out.
+                BonjourReconfirm.reconfirm(host)
             }
+            if outcome.pinRejected, self.options.pin == nil, let host = self.currentHost {
+                // The host closes after a refusal, so trying again is a new
+                // connection; keep the sheet's flow, not the footer's.
+                self.pinError = outcome.pairRetryAfter.map {
+                    "Too many wrong PINs. Try again in \(SessionText.retryWait(seconds: $0))."
+                } ?? "That PIN wasn’t correct. Check the PIN shown by Relay on the PC and try again."
+                self.picker(p, didChoose: host)
+                return
+            }
+            if outcome.pairingCompleted {
+                p.flash("Paired with \(self.currentHostLabel)")
+                if let host = self.currentHost { p.preselect(key: host.publicKey, name: host.name) }
+            } else {
+                p.flash(SessionText.ended(reason, streamed: false, bitrateMbps: outcome.activeBitrateMbps))
+            }
+            // Pairing, or a host that forgot us, changes the split.
+            p.reloadPairing()
+            self.checkPairings()
         }
     }
 

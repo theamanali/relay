@@ -5,6 +5,7 @@
 
 import CryptoKit
 import CoreMedia
+import VideoToolbox
 import Foundation
 import Network
 import dnssd
@@ -13,7 +14,7 @@ protocol HostConnectionDelegate: AnyObject {
     func connection(_ c: HostConnection, didChangeStatus status: String)
     /// A host we have not paired with (or that forgot us) needs the PIN it
     /// displays. Call `completion(nil)` to give up.
-    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void)
+    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping @Sendable (String?) -> Void)
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart)
     func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data])
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime)
@@ -21,7 +22,11 @@ protocol HostConnectionDelegate: AnyObject {
     func connectionDidEnd(_ c: HostConnection, reason: String)
 }
 
-final class HostConnection {
+/// Mutable transport state is confined to `queue`. Configure the delegate before
+/// start; inspect outcome properties only from delegate callbacks on that queue.
+/// Public start/stop/send methods enqueue their work, so UI owners hold this
+/// reference only as an identity token and command endpoint.
+final class HostConnection: @unchecked Sendable {
     struct Options {
         var endpoint: NWEndpoint
         /// Interface to pin the connection to (the cable, when the host was seen on one).
@@ -75,6 +80,7 @@ final class HostConnection {
     private var hostKey = Data()
     /// Noise's handshake hash: CPace binds the PIN exchange to it.
     private var handshakeHash = Data()
+    private var handshake: NoiseXX?
     /// SERVER_HELLO has arrived (the handshake timeout runs until it does).
     private var greeted = false
     private var supportsPairName = false
@@ -120,6 +126,18 @@ final class HostConnection {
         self.serviceName = options.serviceName
         self.activeBitrateMbps = options.requestedBitrateMbps
         self.identity = try ClientState.identity()
+    }
+
+    static var hardwareCodecs: UInt8 {
+        (VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC) ? Proto.Codec.hevc.bit : 0)
+        | (VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? Proto.Codec.h264.bit : 0)
+    }
+
+    func fail(_ reason: String) {
+        queue.async { [self] in
+            guard !stopped, connection != nil else { return }
+            finish(reason)
+        }
     }
 
     // MARK: lifecycle
@@ -315,6 +333,7 @@ final class HostConnection {
     private func startHandshake(_ c: NWConnection, attempt: UInt64) {
         guard isCurrent(c, attempt: attempt) else { return }
         let noise = Handshake.initiator(identity: identity)
+        handshake = noise
         queue.asyncAfter(deadline: .now() + Self.handshakeTimeout) { [weak self] in
             guard let self, self.isCurrent(c, attempt: attempt), !self.greeted else { return }
             self.finish("the PC didn't answer", from: c, attempt: attempt)
@@ -325,7 +344,8 @@ final class HostConnection {
             return finish("handshake failed: \(error.localizedDescription)", from: c, attempt: attempt)
         }
         readFrame(c, attempt: attempt) { [weak self] body in
-            guard let self, self.isCurrent(c, attempt: attempt) else { return }
+            guard let self, self.isCurrent(c, attempt: attempt), let noise = self.handshake else { return }
+            defer { self.handshake = nil }
             do {
                 guard body.count == Handshake.message2Length else {
                     throw CryptoError.badHello("not a Relay v4 handshake (msg2 of \(body.count) bytes)")
@@ -412,9 +432,10 @@ final class HostConnection {
         pairing = true
         let fp = fingerprint(hostKey)
         let host = serviceName.isEmpty ? fp : serviceName
-        let deliver: (String?) -> Void = { [weak self] pin in
-            self?.queue.async {
-                guard let self, self.isCurrent(c, attempt: attempt) else { return }
+        let deliver: @Sendable (String?) -> Void = { [weak self] pin in
+            guard let self else { return }
+            self.queue.async {
+                guard self.isCurrent(c, attempt: attempt) else { return }
                 guard let pin, !pin.isEmpty else {
                     self.finish("pairing cancelled")
                     return
@@ -460,13 +481,17 @@ final class HostConnection {
     }
 
     private func sendClientHello() {
+        guard Self.hardwareCodecs != 0 else {
+            finish("This Mac has no supported hardware H.264 or HEVC decoder")
+            return
+        }
         let hello = Proto.clientHello(
             width: options.requestedWidth,
             height: options.requestedHeight,
             refresh: options.requestedRefresh,
             bitrateMbps: options.requestedBitrateMbps,
             wantsInput: options.wantsInput,
-            codecs: Proto.Codec.hevc.bit | Proto.Codec.h264.bit,
+            codecs: Self.hardwareCodecs,
             name: options.clientName
         )
         sendRaw(hello)
@@ -477,7 +502,7 @@ final class HostConnection {
 
     /// Deliver one frame body: from the buffer if it is already there,
     /// otherwise after the next read. Used for the cleartext msg2.
-    private func readFrame(_ c: NWConnection, attempt: UInt64, _ handler: @escaping (Data) -> Void) {
+    private func readFrame(_ c: NWConnection, attempt: UInt64, _ handler: @escaping @Sendable (Data) -> Void) {
         guard isCurrent(c, attempt: attempt) else { return }
         do {
             if let body = try reader.next() {
@@ -498,7 +523,7 @@ final class HostConnection {
     /// instead of arriving as many small pieces. Until a message's first
     /// record is in, that is the rest of the record; after it, the header
     /// gives the size of the rest.
-    private func receiveMore(_ c: NWConnection, attempt: UInt64, _ then: @escaping () -> Void) {
+    private func receiveMore(_ c: NWConnection, attempt: UInt64, _ then: @escaping @Sendable () -> Void) {
         guard isCurrent(c, attempt: attempt), !receiving else { return }
         receiving = true
         let needed = max(reader.needed, (receive?.remainingWireBytes ?? 0) - reader.buffered)

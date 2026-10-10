@@ -242,6 +242,7 @@ struct HostListDebouncer {
     }
 }
 
+@MainActor
 final class HostBrowser {
     var onChange: (([DiscoveredHost]) -> Void)?
     var onStatus: ((String) -> Void)?
@@ -250,40 +251,59 @@ final class HostBrowser {
     /// freshly plugged cable) changes which link a row says it will use, and
     /// Bonjour has no event for that.
     private var paths: NWPathMonitor?
-    private let queue = DispatchQueue(label: "relay.browse")
+    private let queue = DispatchQueue.main
     private var debouncer = HostListDebouncer()
     private var latest: [DiscoveredHost] = []
     private var flush: DispatchWorkItem?
+    private var generation = 0
 
     func start() {
+        generation += 1
+        let attempt = generation
+        browser?.cancel()
         let params = NWParameters()
         params.includePeerToPeer = true
         // Plain .bonjour never fetches TXT; the host's identity key lives there.
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Proto.serviceType, domain: nil), using: params)
         browser.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            if case .failed(let err) = state {
-                NSLog("HostBrowser: browse failed: %@", err.localizedDescription)
-                self.report("Can't search for PCs — retrying")
-                self.queue.asyncAfter(deadline: .now() + 2) { self.start() }
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == attempt else { return }
+                if case .failed(let err) = state {
+                    NSLog("HostBrowser: browse failed: %@", err.localizedDescription)
+                    self.report("Can't search for PCs — retrying")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        guard let self, self.generation == attempt else { return }
+                        self.start()
+                    }
+                }
             }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            guard let self else { return }
-            self.latest = results.compactMap(Self.host(from:))
-            self.publish()
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == attempt else { return }
+                self.latest = results.compactMap(Self.host(from:))
+                self.publish()
+            }
         }
         self.browser = browser
         browser.start(queue: queue)
         if paths == nil {
             let paths = NWPathMonitor()
-            paths.pathUpdateHandler = { [weak self] _ in self?.publish() }
+            paths.pathUpdateHandler = { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.paths != nil else { return }
+                    self.publish()
+                }
+            }
             self.paths = paths
             paths.start(queue: queue)
         }
     }
 
     func stop() {
+        generation += 1
+        flush?.cancel()
+        flush = nil
         browser?.cancel()
         browser = nil
         paths?.cancel()
@@ -294,21 +314,21 @@ final class HostBrowser {
     /// vanished host, come back after the grace period to let it go.
     private func publish() {
         let hosts = debouncer.update(seen: latest, now: Date())
-        DispatchQueue.main.async { self.onChange?(hosts) }
+        onChange?(hosts)
         flush?.cancel()
         flush = nil
         if debouncer.hasPendingRemovals {
-            let work = DispatchWorkItem { [weak self] in self?.publish() }
+            let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.publish() } }
             flush = work
             queue.asyncAfter(deadline: .now() + debouncer.grace + 0.1, execute: work)
         }
     }
 
     private func report(_ s: String) {
-        DispatchQueue.main.async { self.onStatus?(s) }
+        onStatus?(s)
     }
 
-    static func host(from result: NWBrowser.Result) -> DiscoveredHost? {
+    nonisolated static func host(from result: NWBrowser.Result) -> DiscoveredHost? {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
         var key: Data?
         var digest: String?

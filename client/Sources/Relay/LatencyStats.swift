@@ -3,7 +3,8 @@ import Foundation
 /// Thread-safe rolling latency samples. Host timing arrives on the network
 /// queue, decoded-frame timing arrives on VideoToolbox threads, and the overlay
 /// polls snapshots on the main thread.
-final class LatencyStats {
+/// All mutable measurements are protected by lock.
+final class LatencyStats: @unchecked Sendable {
     struct Snapshot {
         let fps: Double
         let hostMedian: Double?

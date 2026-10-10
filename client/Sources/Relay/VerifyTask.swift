@@ -8,8 +8,9 @@
 import CoreMedia
 import Foundation
 
-final class VerifyTask: HostConnectionDelegate {
-    enum Outcome {
+/// Completion and deadline are owned exclusively by connection.queue.
+final class VerifyTask: HostConnectionDelegate, @unchecked Sendable {
+    enum Outcome: Sendable {
         /// SERVER_HELLO said `paired`: the host still knows this Mac.
         case paired
         /// SERVER_HELLO said not paired: the host forgot this Mac.
@@ -19,7 +20,7 @@ final class VerifyTask: HostConnectionDelegate {
     }
 
     private let connection: HostConnection
-    private var completion: ((Outcome) -> Void)?
+    private var completion: (@Sendable (Outcome) -> Void)?
     private var timeout: DispatchWorkItem?
 
     init(options: HostConnection.Options) throws {
@@ -32,16 +33,18 @@ final class VerifyTask: HostConnectionDelegate {
 
     /// `completion` runs once, on an arbitrary queue. A host that has not
     /// answered by `timeout` counts as unreachable.
-    func run(timeout seconds: Double, completion: @escaping (Outcome) -> Void) {
-        self.completion = completion
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.connection.stop()
-            self.deliver(.unreachable)
+    func run(timeout seconds: Double, completion: @escaping @Sendable (Outcome) -> Void) {
+        connection.queue.async { [self] in
+            self.completion = completion
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.connection.stop()
+                self.deliver(.unreachable)
+            }
+            timeout = work
+            connection.queue.asyncAfter(deadline: .now() + seconds, execute: work)
+            connection.start()
         }
-        timeout = work
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
-        connection.start()
     }
 
     private func deliver(_ outcome: Outcome) {
@@ -56,7 +59,7 @@ final class VerifyTask: HostConnectionDelegate {
 
     func connection(_ c: HostConnection, didChangeStatus status: String) {}
 
-    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping (String?) -> Void) {
+    func connection(_ c: HostConnection, needsPINFor host: String, fingerprint: String, completion: @escaping @Sendable (String?) -> Void) {
         // Verify mode never asks; if it somehow does, decline.
         completion(nil)
     }

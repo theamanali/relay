@@ -2,7 +2,7 @@ import XCTest
 @testable import Relay
 
 final class SessionPrefsTests: XCTestCase {
-    func testBitrateDefaultsPersistsAndLaunchFlagOverrides() {
+    @MainActor func testBitrateDefaultsPersistsAndLaunchFlagOverrides() async {
         let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

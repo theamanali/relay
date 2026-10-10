@@ -4,6 +4,7 @@
 
 import AppKit
 
+@MainActor
 enum Glyphs {
     /// A desktop tower: rounded case, power button at the top, vents at the bottom.
     /// `pointSize` matches the SF Symbol point size it sits beside.
