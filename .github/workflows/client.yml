@@ -35,6 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # swift-tools-version 6.0 needs Xcode 16+. macos-14 still defaults to
+      # Xcode 15 but ships 16.x beside it; the minimum-OS job keeps that OS
+      # and only swaps the toolchain.
+      - name: Select Xcode 16 or later
+        run: |
+          major=$(xcodebuild -version | awk 'NR==1 { split($2, v, "."); print v[1] }')
+          if [ "$major" -lt 16 ]; then
+            latest=$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_(1[6-9]|[2-9][0-9])' | sort -V | tail -1)
+            test -n "$latest"
+            sudo xcode-select -s "$latest"
+          fi
+
       - name: Toolchain
         run: |
           test "$(uname -m)" = arm64
