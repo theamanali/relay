@@ -88,13 +88,21 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 - Forget diagnostics (2026-10-09): a real Mac attempt remained preparing and
   timed out after 6 s; Network.framework logs showed every resolved endpoint
   as `Local network prohibited`, even though Relay's Local Network switch was
-  enabled. The app was running across bundle rebuilds; it has been quit for an
-  update/relaunch, but real-PC retry is pending. The client now preserves
+  enabled. The app was running across bundle rebuilds. Quitting/reopening the
+  rebuilt bundle cleared that block: real-PC TCP + Noise and the PIN sheet
+  now pass without changing pairings. The client now preserves
   failure reasons, reports explicit local-network denials when Network.framework
   exposes them, and says an unconfirmed PC may still remember the Mac rather
   than asserting it does. UnpairTask's timeout/reply completion is serialized
   on the connection queue. Swift tests (102) and isolated real-UnpairTask checks
   (confirmed/busy/timeout/changed key) pass; no host or protocol change.
+  A separate host gap was reproduced: after local-only Forget, the PC still
+  knows this key, so `server.rs` leaves the initial request at HELLO_TIMEOUT
+  (5 s). The Mac's PIN sheet is closed by the PC before manual re-pair can
+  complete. Unknown keys get PAIR_TIMEOUT (120 s). Clearing the old entry from
+  the PC tray is the current workaround; the Windows session must extend the
+  initial PIN wait for known clients too. The Mac must not send CLIENT_HELLO
+  or guess a PIN just to hold that socket open.
 
 ## How the host and client work (details you need before changing them)
 
