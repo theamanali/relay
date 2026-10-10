@@ -99,7 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         applyPrefs()
         view.attach(videoLayer: renderer.layer)
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
-        renderer.firstFrameHandler = { [weak self] generation in
+        // Explicitly @Sendable: Swift 6.0 does not infer it through the
+        // handlers' Optional type, and these run off the main actor.
+        renderer.firstFrameHandler = { @Sendable [weak self] generation in
             DispatchQueue.main.async {
                 guard let self, self.renderer.isCurrent(generation: generation) else { return }
                 self.view.status = ""
@@ -112,14 +114,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
                 }
             }
         }
-        renderer.frameSizeHandler = { [weak self] generation, size in
+        renderer.frameSizeHandler = { @Sendable [weak self] generation, size in
             DispatchQueue.main.async {
                 guard let self, self.renderer.isCurrent(generation: generation) else { return }
                 self.view.streamSize = size
             }
         }
         let stats = latencyStats
-        renderer.frameDecodedHandler = { sequence, milliseconds in
+        renderer.frameDecodedHandler = { @Sendable sequence, milliseconds in
             stats.recordFrame(
                 sequence: sequence,
                 decodeMilliseconds: milliseconds
