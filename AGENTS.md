@@ -304,7 +304,15 @@ documented there. What follows is only the mechanics that are easy to break:
   tall as the list (`PickerLayout`: rows, titles, 20 pt of list insets, a
   two-row floor, scrolling past five PCs at half a row taller so a cut row
   shows there is more, scroller hidden unless it overflows;
-  the window grows downward). The list is one `ForEach` over
+  the window grows downward). Once any PC is known both sections are
+  always listed: Paired shows "No paired devices yet" when empty, Available a
+  "Searching for PCs…" row with the spinner in the icon column (the title's
+  own spinner shows only when that row does not). Clicking a title folds
+  its section (`PickerModel.toggle`, in memory only); Paired folds only once
+  something is paired (no chevron, not a button before that) and reopens
+  when its last PC goes; a folded-away selection
+  moves to the first visible PC, unfolding with none selects the first, and
+  `preselect` unfolds its PC's section. The list is one `ForEach` over
   `PickerModel.listItems` with stable IDs (titles by section, PCs by section +
   name) and its rows update in place with animations off; only the window
   height animates (`withAnimation` in `reloadPairing`). Position-matched rows

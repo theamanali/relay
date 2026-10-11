@@ -102,41 +102,63 @@ final class PickerModelTests: XCTestCase {
         let a = host("A", key: 1), b = host("B", key: 2)
         // Nothing yet: no titles at all; the picker's empty state covers the list.
         XCTAssertEqual(model.listItems.map(\.id), [])
+        // Only available PCs: Paired stays, saying nothing is paired yet.
         model.update(hosts: [a, b], known: [:], nicknames: [:])
-        XCTAssertEqual(model.listItems.map(\.id), ["title.available", "host.available.A", "host.available.B"])
-        // B pairs: it leaves Available and appears under a new Paired title
-        // (a new ID, so a fade out and an insert rather than a move through
-        // A), and the titles keep their IDs so they slide rather than fade
-        // through each other. B stays selected through its tag.
+        XCTAssertEqual(model.listItems.map(\.id),
+                       ["title.paired", "no-paired", "title.available", "host.available.A", "host.available.B"])
+        // B pairs: it leaves Available and appears under Paired (a new ID, so
+        // no move through A), and B stays selected through its tag.
         model.selection = "B"
         model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
         XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.B", "title.available", "host.available.A"])
         XCTAssertEqual(model.selection, "B")
-        let firsts = model.listItems.compactMap { item -> Bool? in
-            if case let .title(_, first) = item { return first } else { return nil }
-        }
-        XCTAssertEqual(firsts, [true, false]) // only the top title skips the gap
+        // Everything paired: Available stays, with its searching row.
+        model.update(hosts: [a, b], known: [a.publicKey!: "A", b.publicKey!: "B"], nicknames: [:])
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.A", "host.paired.B", "title.available", "searching"])
+    }
+
+    @MainActor func testCollapsingHidesASectionAndMovesTheSelectionOut() async {
+        let model = PickerModel()
+        let a = host("A", key: 1), b = host("B", key: 2)
+        model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
+        model.selection = "B"
+        // Folding Paired hides B, so the selection moves to the first PC shown.
+        model.toggle(.paired)
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "title.available", "host.available.A"])
+        XCTAssertEqual(model.selection, "A")
+        // Folding Available too leaves nothing to select.
+        model.toggle(.available)
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "title.available"])
+        XCTAssertNil(model.selection)
+        // Unfolding with nothing selected selects the first PC shown.
+        model.toggle(.available)
+        XCTAssertEqual(model.selection, "A")
+        model.toggle(.available)
+        XCTAssertNil(model.selection)
+        // A PC asked for after a session unfolds its section.
+        model.preselect(key: b.publicKey, name: "B")
+        XCTAssertEqual(model.selection, "B")
+        XCTAssertFalse(model.collapsed.contains(.paired))
+        model.toggle(.available)
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.B", "title.available", "host.available.A"])
     }
 
     func testListIsAsTallAsItsRowsThenScrollsWithAPeek() {
         let row = Style.rowHeight, title = Style.sectionRowHeight, insets = PickerLayout.listInsets
+        let titles = 2 * title + Style.Space.l
         // Empty: the empty state, held at the two-row floor.
         let floor = insets + title + 2 * row
-        XCTAssertEqual(PickerLayout.listHeight(paired: 0, available: 0), floor)
-        // One paired PC and nothing available: both titles and the PC, under the floor.
-        XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 0), floor)
-        XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 2), insets + 2 * title + Style.Space.l + 3 * row)
-        // Five PCs still fit exactly.
-        let five = insets + 2 * title + Style.Space.l + 5 * row
-        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 3), five)
-        XCTAssertFalse(PickerLayout.overflows(paired: 2, available: 3))
+        XCTAssertEqual(PickerLayout.listHeight(rows: 0), floor)
+        // Both titles, "No paired devices yet" and one available PC.
+        XCTAssertEqual(PickerLayout.listHeight(rows: titles + Style.noteRowHeight + row), insets + titles + Style.noteRowHeight + row)
+        // Five PCs under both titles still fit exactly.
+        let five = titles + 5 * row
+        XCTAssertEqual(PickerLayout.listHeight(rows: five), insets + five)
+        XCTAssertFalse(PickerLayout.overflows(rows: five))
         // Past that the list scrolls, half a row taller so a partly shown row
         // says there is more below.
-        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 4), five + row / 2)
-        XCTAssertTrue(PickerLayout.overflows(paired: 2, available: 4))
-        XCTAssertEqual(PickerLayout.listHeight(paired: 3, available: 5), five + row / 2)
-        // Six available and nothing paired: one title fewer, so all six fit.
-        XCTAssertFalse(PickerLayout.overflows(paired: 0, available: 6))
+        XCTAssertEqual(PickerLayout.listHeight(rows: five + row), insets + five + row / 2)
+        XCTAssertTrue(PickerLayout.overflows(rows: five + row))
     }
 
     @MainActor func testFooterButtonSaysPairOnlyForAnAvailablePC() async {
@@ -194,5 +216,26 @@ final class PickerModelTests: XCTestCase {
         model.requestConnect()
         XCTAssertNil(model.wifiCandidate)
         XCTAssertEqual(connects, 4)
+    }
+
+    @MainActor func testPairedFoldsOnlyOnceSomethingIsPaired() async {
+        let model = PickerModel()
+        let a = host("A", key: 1), b = host("B", key: 2)
+        model.update(hosts: [a, b], known: [:], nicknames: [:])
+        // Nothing paired: Paired cannot fold, and toggling it does nothing.
+        XCTAssertFalse(model.canCollapse(.paired))
+        model.toggle(.paired)
+        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "no-paired"])
+        // Paired with B, folded, then B forgotten: Paired opens again to say
+        // nothing is paired, and stays open when the next PC pairs.
+        model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
+        XCTAssertTrue(model.canCollapse(.paired))
+        model.toggle(.paired)
+        XCTAssertTrue(model.collapsed.contains(.paired))
+        model.update(hosts: [a, b], known: [:], nicknames: [:])
+        XCTAssertFalse(model.collapsed.contains(.paired))
+        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "no-paired"])
+        model.update(hosts: [a, b], known: [a.publicKey!: "A"], nicknames: [:])
+        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "host.paired.A"])
     }
 }

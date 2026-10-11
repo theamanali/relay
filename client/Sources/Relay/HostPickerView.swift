@@ -108,12 +108,29 @@ private struct HostList: View {
         List(selection: $model.selection) {
             ForEach(model.listItems) { item in
                 switch item {
-                case let .title(section, first):
-                    SectionHeaderRow(title: section.title, first: first, searching: section == .available)
-                        .pickerListRow()
-                        .selectionDisabled()
+                case let .title(section, collapsed, collapsible):
+                    SectionHeaderRow(section: section, collapsed: collapsed, collapsible: collapsible,
+                                     // The searching row has the spinner while it shows.
+                                     searching: section == .available && (collapsed || !model.availableRows.isEmpty),
+                                     height: item.height) {
+                        // The window's height eases; the rows change in place.
+                        withAnimation(.easeInOut(duration: 0.25)) { model.toggle(section) }
+                    }
+                    .pickerListRow()
+                    .selectionDisabled()
                 case let .host(row):
                     HostRow(row: row, model: model).tag(row.id).pickerListRow()
+                case .noPaired:
+                    Text("No paired devices yet")
+                        .font(Style.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: item.height, maxHeight: item.height, alignment: .leading)
+                        .pickerListRow()
+                        .selectionDisabled()
+                case .searching:
+                    SearchingRow()
+                        .pickerListRow()
+                        .selectionDisabled()
                 }
             }
         }
@@ -137,26 +154,62 @@ private extension View {
     }
 }
 
+/// A section's title. When the section can fold, clicking the title folds it
+/// away or back, as the chevron at the right shows.
 private struct SectionHeaderRow: View {
-    let title: String
-    let first: Bool
+    let section: PickerSection
+    let collapsed: Bool
+    let collapsible: Bool
     let searching: Bool
+    let height: CGFloat
+    let toggle: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(verbatim: title)
+            Text(verbatim: section.title)
                 .font(Style.Font.section)
                 .foregroundStyle(.secondary)
             if searching {
                 ProgressView().controlSize(.mini).accessibilityLabel("Searching for PCs")
             }
+            Spacer(minLength: 0)
+            if collapsible {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.bottom, Style.Space.xs)
+        // Paired comes first; Available's taller row leaves room above it.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        // Room between one group's last host and the next group's title.
-        .frame(height: Style.sectionRowHeight + (first ? 0 : Style.Space.l))
+        .frame(height: height)
+        .contentShape(Rectangle())
+        .onTapGesture { if collapsible { toggle() } }
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        .accessibilityAddTraits(collapsible ? [.isHeader, .isButton] : .isHeader)
+        .accessibilityValue(collapsible ? (collapsed ? "Collapsed" : "Expanded") : "")
+        .accessibilityAction { if collapsible { toggle() } }
+    }
+}
+
+/// Stands in for PCs under Available while none is around: discovery keeps
+/// going, with the spinner where a PC's glyph would be.
+private struct SearchingRow: View {
+    var body: some View {
+        HStack(spacing: Style.Space.s) {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 32)
+                .accessibilityHidden(true)
+            Text("Searching for PCs…")
+                .font(Style.Font.body)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .frame(height: Style.rowHeight)
+        .accessibilityElement(children: .combine)
     }
 }
 
