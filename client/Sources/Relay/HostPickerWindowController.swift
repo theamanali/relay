@@ -54,7 +54,14 @@ final class HostPickerWindowController: NSWindowController {
         self.hosts = hosts
         reloadPairing()
     }
-    func reloadPairing() { model.update(hosts: hosts, known: ClientState.knownHosts(), nicknames: ClientState.nicknames()) }
+    /// Animated so the list's height, and with it the window's, eases to the
+    /// new size; the rows themselves update in place (HostList).
+    func reloadPairing() {
+        let (known, nicknames) = (ClientState.knownHosts(), ClientState.nicknames())
+        withAnimation(.easeInOut(duration: 0.25)) {
+            model.update(hosts: hosts, known: known, nicknames: nicknames)
+        }
+    }
     func preselect(key: Data?, name: String) { model.preselect(key: key, name: name) }
     func flash(_ message: String, for seconds: TimeInterval = 8) { model.flash(message, seconds: seconds) }
 

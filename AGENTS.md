@@ -302,10 +302,17 @@ documented there. What follows is only the mechanics that are easy to break:
   user request): hidden title bar, 410 wide (narrowed from the old 460 so the
   footer mode row has even gaps; the resolution popup takes the slack) and as
   tall as the list (`PickerLayout`: rows, titles, 20 pt of list insets, a
-  two-row floor, scrolling past five PCs, scroller hidden unless it overflows;
-  the window grows downward), Available always listed with a mini spinner (no
-  "Looking for PCs…" text, user request; only the first-run hint row when
-  there is no PC at all), no PC count in
+  two-row floor, scrolling past five PCs at half a row taller so a cut row
+  shows there is more, scroller hidden unless it overflows;
+  the window grows downward). The list is one `ForEach` over
+  `PickerModel.listItems` with stable IDs (titles by section, PCs by section +
+  name) and its rows update in place with animations off; only the window
+  height animates (`withAnimation` in `reloadPairing`). Position-matched rows
+  cross-faded titles, and List's insert/remove/move animations slid rows over
+  fading ones while the window snapped to size. Available always listed with a mini spinner (no
+  "Looking for PCs…" text, user request). With no PC at all there are no
+  titles: a centered "No PCs Found" empty state (title, spinner, instruction)
+  sits over the empty list at the two-row floor. No PC count in
   the footer (status only), `Style` metrics, tower
   glyph rows with "via <link>", plain header rows (not `Section`, whose header
   floats on a band), hover card (`HoverCard`: AppKit panel, SwiftUI grid,
@@ -315,8 +322,22 @@ documented there. What follows is only the mechanics that are easy to break:
   the window (its selection inset is fixed at 10 pt; a painted background did
   not match the list's translucent fill), and the footer has no material.
   The gear icon replaces the old Advanced button at the end of the mode row.
+  A disabled segmented control still draws its selection in the accent
+  color, so the refresh-rate picker has no selection (an optional binding
+  returning nil) while it is disabled; a gray tint looked odd. Its background
+  stays brighter than the disabled popup and gear (dark: 61 vs 50 on a 41
+  footer): macOS never dims a disabled NSSegmentedControl's bezel, in any
+  segment style (checked in plain AppKit on 27.0). Kept as the system draws it
+  (user decision); filters cannot match both bezel and text.
   Use `Text(verbatim:)` for numbers: SwiftUI's localized interpolation groups
   digits ("3,024 × 1,964").
+- Every Connect (footer button, Return, double-click, PC menu, context menu)
+  goes through `PickerModel.requestConnect()`: a paired PC whose
+  `DiscoveredHost.connectsOverWiFi` gets the Wi-Fi alert first, unless
+  `SuppressWiFiConnectionWarning` is set by its "Don't ask again". The alert
+  lives in its own `WiFiConnectAlert` view because `dialogSuppressionToggle`
+  applies to every dialog presented within the modified view (Forget showed
+  the checkbox too). Pairing and Cancel never warn.
 - Menus are SwiftUI commands in `RelayApp.swift`; contribute to the existing
   View command group to avoid duplicate View menus. Validate against picker
   focus. `StreamView.performKeyEquivalent` still swallows command shortcuts

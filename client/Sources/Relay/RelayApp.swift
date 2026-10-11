@@ -72,7 +72,7 @@ struct RelayCommands: Commands {
             let selected = model.selected
             Button(selected?.paired == false ? "Pair" : "Connect",
                    systemImage: selected?.paired == false ? "link" : "display") {
-                model.finishRename(); model.connect?()
+                model.requestConnect()
             }
             .keyboardShortcut(.return)
             // Not mid-rename: Return there commits the name.

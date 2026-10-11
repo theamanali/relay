@@ -54,8 +54,8 @@ from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchange
 
 Relay opens a small window listing the PCs it finds, under **Paired** and
 **Available**. The window is as tall as the list and scrolls past five PCs.
-Available is always shown with a small spinner, since Relay keeps searching;
-with no PC at all it says what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
+Available is shown with a small spinner, since Relay keeps searching; with no
+PC at all the list shows "No PCs Found" with a spinner and what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
 or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
 and its key fingerprint.
@@ -68,7 +68,9 @@ and its key fingerprint.
   v4 hosts learn the name on the first Connect.
 - **Connect** (a paired PC; also Return or a double-click): progress shows in the
   footer, the button becomes **Cancel**, and the full-screen window opens with
-  the first decoded frame. When the session ends, the list comes back with the
+  the first decoded frame. When the PC would be reached over Wi-Fi, Relay first
+  asks whether to continue: Wi-Fi works, but a direct Ethernet cable is the
+  best connection. "Don't ask again" turns the question off. When the session ends, the list comes back with the
   same PC selected.
 - A PC that is streaming to another Mac still allows Pair and Forget. Connect
   says "The PC is in another session" right away instead of taking over.

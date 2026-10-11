@@ -341,8 +341,9 @@ because that image defaults to Xcode 15 (Swift 5.10); the workflow now selects
 the newest installed Xcode 16+ there.
 
 Picker follow-up, 2026-10-10: the window height follows the list (two-row
-floor, scrolls past five PCs), Available is always listed with a spinner (plus
-a first-run hint when there is no PC at all), and the footer shows status only. A binary linked
+floor, scrolls past five PCs), Available is listed with a spinner once any PC
+is known ("No PCs Found" empty state before that), and the footer shows status
+only. A binary linked
 against the 27.0 SDK and started directly (not through LaunchServices) opened
 no picker; Codex's commit had the same behavior. The app now opens the picker
 itself when SwiftUI does not. 112 unit tests pass; SDK-27 builds were checked
