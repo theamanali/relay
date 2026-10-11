@@ -28,9 +28,18 @@ struct SessionPrefs: Equatable {
     var forwardInput = true
     var showLatency = false
     var bitrateMbps = VideoBitrate.defaultValue
+    /// Follow the stream mode and link (`VideoBitrate.automatic`) until the
+    /// user picks a bitrate.
+    var bitrateAutomatic = true
     /// Metal VSync: no tearing, up to a frame more delay.
     var preventTearing = false
     var scrollDirection: ScrollDirection = .system
+    /// Connect to the last PC used once it is found after launch.
+    var connectAtLaunch = false
+    /// Asked of PCs that offer them (TXT `enc`); others ignore them.
+    var encoderQuality: EncoderQuality = .fastest
+    var fullColor = false
+    var tenBit = false
 
     /// The settings checkbox: Natural scrolling on the PC. Until the user
     /// picks, it shows (and keeps) whatever this Mac itself does.
@@ -52,8 +61,13 @@ struct SessionPrefs: Equatable {
     private static let forwardInputKey = "forwardInput"
     private static let showLatencyKey = "showLatency"
     private static let bitrateKey = "videoBitrateMbps"
+    private static let bitrateAutomaticKey = "bitrateAutomatic"
     private static let preventTearingKey = "preventTearing"
     private static let scrollDirectionKey = "scrollDirection"
+    private static let connectAtLaunchKey = "connectAtLaunch"
+    private static let encoderQualityKey = "encoderQuality"
+    private static let fullColorKey = "fullColor"
+    private static let tenBitKey = "tenBit"
 
     static func load(from d: UserDefaults = .standard) -> SessionPrefs {
         var p = SessionPrefs()
@@ -63,8 +77,19 @@ struct SessionPrefs: Equatable {
         if d.object(forKey: bitrateKey) != nil {
             p.bitrateMbps = VideoBitrate.clamp(d.integer(forKey: bitrateKey))
         }
+        if d.object(forKey: bitrateAutomaticKey) != nil {
+            p.bitrateAutomatic = d.bool(forKey: bitrateAutomaticKey)
+        } else {
+            // Before Automatic every save wrote the bitrate, so only a value
+            // other than the old fixed default was a choice worth keeping.
+            p.bitrateAutomatic = p.bitrateMbps == VideoBitrate.defaultValue
+        }
         if d.object(forKey: preventTearingKey) != nil { p.preventTearing = d.bool(forKey: preventTearingKey) }
         if let raw = d.string(forKey: scrollDirectionKey), let s = ScrollDirection(rawValue: raw) { p.scrollDirection = s }
+        if d.object(forKey: connectAtLaunchKey) != nil { p.connectAtLaunch = d.bool(forKey: connectAtLaunchKey) }
+        if let q = EncoderQuality(rawValue: d.integer(forKey: encoderQualityKey)) { p.encoderQuality = q }
+        p.fullColor = d.bool(forKey: fullColorKey)
+        p.tenBit = d.bool(forKey: tenBitKey)
         return p
     }
 
@@ -73,8 +98,13 @@ struct SessionPrefs: Equatable {
         d.set(forwardInput, forKey: Self.forwardInputKey)
         d.set(showLatency, forKey: Self.showLatencyKey)
         d.set(VideoBitrate.clamp(bitrateMbps), forKey: Self.bitrateKey)
+        d.set(bitrateAutomatic, forKey: Self.bitrateAutomaticKey)
         d.set(preventTearing, forKey: Self.preventTearingKey)
         d.set(scrollDirection.rawValue, forKey: Self.scrollDirectionKey)
+        d.set(connectAtLaunch, forKey: Self.connectAtLaunchKey)
+        d.set(encoderQuality.rawValue, forKey: Self.encoderQualityKey)
+        d.set(fullColor, forKey: Self.fullColorKey)
+        d.set(tenBit, forKey: Self.tenBitKey)
     }
 
     /// Command-line flags override the remembered values for this launch.
@@ -83,7 +113,7 @@ struct SessionPrefs: Equatable {
         if o.modifiersGiven { p.modifiers = o.modifiers }
         if o.noInput { p.forwardInput = false }
         if o.showLatency { p.showLatency = true }
-        if o.bitrateGiven { p.bitrateMbps = o.bitrateMbps }
+        if o.bitrateGiven { p.bitrateMbps = o.bitrateMbps; p.bitrateAutomatic = false }
         if o.metalVSync { p.preventTearing = true }
         return p
     }

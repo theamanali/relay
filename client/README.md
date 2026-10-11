@@ -95,11 +95,31 @@ A row's context menu, and the **PC** menu for the selected row, have:
 
 The footer has a resolution popup (native, 75% or 50% of the screen the window
 is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
-rate). The **View** menu mirrors both and adds a **Bitrate** submenu of presets.
+rate). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
+(showing what it would ask for) and presets.
 The **Settings** gear in the footer opens:
 
-- **Bitrate**: a logarithmic slider from 1 to 1000 Mbps with exact entry;
-  120 Mbps by default. Higher looks sharper but needs a faster connection.
+- **Connect when Relay opens**: off by default. Once the last PC you streamed
+  from shows up paired, Relay connects to it as if you had pressed Connect
+  (the Wi-Fi warning still applies; Cancel stops it). Only once per launch,
+  only while the picker window is in front, and not after you have done
+  anything in the picker.
+- **Bitrate**: **Automatic** by default: each frame gets the share 120 Mbps gave
+  Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
+  for less (20–200 Mbps), capped at 80 Mbps over Wi-Fi. Over a gigabit cable
+  every 120 Mbps costs about 1 ms of transfer per frame. The logarithmic slider
+  (1–1000 Mbps) or the field sets a value of your own and turns Automatic off;
+  ticking it again goes back. A value chosen before Automatic existed is kept.
+- **Encoder**: Fastest (default), Balanced or Best quality, the PC's NVENC
+  preset (P1 / P4 / P6). Better quality takes the PC longer per frame.
+- **Full color (4:4:4)**: full color resolution, so colored text and thin
+  colored lines stay sharp; needs more bitrate. Off by default.
+- **10-bit color**: smoother gradients with less banding. Off by default.
+
+  These three need the PC to offer them (its Relay advertises `enc` once
+  updated, see `docs/VIDEO-OPTIONS-HANDOFF.md`) and, for the color options,
+  this Mac to decode them in hardware; otherwise they are greyed out and say
+  why.
 - **Enable VSync**: prevents tearing but adds up to a frame of delay.
   Off by default and switchable mid-session.
 - **Show latency overlay**: timing numbers over the stream (also ⌃⌥⌘L).
@@ -165,6 +185,7 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--no-input` | Observe only. |
 | `--latency-stats` | Start with the latency overlay on. |
 | `--metal-vsync` | Enable VSync for this launch, as the setting does: no tearing, slightly more latency. |
+| `--codec h264\|hevc` | Offer the PC only this codec (it picks HEVC when both are offered). For latency measurements; H.264 has not been measured yet. |
 | `--render-icons <dir>` | Write the PC's tray icons and exit (see [Icons](#icons)). |
 | `--render-app-icon <dir>` | Write the Mac app icon and exit. |
 
@@ -263,6 +284,10 @@ By default it advertises `CAP_PAIR_NAME`, accepts named and legacy PAIR, and
 prints the confirmed name before success. `--legacy-pair` omits the capability
 and rejects extended PAIR, to test a new Mac against an older v4 host.
 `--ignore-unpair` withholds the Forget reply to test the unconfirmed outcome.
+`--clip <file.hevc>` streams an Annex B HEVC clip after Connect, looped at
+60 fps, so decoding and presentation can be checked without a PC (`--format`
+sets STREAM_START's picture-format byte, `--size` its size); `--enc q,444,10`
+offers the picture options. The file's header has an ffmpeg example.
 
 If macOS blocks local devices, enable Relay in **System Settings → Privacy &
 Security → Local Network**. If it is already enabled, quit and reopen Relay,

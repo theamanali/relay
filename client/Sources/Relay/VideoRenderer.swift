@@ -60,6 +60,9 @@ final class VideoRenderer: @unchecked Sendable {
     // Decoder state, touched only from the connection queue.
     private var codec: Proto.Codec = .hevc
     private var formatDescription: CMVideoFormatDescription?
+    /// The biplanar format asked of the decoder, matching the stream's chroma
+    /// format and bit depth so 4:4:4 and 10-bit are never converted down.
+    private var outputFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     private var session: VTDecompressionSession?
     private var waitingForKeyframe = true
 
@@ -120,6 +123,7 @@ final class VideoRenderer: @unchecked Sendable {
         let previous = formatDescription.map(CMVideoFormatDescriptionGetDimensions)
         failure = nil
         formatDescription = makeFormatDescription(sets)
+        outputFormat = Self.outputFormat(codec: codec, sets: sets, description: formatDescription)
         if let formatDescription {
             let d = CMVideoFormatDescriptionGetDimensions(formatDescription)
             var note = "VideoRenderer: codec config \(d.width)x\(d.height)"
@@ -134,6 +138,20 @@ final class VideoRenderer: @unchecked Sendable {
         // keyframe, but keep the last picture up through the gap rather than
         // flashing black while the host restarts.
         flush(removeImage: false)
+    }
+
+    /// HEVC streams say their chroma format and bit depth in the SPS (NAL
+    /// type 33); H.264 from the PC is always 8-bit 4:2:0.
+    static func outputFormat(codec: Proto.Codec, sets: [Data], description: CMVideoFormatDescription?) -> OSType {
+        let fullRange = description.flatMap {
+            CMFormatDescriptionGetExtension($0, extensionKey: kCMFormatDescriptionExtension_FullRangeVideo) as? Bool
+        } ?? false
+        guard codec == .hevc,
+              let sps = sets.first(where: { $0.count > 2 && ($0[$0.startIndex] >> 1) & 0x3f == 33 }),
+              let format = HEVCStreamFormat(sps: sps) else {
+            return HEVCStreamFormat(chromaFormat: 1, bitDepth: 8).pixelFormat(fullRange: fullRange)
+        }
+        return format.pixelFormat(fullRange: fullRange)
     }
 
     private func makeFormatDescription(_ sets: [Data]) -> CMVideoFormatDescription? {
@@ -214,9 +232,10 @@ final class VideoRenderer: @unchecked Sendable {
         ]
         do {
             imageAttrs[kCVPixelBufferMetalCompatibilityKey] = true
-            // The shader reads 8-bit biplanar planes directly; this is the
-            // hardware decoder's native output, so no conversion is added.
-            imageAttrs[kCVPixelBufferPixelFormatTypeKey] = MetalPresenter.pixelFormats
+            // The shader reads biplanar planes directly. One format, chosen
+            // from the SPS: in a list VideoToolbox may pick an 8-bit 4:2:0
+            // entry for a 10-bit or 4:4:4 stream and convert it down.
+            imageAttrs[kCVPixelBufferPixelFormatTypeKey] = outputFormat
         }
         var s: VTDecompressionSession?
         let status = VTDecompressionSessionCreate(
@@ -236,7 +255,8 @@ final class VideoRenderer: @unchecked Sendable {
         var hardware: Unmanaged<CFTypeRef>?
         VTSessionCopyProperty(s, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
                               allocator: kCFAllocatorDefault, valueOut: &hardware)
-        NSLog("VideoRenderer: hardware decoder %@", String(describing: hardware?.takeRetainedValue()))
+        NSLog("VideoRenderer: hardware decoder %@, output %@", String(describing: hardware?.takeRetainedValue()),
+              MetalPresenter.fourCC(outputFormat))
         return s
     }
 

@@ -130,13 +130,18 @@ struct RelayCommands: Commands {
                 .disabled(!paired)
             }
             Menu {
-                // The presets, plus the current value in its sorted place when
-                // the slider set something in between, so the checkmark is
-                // never missing.
-                ForEach(Array(Set(Self.bitratePresets + [model.prefs.bitrateMbps])).sorted(), id: \.self) { bitrate in
-                    Toggle(isOn: Binding(get: { model.prefs.bitrateMbps == bitrate }, set: { _ in
-                        var prefs = model.prefs; prefs.bitrateMbps = bitrate; model.setPrefs(prefs)
-                    })) { Text(verbatim: "\(bitrate) Mbps") }
+                // Automatic says what it would ask for right now.
+                Toggle(isOn: Binding(get: { model.prefs.bitrateAutomatic }, set: { _ in model.setBitrateAutomatic(true) })) {
+                    Text(verbatim: "Automatic (\(model.effectiveBitrate) Mbps)")
+                }
+                Divider()
+                // The presets, plus a chosen value in its sorted place when the
+                // slider set something in between, so the checkmark is never
+                // missing.
+                let chosen = model.prefs.bitrateAutomatic ? [] : [model.prefs.bitrateMbps]
+                ForEach(Array(Set(Self.bitratePresets + chosen)).sorted(), id: \.self) { bitrate in
+                    Toggle(isOn: Binding(get: { !model.prefs.bitrateAutomatic && model.prefs.bitrateMbps == bitrate },
+                                         set: { _ in model.setBitrate(bitrate) })) { Text(verbatim: "\(bitrate) Mbps") }
                 }
                 Divider()
                 Button("Custom…") { model.showSettings() }

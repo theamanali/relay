@@ -122,6 +122,8 @@ struct HostFacts: Equatable {
     var vramGB = 0
     var os = ""
     var ips: [String] = []
+    /// TXT `enc`: picture options the PC offers; nil when it predates them.
+    var videoFeatures: VideoFeatures?
 
     init() {}
 
@@ -133,6 +135,7 @@ struct HostFacts: Equatable {
         vramGB = Int(txt["vram"] ?? "") ?? 0
         os = txt["os"] ?? ""
         ips = (txt["ip"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
+        videoFeatures = txt["enc"].map(VideoFeatures.init(txt:))
     }
 
     /// Label / value pairs for the hover card.

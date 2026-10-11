@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
     private var latencyTimer: Timer?
+    /// Seconds of overlay shown during a session; every fifth logs a line.
+    private var latencyTicks = 0
     /// In-flight "forget this host" request from the picker.
     private var unpairTask: UnpairTask?
     /// What Bonjour last showed, for the pairing check below.
@@ -239,6 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             prefs.save()
             self.applyPrefs()
         }
+        // Before the first update, which may already list the last PC.
+        pickerModel.lastHostKey = UserDefaults.standard.data(forKey: Self.lastHostKey)
+        pickerModel.storedName = { key in ClientState.nicknames()[key] ?? ClientState.knownHosts()[key] }
         p.update(hosts: latestHosts)
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -508,6 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     /// the socket at all: a pinned attempt on the cable plus its unpinned
     /// retry, each with a 5 s SYN timeout, and some room for resolution.
     static let pickerDialTimeout: TimeInterval = 12
+    static let lastHostKey = "lastHostKey"
 
     private func startSession(_ base: HostConnection.Options, screen: NSScreen, mode: StreamMode) {
         var opts = base
@@ -517,7 +523,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         opts.requestedHeight = h
         opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
         opts.wantsInput = prefs.forwardInput
-        opts.requestedBitrateMbps = prefs.bitrateMbps
+        opts.requestedBitrateMbps = prefs.bitrateAutomatic
+            ? VideoBitrate.automatic(width: w, height: h, refresh: opts.requestedRefresh,
+                                     overWiFi: options.fixedHost == nil && currentHost?.connectsOverWiFi == true)
+            : prefs.bitrateMbps
+        opts.codecs = options.codec?.bit
+        // 4:4:4 and 10-bit only when this Mac decodes them in hardware.
+        opts.video = Proto.VideoRequest(
+            quality: UInt8(prefs.encoderQuality.rawValue),
+            flags: (prefs.fullColor && VideoCapabilities.supports444 ? VideoFlags.fullColor : 0)
+                | (prefs.tenBit && VideoCapabilities.supports10Bit ? VideoFlags.tenBit : 0))
         opts.clientName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         opts.pin = options.pin
         let c: HostConnection
@@ -575,7 +590,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     // MARK: window focus -> cursor / stuck keys
 
     func windowDidBecomeKey(_ notification: Notification) {
-        if (notification.object as? NSWindow) === picker?.window { pickerModel.pickerActive = true }
+        if (notification.object as? NSWindow) === picker?.window {
+            pickerModel.pickerActive = true
+            // The last PC may have been found while another app was in front.
+            pickerModel.autoConnectIfReady()
+        }
         guard (notification.object as? NSWindow) === window else { return }
         pickerModel.pickerActive = false
         window.makeFirstResponder(view)
@@ -640,9 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
         guard connection === c else { return }
+        NSLog("Stream: %@ %d×%d @ %d fps, %d Mbps%@", stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
+              stream.width, stream.height, stream.fps, stream.bitrateMbps, stream.formatNote)
+        // The PC "Connect when Relay opens" goes back to.
+        if options.fixedHost == nil, let key = currentHost?.publicKey {
+            UserDefaults.standard.set(key, forKey: Self.lastHostKey)
+            pickerModel.lastHostKey = key
+        }
         if let pending = self.pendingSession, !self.kioskActive {
             self.window.setFrame(pending.screen.frame, display: false)
-            self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
+            self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps\(stream.formatNote)…"
         } else {
             self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
@@ -743,10 +769,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         renderer.loadPerformanceSnapshot { [weak self] performance in
             guard let self else { return }
             self.latencyStats.recordVideoPerformance(performance)
-            let text = self.latencyStats.snapshot().overlayText
+            let snapshot = self.latencyStats.snapshot()
+            let text = snapshot.overlayText
             DispatchQueue.main.async {
                 if self.view.latencyVisible {
                     self.view.latencyText = text
+                    guard self.kioskActive else { return }
+                    self.latencyTicks += 1
+                    if self.latencyTicks % 5 == 0 { NSLog("Latency: %@", snapshot.logLine) }
                 }
             }
         }

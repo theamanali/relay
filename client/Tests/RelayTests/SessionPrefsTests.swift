@@ -42,6 +42,23 @@ final class SessionPrefsTests: XCTestCase {
         XCTAssertFalse(SessionPrefs.load(from: defaults).preventTearing)
     }
 
+    @MainActor func testConnectAtLaunchIsOffUntilChosen() async {
+        let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(SessionPrefs.load(from: defaults).connectAtLaunch)
+        var saved = SessionPrefs()
+        saved.connectAtLaunch = true
+        saved.save(to: defaults)
+        XCTAssertTrue(SessionPrefs.load(from: defaults).connectAtLaunch)
+    }
+
+    @MainActor func testCodecFlagOffersOneCodec() async {
+        XCTAssertNil(LaunchOptions.parse(["Relay"]).codec)
+        XCTAssertEqual(LaunchOptions.parse(["Relay", "--codec", "h264"]).codec?.bit, 0b001)
+        XCTAssertEqual(LaunchOptions.parse(["Relay", "--codec", "hevc"]).codec?.bit, 0b010)
+    }
+
     func testScrollDirectionFlipsOnlyWhenItDiffersFromTheMac() {
         // AppKit's deltas already follow this Mac's setting.
         XCTAssertEqual(ScrollDirection.system.sign(invertedFromDevice: true), 1)

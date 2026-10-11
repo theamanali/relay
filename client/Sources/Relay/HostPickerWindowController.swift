@@ -47,6 +47,7 @@ final class HostPickerWindowController: NSWindowController {
             return gearMaxX + Style.settingsWidth + 24 <= screen.visibleFrame.maxX
         }
         model.modeChanged = { [weak self] mode in self?.onModeChange?(mode) }
+        model.isPickerKey = { [weak self] in self?.window?.isKeyWindow ?? false }
     }
 
     @available(*, unavailable)

@@ -20,6 +20,8 @@ struct LaunchOptions {
     var metalVSync = false
     var bitrateMbps = VideoBitrate.defaultValue
     var bitrateGiven = false
+    /// --codec: offer the PC only this codec (for latency measurements).
+    var codec: Proto.Codec? = nil
 
     @MainActor
     static func parse(_ args: [String]) -> LaunchOptions {
@@ -61,6 +63,14 @@ struct LaunchOptions {
                     print("Relay now requires the Metal presenter; --renderer avsbdl is no longer supported")
                     exit(2)
                 }
+            case "--codec":
+                switch it.next() {
+                case "h264": o.codec = .h264
+                case "hevc": o.codec = .hevc
+                default:
+                    print("--codec requires h264 or hevc")
+                    exit(2)
+                }
             case "--metal-vsync":
                 o.metalVSync = true
             case "--render-icons":
@@ -91,6 +101,7 @@ struct LaunchOptions {
                   --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
                   --bitrate <1...1000>       request this video bitrate in Mbps (default 120)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
+                  --codec h264|hevc          offer only this codec (for latency measurements)
                   --render-icons <dir>       write the host's tray icons (relay-{light,dark}.ico) and exit
                   --render-app-icon <dir>    write the Mac app icon (AppIcon.icon, Relay.icns) and exit
                 Exit with ⌃⌥⌘Q.

@@ -342,6 +342,37 @@ documented there. What follows is only the mechanics that are easy to break:
   live layer; Natural scrolling follows the Mac (`com.apple.swipescrolldirection`)
   until chosen, and the sign is decided per event from
   `isDirectionInvertedFromDevice`, since AppKit's deltas already follow the Mac.
+  Connect when Relay opens (General, off by default): `lastHostKey` in
+  UserDefaults is saved on STREAM_START (picker sessions only);
+  `PickerModel.autoConnectIfReady` runs on every list update and when the
+  picker becomes key, and fires once per launch through `requestConnect`
+  (so the Wi-Fi alert applies) when that PC is paired, the picker window is
+  key and nothing else is in progress. Any picker action disarms it
+  (selection, Connect, settings, rename, Forget, folding); it never re-arms,
+  so a session that ends stays in the picker. Keeping the Mac awake needs no
+  setting: `enterKiosk` holds a display/system idle-sleep activity.
+  `--codec h264|hevc` (hidden, for measurements) narrows CLIENT_HELLO's
+  codec mask; the PC already falls back to whatever the Mac offers.
+  Picture options (2026-10-10, Mac side ahead of the host by user decision;
+  `docs/VIDEO-OPTIONS-HANDOFF.md` is the draft spec, PROTOCOL.md waits for
+  the host): Encoder / Full color (4:4:4) / 10-bit color are enabled only
+  when the selected PC's TXT `enc` lists them and, for color, when
+  `VideoCapabilities` (hardware-only VT sessions for canned parameter sets)
+  says this Mac decodes them; disabled ones show why in their note. The
+  CLIENT_HELLO extension goes only to hosts with SERVER_HELLO cap `0x02`.
+  The decoder is asked for exactly one output format chosen from the SPS
+  (`HEVCStreamFormat`): given a list, VideoToolbox may pick 8-bit 4:2:0 and
+  convert 10-bit/4:4:4 down. 10-bit planes are MSB-aligned in 16 bits
+  (`r16Unorm` reads code × 64 / 65535), so `conversion(for:)` scales by
+  65535 / 64. 8-bit streams keep the `bgra8Unorm` layer that latency was
+  measured on; 10-bit frames switch it to `bgr10a2Unorm` (unmeasured).
+  Automatic bitrate (`VideoBitrate.automatic`) keeps 120 Mbps' bits per pixel
+  at 3024×1964@120, 20–200, 80 over Wi-Fi. A missing `bitrateAutomatic`
+  key with a saved bitrate other than 120 stays manual (every old save wrote
+  the bitrate). `setBitrate` ignores the value already shown: the field
+  writes it back on focus loss, which turned Automatic off. Verified end to
+  end with `fakehost --clip` (420v/x420/444v/x444 outputs, 4:4:4 text sharp
+  where 4:2:0 smears); the real PC is untested until the host lands.
   A disabled segmented control still draws its selection in the accent
   color, so the refresh-rate picker has no selection (an optional binding
   returning nil) while it is disabled; a gray tint looked odd. Its background

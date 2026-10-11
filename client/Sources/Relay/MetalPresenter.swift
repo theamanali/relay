@@ -14,7 +14,12 @@ import simd
 final class MetalPresenter: @unchecked Sendable {
     let layer = CAMetalLayer()
     private let commands: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
+    /// One per drawable format: 8-bit streams keep `bgra8Unorm` (the path
+    /// latency was measured on); 10-bit streams draw into `bgr10a2Unorm` so
+    /// their extra precision reaches the screen.
+    private let pipelines: [MTLPixelFormat: MTLRenderPipelineState]
+    /// The layer format the newest frame wants; applied before the next drawable.
+    private var wantedLayerFormat = MTLPixelFormat.bgra8Unorm
     private let sampler: MTLSamplerState
     private var textureCache: CVMetalTextureCache?
     private let queue = DispatchQueue(label: "relay.present", qos: .userInteractive)
@@ -41,11 +46,38 @@ final class MetalPresenter: @unchecked Sendable {
     private var invalidTimes = 0
     private var unsupportedFormats = 0
 
-    /// Pixel formats the shader accepts: 8-bit biplanar 4:2:0, video or full range.
+    /// Pixel formats the shader accepts: biplanar 4:2:0 or 4:4:4, 8- or
+    /// 10-bit, video or full range. 4:4:4's chroma plane is simply full size;
+    /// the shader samples by normalized coordinates either way.
     static let pixelFormats: [OSType] = [
         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
         kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+        kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+        kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+        kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+        kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
     ]
+
+    static func isTenBit(_ format: OSType) -> Bool {
+        [kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+         kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_444YpCbCr10BiPlanarFullRange].contains(format)
+    }
+
+    static func isFullRange(_ format: OSType) -> Bool {
+        [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+         kCVPixelFormatType_444YpCbCr8BiPlanarFullRange, kCVPixelFormatType_444YpCbCr10BiPlanarFullRange].contains(format)
+    }
+
+    /// "420v", "x444": for logs.
+    static func fourCC(_ format: OSType) -> String {
+        String(bytes: [24, 16, 8, 0].map { UInt8((format >> $0) & 0xff) }, encoding: .ascii) ?? String(format, radix: 16)
+    }
+
+    static func layerFormat(for image: CVPixelBuffer) -> MTLPixelFormat {
+        isTenBit(CVPixelBufferGetPixelFormatType(image)) ? .bgr10a2Unorm : .bgra8Unorm
+    }
 
     /// Matches `Uniforms` in the shader source. `scale` is the aspect-fit
     /// size of the picture in clip space; the matrix and offset turn a
@@ -99,8 +131,12 @@ final class MetalPresenter: @unchecked Sendable {
             let desc = MTLRenderPipelineDescriptor()
             desc.vertexFunction = library.makeFunction(name: "pictureVertex")
             desc.fragmentFunction = library.makeFunction(name: "ycbcrToRGB")
-            desc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            pipeline = try device.makeRenderPipelineState(descriptor: desc)
+            var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+            for format in [MTLPixelFormat.bgra8Unorm, .bgr10a2Unorm] {
+                desc.colorAttachments[0].pixelFormat = format
+                pipelines[format] = try device.makeRenderPipelineState(descriptor: desc)
+            }
+            self.pipelines = pipelines
         } catch {
             NSLog("MetalPresenter: shader build failed: %@", String(describing: error))
             return nil
@@ -157,6 +193,7 @@ final class MetalPresenter: @unchecked Sendable {
             lock.unlock()
             return
         }
+        wantedLayerFormat = Self.layerFormat(for: image)
         let start = !running
         running = true
         lock.unlock()
@@ -169,7 +206,15 @@ final class MetalPresenter: @unchecked Sendable {
     /// nothing in the VUI, so the decoder's default attachments decide; this
     /// only reads them, the same as Core Image did.
     static func conversion(for image: CVPixelBuffer) -> (offset: SIMD3<Float>, matrix: simd_float3x3) {
-        let fullRange = CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        let format = CVPixelBufferGetPixelFormatType(image)
+        let fullRange = isFullRange(format)
+        // A sample's code value per 1.0 of the texture's normalized read:
+        // 255 for 8-bit; 10-bit samples sit in the top bits of 16 (r16Unorm
+        // reads code × 64 / 65535), so 65535 / 64 for them.
+        let bits: Float = isTenBit(format) ? 10 : 8
+        let unit: Float = isTenBit(format) ? 65535 / 64 : 255
+        let step = powf(2, bits - 8)           // 1 for 8-bit, 4 for 10-bit
+        let maxCode = powf(2, bits) - 1        // 255 or 1023
         let matrixKey = CVBufferCopyAttachment(image, kCVImageBufferYCbCrMatrixKey, nil) as? String
         let kr: Float
         let kb: Float
@@ -184,11 +229,14 @@ final class MetalPresenter: @unchecked Sendable {
         let g = SIMD3<Float>(1, -2 * (1 - kb) * kb / kg, -2 * (1 - kr) * kr / kg)
         let b = SIMD3<Float>(1, 2 * (1 - kb), 0)
         var matrix = simd_float3x3(rows: [r, g, b])
-        var offset = SIMD3<Float>(0, -128 / 255, -128 / 255)
-        if !fullRange {
-            // Limited range: Y in 16..235, chroma in 16..240.
-            offset.x = -16 / 255
-            matrix = matrix * simd_float3x3(diagonal: SIMD3<Float>(255 / 219, 255 / 224, 255 / 224))
+        let mid = 128 * step / unit
+        var offset = SIMD3<Float>(0, -mid, -mid)
+        if fullRange {
+            matrix = matrix * simd_float3x3(diagonal: SIMD3<Float>(repeating: unit / maxCode))
+        } else {
+            // Limited range: Y in 16..235, chroma in 16..240 (×4 for 10-bit).
+            offset.x = -16 * step / unit
+            matrix = matrix * simd_float3x3(diagonal: SIMD3<Float>(unit / (219 * step), unit / (224 * step), unit / (224 * step)))
         }
         return (offset, matrix)
     }
@@ -201,7 +249,9 @@ final class MetalPresenter: @unchecked Sendable {
             let r = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, image, nil, format, w, h, i, &t)
             return r == kCVReturnSuccess ? t : nil
         }
-        guard let y = plane(0, .r8Unorm), let cbcr = plane(1, .rg8Unorm) else { return nil }
+        let tenBit = Self.isTenBit(CVPixelBufferGetPixelFormatType(image))
+        guard let y = plane(0, tenBit ? .r16Unorm : .r8Unorm),
+              let cbcr = plane(1, tenBit ? .rg16Unorm : .rg8Unorm) else { return nil }
         return (y, cbcr)
     }
 
@@ -220,7 +270,8 @@ final class MetalPresenter: @unchecked Sendable {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         pass.colorAttachments[0].storeAction = .store
-        guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        guard let pipeline = pipelines[target.pixelFormat],
+              let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -239,7 +290,8 @@ final class MetalPresenter: @unchecked Sendable {
               let (luma, chroma) = textures(for: image),
               let lumaTex = CVMetalTextureGetTexture(luma),
               let chromaTex = CVMetalTextureGetTexture(chroma) else { return nil }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        let format = Self.layerFormat(for: image)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width, height: height, mipmapped: false)
         desc.usage = [.renderTarget]
         desc.storageMode = .shared
         guard let target = commands.device.makeTexture(descriptor: desc),
@@ -250,6 +302,13 @@ final class MetalPresenter: @unchecked Sendable {
         withExtendedLifetime((image, luma, chroma)) {}
         var out = [UInt8](repeating: 0, count: width * height * 4)
         target.getBytes(&out, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        guard format == .bgr10a2Unorm else { return out }
+        // Unpack 10:10:10:2 (blue in the low bits) to the same BGRA bytes.
+        for i in stride(from: 0, to: out.count, by: 4) {
+            let v = UInt32(out[i]) | UInt32(out[i + 1]) << 8 | UInt32(out[i + 2]) << 16 | UInt32(out[i + 3]) << 24
+            func eight(_ c: UInt32) -> UInt8 { UInt8((c * 255 + 511) / 1023) }
+            out[i] = eight(v & 0x3ff); out[i + 1] = eight(v >> 10 & 0x3ff); out[i + 2] = eight(v >> 20 & 0x3ff); out[i + 3] = 255
+        }
         return out
     }
 
@@ -259,6 +318,8 @@ final class MetalPresenter: @unchecked Sendable {
         autoreleasepool {
             // Wait first, then take the newest image, including arrivals during
             // the drawable wait. The mailbox remains available to VT callbacks.
+            let wanted = lock.withLock { wantedLayerFormat }
+            if layer.pixelFormat != wanted { layer.pixelFormat = wanted }
             guard let drawable = layer.nextDrawable(), let command = commands.makeCommandBuffer() else {
                 lock.withLock { if mailbox.take() != nil { unavailable += 1 }; running = false }
                 return

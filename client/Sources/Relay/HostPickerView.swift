@@ -105,7 +105,11 @@ private struct HostList: View {
     var body: some View {
         // One ForEach over stably identified items, so rows are never matched
         // by position (that cross-faded the Paired and Available titles).
-        List(selection: $model.selection) {
+        // Choosing a row, by click or arrow keys, cancels connecting at launch.
+        List(selection: Binding(get: { model.selection }, set: {
+            model.disarmAutoConnect()
+            model.selection = $0
+        })) {
             ForEach(model.listItems) { item in
                 switch item {
                 case let .title(section, collapsed, collapsible):
@@ -282,6 +286,7 @@ private struct HostRow: View {
         }
         .simultaneousGesture(TapGesture().onEnded {
             if model.renamingID != row.id { model.finishRename() }
+            model.disarmAutoConnect()
             model.selection = row.id
         })
         .contextMenu { contextMenu }
@@ -432,34 +437,88 @@ struct SessionSettingsView: View {
         })
     }
 
+    /// A color option: off and disabled, with the reason, when the PC or
+    /// this Mac can't do it.
+    private func pictureOption(_ title: String, detail: String, feature: VideoFeatures,
+                               key: WritableKeyPath<SessionPrefs, Bool>) -> some View {
+        let availability = model.availability(feature)
+        return DescribedCheckbox(title, detail: availability.reason ?? detail,
+                                 isOn: Binding(get: { availability == .available && model.prefs[keyPath: key] },
+                                               set: { var prefs = model.prefs; prefs[keyPath: key] = $0; model.setPrefs(prefs) }))
+            .disabled(availability != .available)
+            .padding(.top, Style.Space.s)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Text("General").font(Style.Font.section).foregroundStyle(.secondary)
+            DescribedCheckbox("Connect when Relay opens",
+                              detail: model.lastHostName.map { "Reconnects to \(SessionText.shortName($0)) once found." }
+                                  ?? "Reconnects to the last PC you used.",
+                              isOn: preference(\.connectAtLaunch))
+                .padding(.top, Style.Space.xs)
             Text("Video").font(Style.Font.section).foregroundStyle(.secondary)
+                .padding(.top, Style.Space.l)
             VStack(alignment: .leading, spacing: Style.Space.tight) {
-                Text("Bitrate")
-                Text("Higher looks sharper but needs a faster connection.")
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Bitrate")
+                    Spacer(minLength: Style.Space.s)
+                    // Automatic follows the resolution, refresh rate and
+                    // link; picking a value below turns it off.
+                    Toggle("Automatic", isOn: Binding(get: { model.prefs.bitrateAutomatic },
+                                                      set: { model.setBitrateAutomatic($0) }))
+                        .toggleStyle(.checkbox)
+                }
+                Text(model.prefs.bitrateAutomatic
+                     ? "Set for the resolution, refresh rate and connection."
+                     : "Higher looks sharper but needs a faster connection.")
                     .font(Style.Font.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .padding(.top, Style.Space.xs)
             HStack(spacing: Style.Space.s) {
-                Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.prefs.bitrateMbps) }, set: {
-                    var prefs = model.prefs
-                    prefs.bitrateMbps = VideoBitrate.bitrate(forSliderPosition: $0)
-                    model.setPrefs(prefs)
+                Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
+                    model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
                 }), in: 0...1)
                 .frame(width: 160)
                 .accessibilityLabel("Video bitrate")
-                .accessibilityValue("\(model.prefs.bitrateMbps) Mbps")
+                .accessibilityValue("\(model.effectiveBitrate) Mbps")
                 .help("Video bitrate from 1 to 1,000 Mbps")
-                TextField("", value: preference(\.bitrateMbps), format: .number.grouping(.never))
+                TextField("", value: Binding(get: { model.effectiveBitrate }, set: { model.setBitrate($0) }),
+                          format: .number.grouping(.never))
                     .multilineTextAlignment(.trailing)
                     .frame(width: 58)
                     .accessibilityLabel("Video bitrate in megabits per second")
                 Text("Mbps").font(Style.Font.body)
             }
             .padding(.top, Style.Space.xs)
+            // Applied by the PC when it offers them (TXT `enc`); otherwise
+            // disabled, with the reason where the description would be.
+            let quality = model.availability(.encoderQuality)
+            VStack(alignment: .leading, spacing: Style.Space.tight) {
+                HStack(alignment: .firstTextBaseline) {
+                    // Text ignores .disabled; dim it like a disabled checkbox's.
+                    Text("Encoder")
+                        .foregroundStyle(quality == .available ? .primary : .tertiary)
+                    Spacer(minLength: Style.Space.s)
+                    Picker("Encoder", selection: preference(\.encoderQuality)) {
+                        ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Text(quality.reason ?? "Better quality takes the PC longer per frame.")
+                    .font(Style.Font.caption)
+                    .foregroundStyle(quality == .available ? .secondary : .tertiary)
+                    .lineLimit(1)
+            }
+            .disabled(quality != .available)
+            .padding(.top, Style.Space.s)
+            pictureOption("Full color (4:4:4)", detail: "Sharper colored text; needs more bitrate.",
+                          feature: .fullColor, key: \.fullColor)
+            pictureOption("10-bit color", detail: "Smoother gradients with less banding.",
+                          feature: .tenBit, key: \.tenBit)
             DescribedCheckbox("Enable VSync",
                               detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))

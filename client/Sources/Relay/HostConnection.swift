@@ -57,6 +57,11 @@ final class HostConnection: @unchecked Sendable {
         var requestedHeight = 0
         var requestedRefresh = 60
         var requestedBitrateMbps = VideoBitrate.defaultValue
+        /// Codecs to offer, within what this Mac decodes in hardware; nil
+        /// offers all of those (the PC picks HEVC when both are offered).
+        var codecs: UInt8? = nil
+        /// Picture options, sent only to a host that reads them.
+        var video: Proto.VideoRequest? = nil
         var wantsInput: Bool = true
         var clientName = ""
         /// PIN to use without asking (e.g. from the command line).
@@ -84,6 +89,7 @@ final class HostConnection: @unchecked Sendable {
     /// SERVER_HELLO has arrived (the handshake timeout runs until it does).
     private var greeted = false
     private var supportsPairName = false
+    private var supportsVideoOptions = false
     private var pairing = false
     /// Our half of the PIN exchange, from PAIR until PAIR_REPLY.
     private var cpace: CPaceInitiator?
@@ -219,6 +225,7 @@ final class HostConnection: @unchecked Sendable {
         handshakeHash = Data()
         greeted = false
         supportsPairName = false
+        supportsVideoOptions = false
         pairing = false
         cpace = nil
         hostBusy = false
@@ -390,6 +397,7 @@ final class HostConnection: @unchecked Sendable {
     private func handleServerHello(_ hello: Proto.ServerHello) {
         greeted = true
         supportsPairName = hello.supportsPairName
+        supportsVideoOptions = hello.supportsVideoOptions
         if !hello.name.isEmpty { serviceName = hello.name }
         if options.unpairOnly { return } // UNPAIR is already on its way
         if options.verifyOnly {
@@ -481,7 +489,8 @@ final class HostConnection: @unchecked Sendable {
     }
 
     private func sendClientHello() {
-        guard Self.hardwareCodecs != 0 else {
+        let codecs = options.codecs.map { $0 & Self.hardwareCodecs } ?? Self.hardwareCodecs
+        guard codecs != 0 else {
             finish("This Mac has no supported hardware H.264 or HEVC decoder")
             return
         }
@@ -491,8 +500,9 @@ final class HostConnection: @unchecked Sendable {
             refresh: options.requestedRefresh,
             bitrateMbps: options.requestedBitrateMbps,
             wantsInput: options.wantsInput,
-            codecs: Self.hardwareCodecs,
-            name: options.clientName
+            codecs: codecs,
+            name: options.clientName,
+            video: supportsVideoOptions ? options.video : nil
         )
         sendRaw(hello)
         ready = true

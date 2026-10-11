@@ -35,6 +35,16 @@ enum Proto {
 
     static let flagKeyframe: UInt8 = 0x01
     static let capPairName: UInt8 = 0x01
+    /// SERVER_HELLO: the host reads CLIENT_HELLO's picture-options extension
+    /// (proposed in docs/VIDEO-OPTIONS-HANDOFF.md).
+    static let capVideoOptions: UInt8 = 0x02
+
+    /// CLIENT_HELLO extension after the name: `u8 encoder_quality` (0 = the
+    /// host's default, else `EncoderQuality`), `u8 video_flags` (`VideoFlags`).
+    struct VideoRequest: Equatable {
+        var quality: UInt8
+        var flags: UInt8
+    }
 
     enum Codec: UInt8 {
         case h264 = 1
@@ -70,6 +80,10 @@ enum Proto {
         let fps: Int
         let bitrateMbps: Int
         let codec: Codec
+        /// STREAM_START's last byte, reserved (0) before picture options:
+        /// bits 0-1 the encoder quality used (0 = not reported), bit 2 4:4:4,
+        /// bit 3 10-bit.
+        var videoFormat: UInt8 = 0
 
         init?(_ p: Data) {
             guard p.count >= 10, let codec = Codec(rawValue: p[p.startIndex + 8]) else { return nil }
@@ -80,6 +94,7 @@ enum Proto {
             fps = Int(p.be16(at: 4))
             self.bitrateMbps = bitrateMbps
             self.codec = codec
+            videoFormat = p[p.startIndex + 9]
         }
     }
 
@@ -92,6 +107,7 @@ enum Proto {
         let capabilities: UInt8
 
         var supportsPairName: Bool { capabilities & Proto.capPairName != 0 }
+        var supportsVideoOptions: Bool { capabilities & Proto.capVideoOptions != 0 }
 
         init?(_ p: Data) {
             guard p.count >= 3 else { return nil }
@@ -203,8 +219,10 @@ enum Proto {
         return d
     }
 
+    /// `video` only for a host whose SERVER_HELLO has `capVideoOptions`;
+    /// older hosts ignore bytes after the name anyway.
     static func clientHello(width: Int, height: Int, refresh: Int, bitrateMbps: Int,
-                            wantsInput: Bool, codecs: UInt8, name: String) -> Data {
+                            wantsInput: Bool, codecs: UInt8, name: String, video: VideoRequest? = nil) -> Data {
         var p = Data()
         p.appendBE16(version)
         p.appendBE16(UInt16(clamping: width))
@@ -216,6 +234,7 @@ enum Proto {
         let nameBytes = Array(name.utf8.prefix(255))
         p.append(UInt8(nameBytes.count))
         p.append(contentsOf: nameBytes)
+        if let video { p.append(contentsOf: [video.quality, video.flags]) }
         return message(.clientHello, payload: p)
     }
 

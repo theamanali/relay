@@ -47,8 +47,19 @@
 // Then `swift run Relay` shows "Fake PC" in the picker, or
 // `swift run Relay --host 127.0.0.1:8470` dials it directly.
 //
-// Every message this fake sends or reads fits one record, so it does not
-// split or reassemble them (the app does; CryptoTests covers that).
+// `--clip <file.hevc>` streams an Annex B HEVC clip after CLIENT_HELLO, looped
+// at 60 fps (STREAM_START, CODEC_CONFIG, FRAMEs, a PING a second), so the
+// Mac's decode and presentation can be checked without a PC. `--size WxH`
+// sets STREAM_START's size (1280x720) and `--format <n>` its video_format
+// byte. `--enc <list>` (e.g. q,444,10) adds TXT `enc` to the printed dns-sd
+// line and SERVER_HELLO's picture-options capability (0x02); CLIENT_HELLO's
+// extension is printed either way.
+//
+//   ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -c:v libx265 -pix_fmt yuv444p -f hevc clip.hevc
+//   ./fakehost 8471 hang --paired --clip clip.hevc --format 4 --enc q,444,10
+//
+// Messages this fake reads fit one record; FRAMEs it streams are split into
+// records as the spec says (the app reassembles them; CryptoTests covers that).
 import CryptoKit
 import Foundation
 setbuf(stdout, nil)
@@ -91,8 +102,72 @@ if let i = args.firstIndex(of: "--pg"), i + 1 < args.count {
 } else {
     pgHex = pairingDigest(forgot ? "forgot" : claimPaired ? "paired" : "")
 }
+func argument(_ flag: String) -> String? {
+    args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+}
+let enc = argument("--enc")
+let videoFormat = argument("--format").flatMap { UInt8($0) } ?? 0
+let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { UInt16($0) } } ?? [1280, 720]
 print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
-print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)")
+print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)\(enc.map { " enc=\($0)" } ?? "")")
+
+/// An Annex B HEVC clip as CODEC_CONFIG parameter sets and FRAME access
+/// units (AUDs dropped; a new unit starts at a slice whose
+/// first_slice_segment_in_pic_flag is set).
+struct Clip {
+    var parameterSets: [Data] = []
+    var units: [(keyframe: Bool, nals: [Data])] = []
+
+    init?(path: String) {
+        guard let bytes = try? [UInt8](Data(contentsOf: URL(fileURLWithPath: path))) else { return nil }
+        var starts: [(Int, Int)] = []
+        var i = 0
+        while i + 3 <= bytes.count {
+            if bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 1 { starts.append((i, 3)); i += 3 }
+            else if i + 4 <= bytes.count, bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 0, bytes[i + 3] == 1 { starts.append((i, 4)); i += 4 }
+            else { i += 1 }
+        }
+        var current: [Data] = [], keyframe = false, hasSlice = false
+        func flush() {
+            if hasSlice { units.append((keyframe, current)) }
+            current = []; keyframe = false; hasSlice = false
+        }
+        for (k, start) in starts.enumerated() {
+            let end = k + 1 < starts.count ? starts[k + 1].0 : bytes.count
+            var nal = Array(bytes[(start.0 + start.1)..<end])
+            while nal.last == 0 { nal.removeLast() } // trailing zero bytes
+            guard nal.count > 2 else { continue }
+            let type = Int(nal[0] >> 1) & 0x3f
+            switch type {
+            case 32...34:
+                if parameterSets.count < 3 { parameterSets.append(Data(nal)) }
+            case 35: continue
+            case 0...31:
+                if nal[2] & 0x80 != 0, hasSlice { flush() }
+                hasSlice = true
+                if (16...23).contains(type) { keyframe = true }
+                current.append(Data(nal))
+            default:
+                current.append(Data(nal))
+            }
+        }
+        flush()
+        guard parameterSets.count == 3, !units.isEmpty else { return nil }
+    }
+}
+let clip: Clip? = argument("--clip").map { path in
+    guard let clip = Clip(path: path) else { print("could not read an HEVC clip from \(path)"); exit(2) }
+    print("clip: \(clip.units.count) frames, \(clip.units.filter(\.keyframe).count) keyframes")
+    return clip
+}
+
+/// Ended by the reader thread when the client closes.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func set() { lock.lock(); value = true; lock.unlock() }
+}
 
 func readExact(_ fd: Int32, _ n: Int) -> Data? {
     var out = Data(); var buf = [UInt8](repeating: 0, count: 65536)
@@ -110,8 +185,13 @@ func readFrame(_ fd: Int32) -> Data? {
     return readExact(fd, n)
 }
 func frame(_ body: Data) -> Data { var f = Data(); f.appendBE32(UInt32(body.count)); f.append(body); return f }
-func writeAll(_ fd: Int32, _ d: Data) {
-    d.withUnsafeBytes { p in var off = 0; while off < d.count { let r = write(fd, p.baseAddress! + off, d.count - off); if r <= 0 { return }; off += r } }
+@discardableResult
+func writeAll(_ fd: Int32, _ d: Data) -> Bool {
+    d.withUnsafeBytes { p in
+        var off = 0
+        while off < d.count { let r = write(fd, p.baseAddress! + off, d.count - off); if r <= 0 { return false }; off += r }
+        return true
+    }
 }
 
 /// One direction of the record layer, one record per message.
@@ -121,6 +201,17 @@ final class Channel {
     func seal(type: UInt8, payload: Data) -> Data {
         var m = Data([type, 0, 0, 0]); m.appendBE32(UInt32(payload.count)); m.append(payload)
         return frame(try! cipher.encrypt(ad: Data(), plaintext: m))
+    }
+    /// A message of any size: 65,519-byte chunks, one record each.
+    func sealChunked(type: UInt8, flags: UInt8 = 0, payload: Data) -> Data {
+        var m = Data([type, flags, 0, 0]); m.appendBE32(UInt32(payload.count)); m.append(payload)
+        var out = Data(), offset = 0
+        while offset < m.count {
+            let end = min(offset + 65_519, m.count)
+            out.append(frame(try! cipher.encrypt(ad: Data(), plaintext: m.subdata(in: offset..<end))))
+            offset = end
+        }
+        return out
     }
     func open(_ body: Data) -> (UInt8, Data)? {
         guard let plain = try? cipher.decrypt(ad: Data(), ciphertext: body), plain.count >= 8,
@@ -158,7 +249,7 @@ func serve(_ fd: Int32) {
     }
     var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     hello.append(claimPaired ? 1 : 0)
-    if !legacyPair { hello.append(Proto.capPairName) }
+    if !legacyPair { hello.append(Proto.capPairName | (enc != nil ? Proto.capVideoOptions : 0)) }
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
     /// CPace as the responder (B), after the Mac's PAIR. Returns whether it confirmed.
@@ -187,6 +278,33 @@ func serve(_ fd: Int32) {
         claimPaired = true
         writeAll(fd, tx.seal(type: 0xA1, payload: Data([1]))); print("-- PAIR_RESULT paired")
         return true
+    }
+
+    /// The clip, looped at 60 fps until the client goes away.
+    func stream(_ clip: Clip) {
+        var start = Data()
+        start.appendBE16(streamSize.first ?? 1280); start.appendBE16(streamSize.last ?? 720)
+        start.appendBE16(60); start.appendBE16(120); start.append(2); start.append(videoFormat)
+        var config = Data()
+        for set in clip.parameterSets { config.appendBE32(UInt32(set.count)); config.append(set) }
+        guard writeAll(fd, tx.seal(type: 0x02, payload: start)), writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
+        let closed = Flag()
+        Thread.detachNewThread { while readFrame(fd) != nil {}; closed.set() } // PONGs and input
+        var sent = 0, lastPing = Date.distantPast
+        while !closed.isSet {
+            let unit = clip.units[sent % clip.units.count]
+            var body = Data()
+            for nal in unit.nals { body.appendBE32(UInt32(nal.count)); body.append(nal) }
+            guard writeAll(fd, tx.sealChunked(type: 0x04, flags: unit.keyframe ? 0x01 : 0, payload: body)) else { break }
+            sent += 1
+            if Date().timeIntervalSince(lastPing) >= 1 {
+                lastPing = Date()
+                var ping = Data(); ping.appendBE32(0); ping.appendBE32(UInt32(truncatingIfNeeded: Int(Date().timeIntervalSince1970 * 1e6)))
+                writeAll(fd, tx.seal(type: 0x07, payload: ping))
+            }
+            usleep(16_667)
+        }
+        print("-- streamed \(sent) frames; client gone")
     }
 
     guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("-- no first message (a pairing check ends here)"); return }
@@ -246,8 +364,14 @@ func serve(_ fd: Int32) {
     case ("notpaired", 0x81):
         writeAll(fd, tx.seal(type: 0x06, payload: Data([4]))); print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
     case (_, 0x81):
-        print("-- CLIENT_HELLO; \(mode == "hang" ? "hanging" : "closing")")
-        if mode == "hang" { _ = readFrame(fd) }
+        // u16 version, width, height, refresh, bitrate, u8 flags, u8 codecs,
+        // u8 name length, name, then the optional u8 quality, u8 video flags.
+        let p = [UInt8](payload)
+        let codecs = p.count > 11 ? p[11] : 0
+        let nameEnd = p.count > 12 ? 13 + Int(p[12]) : p.count
+        let ext = p.count >= nameEnd + 2 ? " quality \(p[nameEnd]) video flags 0b\(String(p[nameEnd + 1], radix: 2))" : " no extension"
+        print("-- CLIENT_HELLO (codecs 0b\(String(codecs, radix: 2)),\(ext)); \(clip != nil ? "streaming" : mode == "hang" ? "hanging" : "closing")")
+        if let clip { stream(clip) } else if mode == "hang" { _ = readFrame(fd) }
     default:
         print("-- unexpected; closing")
     }
@@ -268,6 +392,7 @@ while true {
     let fd = accept(sock, nil, nil)
     guard fd >= 0 else { continue }
     var nd: Int32 = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nd, socklen_t(MemoryLayout<Int32>.size))
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nd, socklen_t(MemoryLayout<Int32>.size)) // a streamed write after close fails instead
     print("== connection")
     serve(fd)
 }

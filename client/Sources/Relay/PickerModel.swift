@@ -54,7 +54,9 @@ final class PickerModel {
     var renameDraft = ""
     var pinPrompt: PINPrompt?
     var notice: Notice?
-    var forgetCandidate: Row?
+    var forgetCandidate: Row? {
+        didSet { if forgetCandidate != nil { disarmAutoConnect() } }
+    }
     /// A paired PC about to be connected over Wi-Fi: the picker asks first.
     var wifiCandidate: Row?
     var pickerActive = true
@@ -68,6 +70,7 @@ final class PickerModel {
     /// sits too close to the screen's right edge. Chosen here because
     /// AppKit's own fallback for a popover would try the left side next.
     func showSettings() {
+        disarmAutoConnect()
         settingsEdge = settingsFitsRight() ? .trailing : .bottom
         settingsPresented = true
     }
@@ -81,6 +84,7 @@ final class PickerModel {
     /// paired PC reached that way gets a warning first, unless the user has
     /// turned it off. Cancel and Pair pass straight through.
     func requestConnect() {
+        disarmAutoConnect()
         finishRename()
         if !connecting, let row = selected, row.paired, connectsOverWiFi(row.host),
            !UserDefaults.standard.bool(forKey: Self.wifiWarningSuppressedKey) {
@@ -168,6 +172,7 @@ final class PickerModel {
     /// nothing selected selects the first PC, as the list does elsewhere.
     func toggle(_ section: PickerSection) {
         guard canCollapse(section) else { return }
+        disarmAutoConnect()
         if collapsed.remove(section) == nil { collapsed.insert(section) }
         if selection.map({ !visibleRowIDs.contains($0) }) ?? true { selection = visibleRowIDs.first }
     }
@@ -203,6 +208,42 @@ final class PickerModel {
         } else if selection == nil {
             selection = visibleRowIDs.first
         }
+        autoConnectIfReady()
+    }
+
+    // MARK: connect when Relay opens
+
+    /// The last PC streamed from (AppDelegate keeps it current), the one
+    /// "Connect when Relay opens" connects to.
+    @ObservationIgnored var lastHostKey: Data?
+    /// Its nickname or remembered name while it is not in the list.
+    @ObservationIgnored var storedName: (Data) -> String? = { _ in nil }
+    /// Until the first connect or any picker action. Never re-armed: a
+    /// session that ends returns to the picker and stays there.
+    @ObservationIgnored private(set) var autoConnectArmed = true
+    /// A PC that turns up while another app is in front never takes over
+    /// the screen; HostPickerWindowController reports the window's key state.
+    @ObservationIgnored var isPickerKey: () -> Bool = { true }
+
+    func disarmAutoConnect() { autoConnectArmed = false }
+
+    /// Connect to the last PC once it shows up paired, as if Connect were
+    /// pressed (so the Wi-Fi warning still applies). Called on every list
+    /// update and when the picker window becomes key.
+    func autoConnectIfReady() {
+        guard autoConnectArmed, prefs.connectAtLaunch, let key = lastHostKey,
+              pickerActive, !connecting, renamingID == nil, pinPrompt == nil,
+              forgetCandidate == nil, wifiCandidate == nil, isPickerKey(),
+              let row = pairedRows.first(where: { $0.host.publicKey == key }) else { return }
+        disarmAutoConnect()
+        reveal(row)
+        requestConnect()
+    }
+
+    /// For the setting's note: the name the list shows, else the stored one.
+    var lastHostName: String? {
+        guard let key = lastHostKey else { return nil }
+        return rows.first(where: { $0.host.publicKey == key })?.name ?? storedName(key)
     }
 
     func preselect(key: Data?, name: String) {
@@ -236,6 +277,52 @@ final class PickerModel {
         prefsChanged?(prefs)
     }
 
+    // MARK: bitrate
+
+    /// What Connect would ask for: the automatic value for the current mode
+    /// and the selected PC's link, or the user's own.
+    var effectiveBitrate: Int {
+        guard prefs.bitrateAutomatic else { return prefs.bitrateMbps }
+        let (width, height) = StreamMode.size(native: nativePixelSize, scale: mode.scale)
+        let overWiFi = selected.map { connectsOverWiFi($0.host) } ?? false
+        return VideoBitrate.automatic(width: width, height: height, refresh: mode.refresh, overWiFi: overWiFi)
+    }
+
+    // MARK: picture options
+
+    /// Whether this Mac decodes a picture option in hardware; replaced in tests.
+    @ObservationIgnored var macDecodes: (VideoFeatures) -> Bool = { feature in
+        switch feature {
+        case .fullColor: VideoCapabilities.supports444
+        case .tenBit: VideoCapabilities.supports10Bit
+        default: true
+        }
+    }
+
+    /// For the selected PC: usable, or why not.
+    func availability(_ feature: VideoFeatures) -> VideoOptionAvailability {
+        .of(feature, pcFeatures: selected?.host.facts.videoFeatures, macDecodes: macDecodes(feature))
+    }
+
+    /// A bitrate the user picked (slider, field, menu) ends Automatic. The
+    /// field writes its value back when it loses focus, so the value
+    /// already shown changes nothing.
+    func setBitrate(_ mbps: Int) {
+        guard VideoBitrate.clamp(mbps) != effectiveBitrate || !prefs.bitrateAutomatic else { return }
+        var next = prefs
+        next.bitrateMbps = mbps
+        next.bitrateAutomatic = false
+        setPrefs(next)
+    }
+
+    /// Turning Automatic off keeps the value it was showing.
+    func setBitrateAutomatic(_ on: Bool) {
+        var next = prefs
+        if !on { next.bitrateMbps = effectiveBitrate }
+        next.bitrateAutomatic = on
+        setPrefs(next)
+    }
+
     func flash(_ message: String, seconds: TimeInterval = 8) {
         flashTask?.cancel()
         status = message
@@ -248,6 +335,7 @@ final class PickerModel {
 
     func beginRename(_ row: Row? = nil) {
         guard let row = row ?? selected, row.host.publicKey != nil, !connecting else { return }
+        disarmAutoConnect()
         finishRename()
         selection = row.id
         renameDraft = row.name

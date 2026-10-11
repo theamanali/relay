@@ -18,6 +18,20 @@ final class LatencyStats: @unchecked Sendable {
         var clientP95: Double? = nil
         var performance: VideoPerformanceSnapshot? = nil
 
+        /// The overlay's main numbers on one line, for the log while the
+        /// overlay is shown (comparing runs, e.g. --codec h264 against HEVC).
+        var logLine: String {
+            func ms(_ value: Double?) -> String { value.map { String(format: "%.2f", $0) } ?? "--" }
+            var line = String(format: "fps %.1f", fps)
+                + " host p50 \(ms(hostMedian)) p95 \(ms(hostP95))"
+                + " rtt/2 \(ms(networkMedian)) rx>decode p50 \(ms(decodeMedian))"
+            if let p = performance, p.backend == "metal" {
+                line += " rx>present mean \(ms(p.clientMilliseconds)) p95 \(ms(p.clientP95))"
+                    + " replaced \(p.replaced) late \(p.late)"
+            }
+            return line + " (ms, \(samples) host samples)"
+        }
+
         var overlayText: String {
             func ms(_ value: Double?) -> String {
                 value.map { String(format: "%6.2f ms", $0) } ?? "      --"

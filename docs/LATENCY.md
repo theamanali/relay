@@ -192,9 +192,32 @@ matrix from the decoded buffer, so the client needed no change.
 - **Locking the Mac's refresh to the PC's tick.** The Mac would report its
   vblank phase and the PC would align capture to it. This would remove most of
   the remaining wait for the next refresh. It needs a protocol change.
-- **`--codec h264` and `--scale 0.75`.** Neither has been measured yet. H.264
-  might encode faster at the same quality preset, and 0.75 scale encodes and
-  decodes about half the pixels.
+- **`--scale 0.75`.** Not measured yet; it encodes and decodes about half
+  the pixels.
+- **Encoder quality, 4:4:4 and 10-bit** (`docs/VIDEO-OPTIONS-HANDOFF.md`):
+  not measured until the host supports them.
+
+## HEVC vs H.264 (2026-10-10)
+
+RTX 3080 Ti, M3 Pro, gigabit cable, 3024×1964@120, 120 Mbps, about a minute
+of moving content each, one run per codec (`--latency-stats`, the Mac's
+`Latency:` log lines every 5 s, medians of the eleven full-window readings):
+
+| ms | HEVC | H.264 |
+|---|---|---|
+| PC work p50 / p95 | 6.14 / 6.73 | 6.09 / 6.56 |
+| RTT/2 | 1.45 | 1.45 |
+| Mac receive → decoded p50 | 2.68 | 3.65 |
+| Mac receive → on screen, mean / p95 | 5.30 / 10.80 | 6.00 / 10.86 |
+| Decode fps | 120 | 120 |
+
+NVENC's encode time is not the PC's limit at this preset, and the Mac decodes
+H.264 about 1 ms slower, so HEVC stays the default; `--codec h264` (Mac) or
+`--codec h264` (PC) remains for measurements and for GPUs without an HEVC
+encoder. The Mac decoded H.264 at a steady 120 fps despite the mode being
+beyond H.264's common levels. Both runs showed occasional on-screen p95
+spikes (16–19 ms, one or two per run, and ~30 ms while the first window
+filled), so they are not the codec's.
 
 ## Reproducing
 
