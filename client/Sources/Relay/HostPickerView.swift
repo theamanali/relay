@@ -477,9 +477,12 @@ struct SessionSettingsView: View {
                 .toggleStyle(.checkbox)
                 .padding(.top, Style.Space.xs)
             Group {
-                // Off sends keys by their physical position instead.
+                // Off sends keys by their physical position instead. The note
+                // describes the current mapping, in the same key order.
                 DescribedCheckbox("Mac-style modifier keys",
-                                  detail: "⌘ is Ctrl, ⌥ is Alt, ⌃ is the Windows key.",
+                                  detail: model.prefs.modifiers == .mac
+                                      ? "⌘ is Ctrl, ⌥ is Alt, ⌃ is the Windows key."
+                                      : "⌘ is Alt, ⌥ is the Windows key, ⌃ is Ctrl.",
                                   isOn: Binding(get: { model.prefs.modifiers == .mac }, set: {
                                       var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
                                   }))
