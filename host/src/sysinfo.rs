@@ -8,6 +8,7 @@ use windows::Win32::System::SystemInformation::{
     GetSystemFirmwareTable, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
 };
 
+use crate::encoder::VideoCaps;
 use crate::gpu::GpuInfo;
 use winreg::enums::HKEY_LOCAL_MACHINE;
 use winreg::RegKey;
@@ -28,10 +29,12 @@ pub struct HostFacts {
     pub os: String,
     /// Unicast IPv4 addresses, most useful first (link-local last).
     pub ips: Vec<String>,
+    /// Picture options the encoder honours (`VideoCaps::txt_value`, "q,444,10").
+    pub encoder_features: String,
 }
 
 impl HostFacts {
-    pub fn gather(gpu: &GpuInfo) -> Self {
+    pub fn gather(gpu: &GpuInfo, video: VideoCaps) -> Self {
         HostFacts {
             cpu: cpu_name().unwrap_or_default(),
             ram_gb: ram_gb().unwrap_or(0),
@@ -40,12 +43,13 @@ impl HostFacts {
             vram_gb: (gpu.dedicated_vram as f64 / (1u64 << 30) as f64).round() as u32,
             os: os_edition().unwrap_or_default(),
             ips: ipv4_addresses(),
+            encoder_features: video.txt_value(),
         }
     }
 
     /// TXT record entries (`cpu`, `ram`, `ramtype`, `gpu`, `vram`, `os`,
-    /// `ip`); empty values are left out so an older client's parsing sees
-    /// nothing unexpected.
+    /// `ip`, `enc`); empty values are left out so an older client's parsing
+    /// sees nothing unexpected.
     pub fn txt_entries(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         if !self.cpu.is_empty() {
@@ -68,6 +72,9 @@ impl HostFacts {
         }
         if !self.ips.is_empty() {
             out.push(("ip".into(), self.ips.join(",")));
+        }
+        if !self.encoder_features.is_empty() {
+            out.push(("enc".into(), self.encoder_features.clone()));
         }
         out
     }
@@ -271,6 +278,18 @@ mod tests {
                 ("ram".to_string(), "32".to_string()),
                 ("ip".to_string(), "192.168.1.5".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn encoder_features_publish_as_enc() {
+        let facts = HostFacts {
+            encoder_features: "q,444,10".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            facts.txt_entries(),
+            vec![("enc".to_string(), "q,444,10".to_string())]
         );
     }
 }

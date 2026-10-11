@@ -10,8 +10,48 @@ pub const DEFAULT_BITRATE_MBPS: u16 = 120;
 pub const MIN_BITRATE_MBPS: u16 = 1;
 pub const MAX_BITRATE_MBPS: u16 = 1_000;
 /// Optional SERVER_HELLO capability byte, after `paired`.
-/// See host/PAIR-NAME-HANDOFF.md until the Mac/spec rollout is complete.
 pub const CAP_PAIR_NAME: u8 = 0x01;
+/// The host reads CLIENT_HELLO's picture-options extension after `name`.
+pub const CAP_VIDEO_OPTIONS: u8 = 0x02;
+
+/// CLIENT_HELLO extension `encoder_quality`: 0 = the host's default, then
+/// fastest / balanced / best (NVENC P1 / P4 / P6). STREAM_START reports the
+/// value used in `video_format` bits 0-1.
+pub mod encoder_quality {
+    pub const DEFAULT: u8 = 0;
+    pub const FASTEST: u8 = 1;
+    pub const BALANCED: u8 = 2;
+    pub const BEST: u8 = 3;
+}
+
+/// CLIENT_HELLO extension `video_flags`. Unknown bits are ignored.
+pub mod video_flags {
+    pub const FULL_COLOR: u8 = 0x01;
+    pub const TEN_BIT: u8 = 0x02;
+}
+
+/// STREAM_START's last byte (`reserved` before picture options): bits 0-1
+/// the encoder quality used (0 = not reported), bit 2 4:4:4, bit 3 10-bit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoFormat {
+    pub quality: u8,
+    pub full_color: bool,
+    pub ten_bit: bool,
+}
+
+impl VideoFormat {
+    pub fn byte(self) -> u8 {
+        (self.quality & 0x03) | u8::from(self.full_color) << 2 | u8::from(self.ten_bit) << 3
+    }
+
+    pub fn parse(byte: u8) -> Self {
+        Self {
+            quality: byte & 0x03,
+            full_color: byte & 0x04 != 0,
+            ten_bit: byte & 0x08 != 0,
+        }
+    }
+}
 
 /// PAIR's optional name suffix is also CPace's ADa, byte for byte. Binding
 /// it into confirmation prevents even a channel intermediary changing the name.
@@ -166,6 +206,10 @@ pub struct ClientHello {
     pub wants_input: bool,
     pub codecs: u8,
     pub name: String,
+    /// Picture-options extension after `name`, sent only to hosts that
+    /// advertise `CAP_VIDEO_OPTIONS`; `None` when absent (means 0).
+    pub encoder_quality: Option<u8>,
+    pub video_flags: Option<u8>,
 }
 
 impl ClientHello {
@@ -178,7 +222,8 @@ impl ClientHello {
             return None;
         }
         let name_len = p[12] as usize;
-        let name = p.get(13..13 + name_len)?;
+        let name_end = 13 + name_len;
+        let name = p.get(13..name_end)?;
         Some(ClientHello {
             version: u16::from_be_bytes([p[0], p[1]]),
             width: u16::from_be_bytes([p[2], p[3]]),
@@ -188,6 +233,9 @@ impl ClientHello {
             wants_input: p[10] & 0x01 != 0,
             codecs: p[11],
             name: String::from_utf8_lossy(name).into_owned(),
+            // Anything after the extension is ignored, as before it existed.
+            encoder_quality: p.get(name_end).copied(),
+            video_flags: p.get(name_end + 1).copied(),
         })
     }
 }
@@ -239,18 +287,25 @@ pub fn server_hello(name: &str, paired: bool) -> Vec<u8> {
 /// Keep server_hello() as the legacy form for the original v4 test vector.
 pub fn server_hello_with_capabilities(name: &str, paired: bool) -> Vec<u8> {
     let mut p = server_hello(name, paired);
-    p.push(CAP_PAIR_NAME);
+    p.push(CAP_PAIR_NAME | CAP_VIDEO_OPTIONS);
     p
 }
 
-pub fn stream_start(width: u16, height: u16, fps: u16, bitrate_mbps: u16, codec: Codec) -> Vec<u8> {
+pub fn stream_start(
+    width: u16,
+    height: u16,
+    fps: u16,
+    bitrate_mbps: u16,
+    codec: Codec,
+    format: VideoFormat,
+) -> Vec<u8> {
     let mut p = Vec::with_capacity(10);
     p.extend_from_slice(&width.to_be_bytes());
     p.extend_from_slice(&height.to_be_bytes());
     p.extend_from_slice(&fps.to_be_bytes());
     p.extend_from_slice(&bitrate_mbps.to_be_bytes());
     p.push(codec as u8);
-    p.push(0);
+    p.push(format.byte());
     p
 }
 
@@ -314,7 +369,9 @@ mod timing_tests {
         let legacy = server_hello("Test PC", true);
         let extended = server_hello_with_capabilities("Test PC", true);
         assert_eq!(&extended[..legacy.len()], legacy);
-        assert_eq!(extended[legacy.len()], CAP_PAIR_NAME);
+        assert_eq!(extended.len(), legacy.len() + 1);
+        assert_eq!(extended[legacy.len()], CAP_PAIR_NAME | CAP_VIDEO_OPTIONS);
+        assert_eq!(extended[legacy.len()], 0x03);
     }
 
     #[test]
@@ -367,6 +424,86 @@ mod timing_tests {
     }
 
     #[test]
+    fn client_hello_without_the_extension_asks_for_nothing() {
+        let parsed = ClientHello::parse(&hello(120)).unwrap();
+        assert_eq!(parsed.name, "Mac");
+        assert_eq!(parsed.encoder_quality, None);
+        assert_eq!(parsed.video_flags, None);
+    }
+
+    #[test]
+    fn client_hello_reads_the_picture_options_extension() {
+        let mut payload = hello(120);
+        payload.extend_from_slice(&[
+            encoder_quality::BALANCED,
+            video_flags::FULL_COLOR | video_flags::TEN_BIT,
+        ]);
+        let parsed = ClientHello::parse(&payload).unwrap();
+        assert_eq!(parsed.name, "Mac");
+        assert_eq!(parsed.bitrate_mbps, 120);
+        assert_eq!(parsed.encoder_quality, Some(2));
+        assert_eq!(parsed.video_flags, Some(0x03));
+
+        // A truncated extension keeps what is there; later bytes stay ignored.
+        let mut short = hello(120);
+        short.push(encoder_quality::BEST);
+        let parsed = ClientHello::parse(&short).unwrap();
+        assert_eq!(
+            (parsed.encoder_quality, parsed.video_flags),
+            (Some(3), None)
+        );
+        payload.extend_from_slice(&[0xff, 0xff]);
+        let parsed = ClientHello::parse(&payload).unwrap();
+        assert_eq!(
+            (parsed.encoder_quality, parsed.video_flags),
+            (Some(2), Some(3))
+        );
+    }
+
+    #[test]
+    fn client_hello_extension_follows_a_long_name() {
+        let mut payload = hello(120);
+        payload.truncate(12);
+        payload.push(255);
+        payload.extend_from_slice(&[b'n'; 255]);
+        payload.extend_from_slice(&[encoder_quality::FASTEST, video_flags::FULL_COLOR]);
+        let parsed = ClientHello::parse(&payload).unwrap();
+        assert_eq!(parsed.name.len(), 255);
+        assert_eq!(
+            (parsed.encoder_quality, parsed.video_flags),
+            (Some(1), Some(1))
+        );
+    }
+
+    #[test]
+    fn video_format_byte_layout() {
+        assert_eq!(VideoFormat::default().byte(), 0);
+        let all = VideoFormat {
+            quality: encoder_quality::BEST,
+            full_color: true,
+            ten_bit: true,
+        };
+        assert_eq!(all.byte(), 0b1111);
+        let cases = [
+            (encoder_quality::FASTEST, false, false, 0x01),
+            (encoder_quality::BALANCED, true, false, 0x06),
+            (encoder_quality::BEST, false, true, 0x0b),
+            (encoder_quality::DEFAULT, true, true, 0x0c),
+        ];
+        for (quality, full_color, ten_bit, byte) in cases {
+            let format = VideoFormat {
+                quality,
+                full_color,
+                ten_bit,
+            };
+            assert_eq!(format.byte(), byte);
+            assert_eq!(VideoFormat::parse(byte), format);
+        }
+        // Bits above 3 are not ours to report.
+        assert_eq!(VideoFormat::parse(0xf0 | 0x05).byte(), 0x05);
+    }
+
+    #[test]
     fn server_hello_ends_with_paired() {
         let mut expected = vec![0, 4, 7];
         expected.extend_from_slice(b"Test PC");
@@ -378,8 +515,21 @@ mod timing_tests {
     #[test]
     fn stream_start_reports_selected_bitrate() {
         assert_eq!(
-            stream_start(3024, 1964, 120, 500, Codec::Hevc),
+            stream_start(3024, 1964, 120, 500, Codec::Hevc, VideoFormat::default()),
             [0x0b, 0xd0, 0x07, 0xac, 0, 120, 0x01, 0xf4, 2, 0]
+        );
+    }
+
+    #[test]
+    fn stream_start_reports_the_video_format_in_its_last_byte() {
+        let format = VideoFormat {
+            quality: encoder_quality::BALANCED,
+            full_color: true,
+            ten_bit: true,
+        };
+        assert_eq!(
+            stream_start(3024, 1964, 120, 120, Codec::Hevc, format),
+            [0x0b, 0xd0, 0x07, 0xac, 0, 120, 0, 120, 2, 0x0e]
         );
     }
 }

@@ -3,6 +3,8 @@
 //! out as Annex-B so it can be checked with ffprobe/ffplay:
 //!
 //!   probe --out capture.hevc --seconds 5
+//!   probe --quality balanced --444 --10bit --out capture.hevc
+//!   ffprobe -show_entries stream=profile,pix_fmt capture.hevc
 //!   ffplay -f hevc capture.hevc
 
 use std::fs::File;
@@ -12,10 +14,34 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use relay_host::crypto::{self, SecureReader, SecureWriter};
-use relay_host::protocol::{self, msg, Codec};
+use relay_host::protocol::{self, encoder_quality, msg, video_flags, Codec, VideoFormat};
+
+/// CLIENT_HELLO's `encoder_quality`, by the Mac's names.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EncoderQuality {
+    Fastest,
+    Balanced,
+    Best,
+}
+
+impl EncoderQuality {
+    fn wire(self) -> u8 {
+        match self {
+            EncoderQuality::Fastest => encoder_quality::FASTEST,
+            EncoderQuality::Balanced => encoder_quality::BALANCED,
+            EncoderQuality::Best => encoder_quality::BEST,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CodecArg {
+    H264,
+    Hevc,
+}
 
 #[derive(Parser, Debug)]
 #[command(about = "Fake Relay client for testing the host")]
@@ -68,6 +94,19 @@ struct Args {
     /// must count it as a failed PIN)
     #[arg(long, requires = "pin", conflicts_with = "unpair")]
     abandon_pair: bool,
+    /// Offer only this codec (default: H.264 and HEVC, like the Mac)
+    #[arg(long, value_enum)]
+    codec: Option<CodecArg>,
+    /// Ask for an encoder quality (CLIENT_HELLO extension; sent only when the
+    /// host advertises it, and only with this, --444 or --10bit)
+    #[arg(long, value_enum)]
+    quality: Option<EncoderQuality>,
+    /// Ask for HEVC 4:4:4 (CLIENT_HELLO extension)
+    #[arg(long = "444")]
+    full_color: bool,
+    /// Ask for HEVC 10-bit (CLIENT_HELLO extension)
+    #[arg(long = "10bit")]
+    ten_bit: bool,
 }
 
 fn main() -> Result<()> {
@@ -106,9 +145,11 @@ fn main() -> Result<()> {
     };
     let name = String::from_utf8_lossy(name).into_owned();
     let paired = paired != 0;
-    let named_pairing = p.get(name_end + 1).copied().unwrap_or(0) & protocol::CAP_PAIR_NAME != 0;
+    let capabilities = p.get(name_end + 1).copied().unwrap_or(0);
+    let named_pairing = capabilities & protocol::CAP_PAIR_NAME != 0;
+    let video_options = capabilities & protocol::CAP_VIDEO_OPTIONS != 0;
     println!(
-        "host '{name}' protocol v{version}, {}",
+        "host '{name}' protocol v{version}, {}, capabilities 0x{capabilities:02x}",
         if paired {
             "already paired"
         } else {
@@ -159,8 +200,25 @@ fn main() -> Result<()> {
     hello.extend_from_slice(&args.hz.to_be_bytes());
     hello.extend_from_slice(&args.bitrate.to_be_bytes());
     hello.push(0x01); // wants input
-    hello.push(Codec::H264.bit() | Codec::Hevc.bit());
+    hello.push(match args.codec {
+        None => Codec::H264.bit() | Codec::Hevc.bit(),
+        Some(CodecArg::H264) => Codec::H264.bit(),
+        Some(CodecArg::Hevc) => Codec::Hevc.bit(),
+    });
     hello.extend_from_slice(&protocol::pair_name_ad(&args.name));
+    if args.quality.is_some() || args.full_color || args.ten_bit {
+        let quality = args
+            .quality
+            .map_or(encoder_quality::DEFAULT, EncoderQuality::wire);
+        let flags = (u8::from(args.full_color) * video_flags::FULL_COLOR)
+            | (u8::from(args.ten_bit) * video_flags::TEN_BIT);
+        if video_options {
+            hello.extend_from_slice(&[quality, flags]);
+            println!("picture options: quality {quality}, flags 0b{flags:02b}");
+        } else {
+            println!("host does not advertise picture options; sending CLIENT_HELLO without them");
+        }
+    }
     tx.send(msg::CLIENT_HELLO, 0, &hello)?;
 
     let mut out = match &args.out {
@@ -192,6 +250,8 @@ fn main() -> Result<()> {
         (0u64, 0u64, 0u64, 0u64, 0u64);
     // FRAME_TIMING's frame_send_us: the host's encrypt + write time per frame.
     let (mut send_us_total, mut send_samples) = (0u64, 0u64);
+    // capture + encode + send, the Mac latency overlay's "PC work".
+    let mut work_us: Vec<u32> = Vec::new();
     let mut first_frame_at: Option<Duration> = None;
     let mut last_wiggle = Instant::now();
     let mut phase = 0u32;
@@ -215,9 +275,19 @@ fn main() -> Result<()> {
                 let h = u16::from_be_bytes([p[2], p[3]]);
                 let fps = u16::from_be_bytes([p[4], p[5]]);
                 let bitrate = u16::from_be_bytes([p[6], p[7]]);
+                let byte = p.get(9).copied().unwrap_or(0);
+                let format = VideoFormat::parse(byte);
                 println!(
-                    "STREAM_START {w}x{h} @ {fps} fps, {bitrate} Mbps, codec {}",
-                    p[8]
+                    "STREAM_START {w}x{h} @ {fps} fps, {bitrate} Mbps, codec {}, video_format 0x{byte:02x} (quality {}, {}, {}-bit)",
+                    p[8],
+                    match format.quality {
+                        encoder_quality::FASTEST => "fastest",
+                        encoder_quality::BALANCED => "balanced",
+                        encoder_quality::BEST => "best",
+                        _ => "not reported",
+                    },
+                    if format.full_color { "4:4:4" } else { "4:2:0" },
+                    if format.ten_bit { 10 } else { 8 }
                 );
             }
             msg::CODEC_CONFIG => {
@@ -251,6 +321,10 @@ fn main() -> Result<()> {
                         send_us_total += u64::from(timing.send_us);
                         send_samples += 1;
                     }
+                    let parts = [timing.capture_us, timing.encode_us, timing.send_us];
+                    if parts.iter().all(|&us| us != protocol::UNKNOWN_MICROS) {
+                        work_us.push(parts.iter().sum());
+                    }
                 }
             }
             msg::STREAM_STOP => {
@@ -280,6 +354,17 @@ fn main() -> Result<()> {
         bytes as f64 * 8.0 / secs / 1e6,
         send_us_total as f64 / send_samples.max(1) as f64 / 1000.0
     );
+    if !work_us.is_empty() {
+        work_us.sort_unstable();
+        let at =
+            |q: f64| f64::from(work_us[((work_us.len() - 1) as f64 * q).round() as usize]) / 1000.0;
+        println!(
+            "PC work (capture + encode + send) p50 / p95 {:.2} / {:.2} ms over {} samples",
+            at(0.50),
+            at(0.95),
+            work_us.len()
+        );
+    }
     if let Some(mut w) = out {
         w.flush()?;
         println!("wrote {}", args.out.unwrap().display());

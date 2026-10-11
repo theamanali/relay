@@ -144,6 +144,7 @@ mod tests {
             gpu: "x".repeat(300),
             os: "Windows 11 Pro 24H2 (build 26100)".into(),
             ips: vec!["192.168.1.5".into(), "169.254.10.20".into()],
+            encoder_features: "q,444,10".into(),
             ..Default::default()
         };
         let info = service_info(
@@ -165,5 +166,6 @@ mod tests {
             info.get_property_val_str("gpu").unwrap().len(),
             255 - "gpu=".len()
         );
+        assert_eq!(info.get_property_val_str("enc").unwrap(), "q,444,10");
     }
 }

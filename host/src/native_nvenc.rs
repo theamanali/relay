@@ -38,8 +38,120 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::cursor_overlay::CursorOverlay;
-use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality};
+use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality, VideoCaps};
+use crate::gpu::{GpuInfo, Luid};
 use crate::protocol::Codec;
+
+/// Open a short-lived NVENC session on the selected GPU and read what it can
+/// encode: HEVC at all, and HEVC 4:4:4 and 10-bit. Runs once at startup.
+pub fn query_caps(gpu: &GpuInfo) -> Result<VideoCaps> {
+    let device = create_device_for(gpu.luid)?;
+    let api = NvApi::load()?;
+    let mut open: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = unsafe { zeroed() };
+    open.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    open.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
+    open.device = device.as_raw();
+    open.apiVersion = NVENCAPI_VERSION;
+    let open_session = api.required(
+        api.functions.nvEncOpenEncodeSessionEx,
+        "NvEncOpenEncodeSessionEx",
+    )?;
+    let mut encoder = ptr::null_mut();
+    nv_check(
+        &api,
+        ptr::null_mut(),
+        unsafe { open_session(&mut open, &mut encoder) },
+        "NvEncOpenEncodeSessionEx",
+    )?;
+
+    let caps = (|| -> Result<VideoCaps> {
+        let guid_count = api.required(
+            api.functions.nvEncGetEncodeGUIDCount,
+            "NvEncGetEncodeGUIDCount",
+        )?;
+        let mut count = 0u32;
+        nv_check(
+            &api,
+            encoder,
+            unsafe { guid_count(encoder, &mut count) },
+            "NvEncGetEncodeGUIDCount",
+        )?;
+        let get_guids = api.required(api.functions.nvEncGetEncodeGUIDs, "NvEncGetEncodeGUIDs")?;
+        let mut guids = vec![GUID::default(); count as usize];
+        let mut written = 0u32;
+        nv_check(
+            &api,
+            encoder,
+            unsafe { get_guids(encoder, guids.as_mut_ptr(), count, &mut written) },
+            "NvEncGetEncodeGUIDs",
+        )?;
+        guids.truncate(written as usize);
+        let hevc = guids.contains(&NV_ENC_CODEC_HEVC_GUID);
+
+        let get_caps = api.required(api.functions.nvEncGetEncodeCaps, "NvEncGetEncodeCaps")?;
+        let hevc_cap = |which: NV_ENC_CAPS| -> Result<bool> {
+            if !hevc {
+                return Ok(false);
+            }
+            let mut param: NV_ENC_CAPS_PARAM = unsafe { zeroed() };
+            param.version = NV_ENC_CAPS_PARAM_VER;
+            param.capsToQuery = which;
+            let mut value = 0;
+            nv_check(
+                &api,
+                encoder,
+                unsafe { get_caps(encoder, NV_ENC_CODEC_HEVC_GUID, &mut param, &mut value) },
+                "NvEncGetEncodeCaps",
+            )?;
+            Ok(value != 0)
+        };
+        Ok(VideoCaps {
+            quality: true,
+            hevc,
+            full_color: hevc_cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_YUV444_ENCODE)?,
+            ten_bit: hevc_cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_10BIT_ENCODE)?,
+        })
+    })();
+
+    if let Some(destroy) = api.functions.nvEncDestroyEncoder {
+        unsafe {
+            let _ = destroy(encoder);
+        }
+    }
+    caps
+}
+
+/// A plain D3D11 device on the DXGI adapter with this LUID (the index can
+/// move when the virtual display's proxy adapter comes and goes).
+fn create_device_for(luid: Luid) -> Result<ID3D11Device> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
+        let mut index = 0;
+        let adapter = loop {
+            let adapter = factory
+                .EnumAdapters1(index)
+                .context("no DXGI adapter has the selected GPU's LUID")?;
+            if Luid::from(adapter.GetDesc1()?.AdapterLuid) == luid {
+                break adapter;
+            }
+            index += 1;
+        };
+        let mut device = None;
+        D3D11CreateDevice(
+            &adapter,
+            D3D_DRIVER_TYPE_UNKNOWN,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )
+        .context("D3D11CreateDevice")?;
+        device.ok_or_else(|| anyhow!("D3D11CreateDevice returned no device"))
+    }
+}
 
 /// Handle held by the server thread. Capture runs on its own thread so it can
 /// block in `AcquireNextFrame` and submit the instant DWM presents a frame; a
@@ -562,9 +674,15 @@ impl EncoderSession {
         )?;
         let mut preset = unsafe { preset.assume_init() };
 
+        // The server only negotiates these for HEVC on a GPU whose caps
+        // allow them; H.264 never takes them.
+        let hevc_session = cfg.codec == Codec::Hevc;
+        let full_color = hevc_session && cfg.full_color;
+        let ten_bit = hevc_session && cfg.ten_bit;
+
         let config = &mut preset.presetCfg;
         config.version = NV_ENC_CONFIG_VER;
-        config.profileGUID = profile_guid(cfg.codec);
+        config.profileGUID = profile_guid(cfg.codec, full_color, ten_bit);
         config.gopLength = cfg.gop.max(1);
         config.frameIntervalP = 1; // no B frames
         config.rcParams.version = NV_ENC_RC_PARAMS_VER;
@@ -583,6 +701,11 @@ impl EncoderSession {
                 Codec::Hevc => {
                     let hevc = &mut config.encodeCodecConfig.hevcConfig;
                     signal_colour(&mut hevc.hevcVUIParameters);
+                    // The input stays 8-bit ARGB (its depth comes from the
+                    // buffer format); NVENC converts it to 4:4:4 or 4:2:0
+                    // and to the output depth itself.
+                    hevc.set_chromaFormatIDC(if full_color { 3 } else { 1 });
+                    hevc.set_pixelBitDepthMinus8(if ten_bit { 2 } else { 0 });
                     hevc.set_outputAUD(1);
                     hevc.set_repeatSPSPPS(1);
                     hevc.set_enableIntraRefresh(u32::from(cfg.intra_refresh));
@@ -640,10 +763,13 @@ impl EncoderSession {
         }
 
         log::info!(
-            "native capture: Desktop Duplication -> D3D11 -> asynchronous NVENC, {}x{}@{} (GPU cursor overlay, {} buffers)",
+            "native capture: Desktop Duplication -> D3D11 -> asynchronous NVENC, {}x{}@{} {} {}-bit, preset {} (GPU cursor overlay, {} buffers)",
             self.width,
             self.height,
             self.fps,
+            if full_color { "4:4:4" } else { "4:2:0" },
+            if ten_bit { 10 } else { 8 },
+            cfg.quality.label(),
             PIPELINE_DEPTH
         );
         Ok(())
@@ -1373,8 +1499,11 @@ fn codec_guid(codec: Codec) -> GUID {
     }
 }
 
-fn profile_guid(codec: Codec) -> GUID {
+/// Range extensions (Rext) carry 4:4:4 at either depth; Main10 is 10-bit 4:2:0.
+fn profile_guid(codec: Codec, full_color: bool, ten_bit: bool) -> GUID {
     match codec {
+        Codec::Hevc if full_color => NV_ENC_HEVC_PROFILE_FREXT_GUID,
+        Codec::Hevc if ten_bit => NV_ENC_HEVC_PROFILE_MAIN10_GUID,
         Codec::Hevc => NV_ENC_HEVC_PROFILE_MAIN_GUID,
         Codec::H264 => NV_ENC_H264_PROFILE_HIGH_GUID,
     }
@@ -1421,4 +1550,33 @@ fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
     vui.transferCharacteristics =
         NV_ENC_VUI_TRANSFER_CHARACTERISTIC::NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
     vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS::NV_ENC_VUI_MATRIX_COEFFS_SMPTE170M;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_follows_chroma_and_depth() {
+        assert_eq!(
+            profile_guid(Codec::Hevc, false, false),
+            NV_ENC_HEVC_PROFILE_MAIN_GUID
+        );
+        assert_eq!(
+            profile_guid(Codec::Hevc, false, true),
+            NV_ENC_HEVC_PROFILE_MAIN10_GUID
+        );
+        assert_eq!(
+            profile_guid(Codec::Hevc, true, false),
+            NV_ENC_HEVC_PROFILE_FREXT_GUID
+        );
+        assert_eq!(
+            profile_guid(Codec::Hevc, true, true),
+            NV_ENC_HEVC_PROFILE_FREXT_GUID
+        );
+        assert_eq!(
+            profile_guid(Codec::H264, true, true),
+            NV_ENC_H264_PROFILE_HIGH_GUID
+        );
+    }
 }

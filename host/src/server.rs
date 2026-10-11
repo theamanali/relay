@@ -16,11 +16,12 @@ use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_S
 use crate::crypto::{self, Identity, PairLimiter, PeerList, SecureReader, SecureWriter};
 use crate::display::{self, Mode, Monitor, OutputLocation, Placement};
 use crate::driver::{Attachment, VirtualDisplay};
-use crate::encoder::{Encoder, EncoderConfig, Quality};
+use crate::encoder::{Encoder, EncoderConfig, Quality, VideoCaps};
 use crate::gpu::GpuInfo;
 use crate::input::Injector;
 use crate::protocol::{
-    self, msg, stop_reason, ClientHello, Codec, FrameTiming, FLAG_KEYFRAME, UNKNOWN_MICROS,
+    self, msg, stop_reason, video_flags, ClientHello, Codec, FrameTiming, VideoFormat,
+    FLAG_KEYFRAME, UNKNOWN_MICROS,
 };
 use crate::status::{HostStatus, SessionInfo, NO_END_REQUEST};
 use crate::topology;
@@ -71,7 +72,11 @@ pub struct ServerConfig {
     pub fps: Option<u32>,
     pub codec: Codec,
     pub gop_seconds: u32,
-    pub quality: Quality,
+    /// Explicit administrator override, like `bitrate_override_mbps`. Without
+    /// it, CLIENT_HELLO's `encoder_quality` decides, else `Quality::Speed`.
+    pub quality_override: Option<Quality>,
+    /// What the encoder can do (TXT `enc`), found once at startup.
+    pub video_caps: VideoCaps,
     pub intra_refresh: bool,
     /// Force the ffmpeg encoder path even on NVIDIA (skip the in-process one).
     pub prefer_ffmpeg: bool,
@@ -96,16 +101,22 @@ pub struct ServerConfig {
 
 pub fn run(cfg: ServerConfig) -> Result<()> {
     let listener = bind_dual_stack(cfg.port)?;
-    let facts = crate::sysinfo::HostFacts::gather(&cfg.gpu);
+    let facts = crate::sysinfo::HostFacts::gather(&cfg.gpu, cfg.video_caps);
     log::info!(
-        "advertising facts: cpu '{}', {} GB {}, gpu '{}' {} GB, os '{}', ip {:?}",
+        "advertising facts: cpu '{}', {} GB {}, gpu '{}' {} GB, os '{}', ip {:?}, enc '{}'{}",
         facts.cpu,
         facts.ram_gb,
         facts.ram_type,
         facts.gpu,
         facts.vram_gb,
         facts.os,
-        facts.ips
+        facts.ips,
+        facts.encoder_features,
+        if cfg.video_caps.hevc {
+            ""
+        } else {
+            " (no HEVC encoder: sessions use H.264)"
+        }
     );
     let digest = cfg.paired.lock().unwrap().digest();
     let ad = crate::discovery::advertise(
@@ -697,7 +708,7 @@ fn handle_session(
     }
     let hello = ClientHello::parse(&payload).ok_or_else(|| anyhow!("malformed CLIENT_HELLO"))?;
     log::info!(
-        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz at {} Mbps, codecs 0b{:03b}, input={}",
+        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz at {} Mbps, codecs 0b{:03b}, input={}, {}",
         hello.name,
         hello.version,
         hello.width,
@@ -705,7 +716,14 @@ fn handle_session(
         hello.refresh,
         hello.bitrate_mbps,
         hello.codecs,
-        hello.wants_input
+        hello.wants_input,
+        match (hello.encoder_quality, hello.video_flags) {
+            (None, _) => "no picture options".to_string(),
+            (Some(q), flags) => format!(
+                "picture options quality {q}, flags 0b{:02b}",
+                flags.unwrap_or(0)
+            ),
+        }
     );
     if hello.version != protocol::VERSION {
         tx.send(msg::STREAM_STOP, 0, &[stop_reason::BAD_VERSION])?;
@@ -726,18 +744,20 @@ fn handle_session(
         // Remember the client by the name it gives itself.
         let _ = cfg.paired.lock().unwrap().add(hs.peer, &hello.name);
     }
-    let codec = if hello.codecs & cfg.codec.bit() != 0 {
-        cfg.codec
-    } else if hello.codecs & Codec::Hevc.bit() != 0 {
-        Codec::Hevc
-    } else if hello.codecs & Codec::H264.bit() != 0 {
-        Codec::H264
-    } else {
+    let Some(codec) = choose_codec(hello.codecs, cfg.codec, cfg.video_caps.hevc) else {
         bail!(
-            "client supports no codec we can produce (mask 0b{:03b})",
-            hello.codecs
+            "client supports no codec we can produce (mask 0b{:03b}){}",
+            hello.codecs,
+            if cfg.video_caps.hevc {
+                ""
+            } else {
+                "; this GPU has no HEVC encoder"
+            }
         )
     };
+    if !cfg.video_caps.hevc && hello.codecs & Codec::Hevc.bit() != 0 {
+        log::info!("client offers HEVC, but this GPU has no HEVC encoder: using H.264");
+    }
 
     let _awake = KeepAwake::new();
     let want = Mode {
@@ -753,20 +773,63 @@ fn handle_session(
     let placement = source.placement;
     let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));
     let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
+    // Only the in-process encoder applies 4:4:4 / 10-bit, and it needs the
+    // display on the encoding GPU (cross-adapter capture goes through ffmpeg).
+    let caps = if source.location.adapter_index == cfg.gpu.adapter_index {
+        cfg.video_caps
+    } else {
+        VideoCaps {
+            hevc: cfg.video_caps.hevc,
+            ..VideoCaps::FFMPEG
+        }
+    };
+    let video = negotiate_video(
+        hello.encoder_quality,
+        hello.video_flags,
+        cfg.quality_override,
+        codec,
+        caps,
+    );
+    let asked = hello.video_flags.unwrap_or(0) & (video_flags::FULL_COLOR | video_flags::TEN_BIT);
+    if asked != video.flags() {
+        log::info!(
+            "not applying the client's {} request: {}",
+            describe_flags(asked & !video.flags()),
+            if codec != Codec::Hevc {
+                "the session is H.264"
+            } else if caps != cfg.video_caps {
+                "capture is on another GPU (ffmpeg path)"
+            } else {
+                "this host's encoder cannot"
+            }
+        );
+    }
     log::info!(
-        "capturing {} at {fps} fps, {} {bitrate_mbps} Mbps via {}{}",
+        "capturing {} at {fps} fps, {}{} {bitrate_mbps} Mbps{}, preset {}{} via {}",
         source.monitor().device_name,
         if codec == Codec::Hevc {
             "HEVC"
         } else {
             "H.264"
         },
-        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg),
+        match video.flags() {
+            0 => String::new(),
+            flags => format!(" {}", describe_flags(flags)),
+        },
         if cfg.bitrate_override_mbps.is_some() {
             " (host override)"
         } else {
             ""
-        }
+        },
+        video.quality.label(),
+        if cfg.quality_override.is_some() {
+            " (host override)"
+        } else if hello.encoder_quality.and_then(Quality::from_wire).is_none() {
+            " (default)"
+        } else {
+            ""
+        },
+        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg),
     );
 
     tx.send(
@@ -778,6 +841,7 @@ fn handle_session(
             fps as u16,
             bitrate_mbps as u16,
             codec,
+            video.format(),
         ),
     )?;
     // The tray ends the session by storing a stop reason here.
@@ -805,7 +869,9 @@ fn handle_session(
         bitrate_mbps,
         codec,
         gop: cfg.gop_seconds.max(1) * fps,
-        quality: cfg.quality,
+        quality: video.quality,
+        full_color: video.full_color,
+        ten_bit: video.ten_bit,
         intra_refresh: cfg.intra_refresh,
         prefer_ffmpeg: cfg.prefer_ffmpeg,
     };
@@ -1233,6 +1299,83 @@ fn selected_bitrate(requested: u16, override_mbps: Option<u16>) -> u32 {
     u32::from(override_mbps.unwrap_or(requested))
 }
 
+/// The host's preferred codec when the client offers it, else HEVC, else
+/// H.264. HEVC counts only when this GPU can encode it.
+fn choose_codec(offered: u8, preferred: Codec, hevc_available: bool) -> Option<Codec> {
+    let usable =
+        |codec: Codec| offered & codec.bit() != 0 && (codec != Codec::Hevc || hevc_available);
+    [preferred, Codec::Hevc, Codec::H264]
+        .into_iter()
+        .find(|&codec| usable(codec))
+}
+
+/// One session's encoder quality and picture flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionVideo {
+    quality: Quality,
+    full_color: bool,
+    ten_bit: bool,
+}
+
+impl SessionVideo {
+    fn flags(self) -> u8 {
+        (if self.full_color {
+            video_flags::FULL_COLOR
+        } else {
+            0
+        }) | (if self.ten_bit {
+            video_flags::TEN_BIT
+        } else {
+            0
+        })
+    }
+
+    fn format(self) -> VideoFormat {
+        VideoFormat {
+            quality: self.quality.wire(),
+            full_color: self.full_color,
+            ten_bit: self.ten_bit,
+        }
+    }
+}
+
+/// An explicit host `--quality` wins over the client, like `--bitrate`; then
+/// the client's `encoder_quality`; then `Quality::Speed`. A flag applies only
+/// to an HEVC session whose encoder caps allow it.
+fn negotiate_video(
+    requested_quality: Option<u8>,
+    requested_flags: Option<u8>,
+    quality_override: Option<Quality>,
+    codec: Codec,
+    caps: VideoCaps,
+) -> SessionVideo {
+    let quality = quality_override
+        .or_else(|| {
+            requested_quality
+                .filter(|_| caps.quality)
+                .and_then(Quality::from_wire)
+        })
+        .unwrap_or(Quality::Speed);
+    let flags = requested_flags.unwrap_or(0);
+    let hevc = codec == Codec::Hevc;
+    SessionVideo {
+        quality,
+        full_color: hevc && caps.full_color && flags & video_flags::FULL_COLOR != 0,
+        ten_bit: hevc && caps.ten_bit && flags & video_flags::TEN_BIT != 0,
+    }
+}
+
+fn describe_flags(flags: u8) -> String {
+    [
+        (flags & video_flags::FULL_COLOR != 0).then_some("4:4:4"),
+        (flags & video_flags::TEN_BIT != 0).then_some("10-bit"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 /// A rolling five-second window distinguishes a slow encoder from a sender
 /// that is consuming the whole frame budget. An isolated keyframe or scheduler
 /// stall ages out instead of accumulating toward failure.
@@ -1369,7 +1512,8 @@ mod pairing_wait_tests {
             fps: None,
             codec: Codec::Hevc,
             gop_seconds: 1,
-            quality: Quality::Speed,
+            quality_override: None,
+            video_caps: VideoCaps::FFMPEG,
             intra_refresh: false,
             prefer_ffmpeg: false,
             lock_physical: true,
@@ -1416,6 +1560,7 @@ mod pairing_wait_tests {
             let name_end = 3 + usize::from(hello[2]);
             assert_eq!(hello[name_end] != 0, known);
             assert_ne!(hello[name_end + 1] & protocol::CAP_PAIR_NAME, 0);
+            assert_ne!(hello[name_end + 1] & protocol::CAP_VIDEO_OPTIONS, 0);
 
             // Exceeds the old known-client deadline, through the production
             // handler rather than a fixture that sets its own host timeout.
@@ -1515,6 +1660,91 @@ mod display_claim_tests {
     #[test]
     fn explicit_host_bitrate_overrides_the_client() {
         assert_eq!(selected_bitrate(120, Some(500)), 500);
+    }
+
+    const ALL_CAPS: VideoCaps = VideoCaps {
+        quality: true,
+        hevc: true,
+        full_color: true,
+        ten_bit: true,
+    };
+    const BOTH_FLAGS: u8 = video_flags::FULL_COLOR | video_flags::TEN_BIT;
+
+    #[test]
+    fn quality_precedence_is_host_flag_then_client_then_speed() {
+        let quality =
+            |client, host| negotiate_video(client, None, host, Codec::Hevc, ALL_CAPS).quality;
+        assert_eq!(quality(Some(3), Some(Quality::Balanced)), Quality::Balanced);
+        assert_eq!(quality(None, Some(Quality::Quality)), Quality::Quality);
+        assert_eq!(quality(Some(1), None), Quality::Speed);
+        assert_eq!(quality(Some(2), None), Quality::Balanced);
+        assert_eq!(quality(Some(3), None), Quality::Quality);
+        // No extension, "host default" and values from a newer client.
+        assert_eq!(quality(None, None), Quality::Speed);
+        assert_eq!(quality(Some(0), None), Quality::Speed);
+        assert_eq!(quality(Some(9), None), Quality::Speed);
+    }
+
+    #[test]
+    fn flags_apply_to_hevc_when_the_caps_allow() {
+        let video = negotiate_video(Some(2), Some(BOTH_FLAGS), None, Codec::Hevc, ALL_CAPS);
+        assert!(video.full_color && video.ten_bit);
+        assert_eq!(video.format().byte(), 0x0e);
+        let only_444 = negotiate_video(None, Some(0x01), None, Codec::Hevc, ALL_CAPS);
+        assert!(only_444.full_color && !only_444.ten_bit);
+        let only_10 = negotiate_video(None, Some(0x02 | 0xf0), None, Codec::Hevc, ALL_CAPS);
+        assert!(!only_10.full_color && only_10.ten_bit);
+        assert_eq!(only_10.format().byte(), 0x09);
+        let none = negotiate_video(None, None, None, Codec::Hevc, ALL_CAPS);
+        assert_eq!(none.flags(), 0);
+        assert_eq!(none.format().byte(), 0x01);
+    }
+
+    #[test]
+    fn flags_are_ignored_for_h264() {
+        let video = negotiate_video(Some(3), Some(BOTH_FLAGS), None, Codec::H264, ALL_CAPS);
+        assert_eq!(video.flags(), 0);
+        assert_eq!(video.quality, Quality::Quality);
+        assert_eq!(video.format().byte(), 0x03);
+    }
+
+    #[test]
+    fn flags_are_ignored_without_the_gpu_caps() {
+        let video = negotiate_video(
+            Some(2),
+            Some(BOTH_FLAGS),
+            None,
+            Codec::Hevc,
+            VideoCaps::FFMPEG,
+        );
+        assert_eq!(video.flags(), 0);
+        assert_eq!(video.quality, Quality::Balanced);
+        let no_10bit = VideoCaps {
+            ten_bit: false,
+            ..ALL_CAPS
+        };
+        let video = negotiate_video(None, Some(BOTH_FLAGS), None, Codec::Hevc, no_10bit);
+        assert!(video.full_color && !video.ten_bit);
+        let no_444 = VideoCaps {
+            full_color: false,
+            ..ALL_CAPS
+        };
+        let video = negotiate_video(None, Some(BOTH_FLAGS), None, Codec::Hevc, no_444);
+        assert!(!video.full_color && video.ten_bit);
+    }
+
+    #[test]
+    fn hevc_is_skipped_on_a_gpu_without_an_hevc_encoder() {
+        let both = Codec::H264.bit() | Codec::Hevc.bit();
+        assert_eq!(choose_codec(both, Codec::Hevc, true), Some(Codec::Hevc));
+        assert_eq!(choose_codec(both, Codec::H264, true), Some(Codec::H264));
+        assert_eq!(
+            choose_codec(Codec::H264.bit(), Codec::Hevc, true),
+            Some(Codec::H264)
+        );
+        assert_eq!(choose_codec(both, Codec::Hevc, false), Some(Codec::H264));
+        assert_eq!(choose_codec(Codec::Hevc.bit(), Codec::Hevc, false), None);
+        assert_eq!(choose_codec(0b100, Codec::Hevc, true), None);
     }
 
     #[test]

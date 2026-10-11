@@ -120,9 +120,10 @@ struct ServeArgs {
     #[arg(long, default_value_t = 2)]
     gop: u32,
 
-    /// Encoder speed/quality trade-off, mapped to each vendor's presets
-    #[arg(long, value_enum, default_value_t = Quality::Speed)]
-    quality: Quality,
+    /// Override the client's encoder speed/quality trade-off, mapped to each
+    /// vendor's presets. Without it the client chooses; speed when it does not.
+    #[arg(long, value_enum)]
+    quality: Option<Quality>,
 
     /// NVIDIA only: spread intra refresh over the GOP instead of sending full IDR frames
     #[arg(long)]
@@ -650,6 +651,8 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
     let status = Arc::new(Mutex::new(status::HostStatus::new(
         pin, pin_fixed, pin_path,
     )));
+    let video_caps = encoder::VideoCaps::detect(&gpu, args.no_native);
+    log::info!("encoder capabilities: {video_caps:?}");
 
     let cfg = server::ServerConfig {
         port: args.port,
@@ -659,7 +662,8 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         fps: args.fps,
         codec: args.codec.into(),
         gop_seconds: args.gop,
-        quality: args.quality,
+        quality_override: args.quality,
+        video_caps,
         intra_refresh: args.intra_refresh,
         prefer_ffmpeg: args.no_native,
         lock_physical: !args.no_lock_physical,

@@ -158,7 +158,7 @@ Starting a second host shows a "Relay is already running" box.
 | `--bitrate <Mbps>` | the Mac's request | Override the bitrate (1–1000, constant bitrate). |
 | `--fps <n>` | display refresh | Force a frame rate. |
 | `--gop <seconds>` | `2` | Keyframe interval. |
-| `--quality speed\|balanced\|quality` | `speed` | Encoder preset; `speed` is the low-latency one. |
+| `--quality speed\|balanced\|quality` | the Mac's choice, else `speed` | Override the Mac's encoder preset (NVENC P1 / P4 / P6); `speed` is the low-latency one. |
 | `--intra-refresh` | off | NVIDIA: spread refresh over the GOP instead of keyframes. Measured slower, so off. |
 | `--no-native` | | Use the ffmpeg path instead of in-process NVENC. |
 | `--no-vdd` | | Stream the primary monitor; don't touch the driver or the layout. |
@@ -227,6 +227,18 @@ ffplay -f hevc capture.hevc
 | `--legacy-pair` | | Omit the pairing-name extension to test older v4 client behavior. |
 | `--abandon-pair` | | With `--pin`: send `PAIR`, read `PAIR_REPLY` and leave without confirming, the way a Mac with the wrong PIN does. The host must count it as a failed PIN. |
 | `--fresh-identity` | | Use a throwaway key instead of `probe-identity.key`. |
+| `--codec h264\|hevc` | both | Offer only this codec. |
+| `--quality fastest\|balanced\|best` | | Ask for an encoder preset (CLIENT_HELLO's picture-options extension). |
+| `--444`, `--10bit` | | Ask for HEVC 4:4:4 / 10-bit. The extension goes only to a host whose SERVER_HELLO has capability `0x02`, and only when one of these three is given. |
+
+The summary also prints STREAM_START's `video_format` and the host's PC work
+(capture + encode + send) p50 / p95 from FRAME_TIMING, the same figure the
+Mac's latency overlay shows. To check a picture option, dump and probe it:
+
+```powershell
+target\release\probe.exe --addr 127.0.0.1:18468 --444 --10bit --out x.hevc
+ffprobe -v error -show_entries stream=profile,pix_fmt x.hevc   # Rext, yuv444p10le
+```
 
 A probe session takes the display like a real Mac does, so **your monitors go
 dark** while it runs. Against a `--no-vdd` host it streams the primary monitor

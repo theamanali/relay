@@ -12,8 +12,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 
-use crate::gpu::Vendor;
-use crate::protocol::Codec;
+use crate::gpu::{GpuInfo, Vendor};
+use crate::protocol::{encoder_quality, Codec};
 
 /// Speed/quality trade-off, mapped to each vendor's own preset scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -21,6 +21,89 @@ pub enum Quality {
     Speed,
     Balanced,
     Quality,
+}
+
+impl Quality {
+    /// CLIENT_HELLO's `encoder_quality`; 0 (the host's default) and values
+    /// from a newer client are `None`.
+    pub fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            encoder_quality::FASTEST => Some(Quality::Speed),
+            encoder_quality::BALANCED => Some(Quality::Balanced),
+            encoder_quality::BEST => Some(Quality::Quality),
+            _ => None,
+        }
+    }
+
+    pub fn wire(self) -> u8 {
+        match self {
+            Quality::Speed => encoder_quality::FASTEST,
+            Quality::Balanced => encoder_quality::BALANCED,
+            Quality::Quality => encoder_quality::BEST,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Quality::Speed => "speed",
+            Quality::Balanced => "balanced",
+            Quality::Quality => "quality",
+        }
+    }
+}
+
+/// What this host's encoder can do beyond 8-bit 4:2:0 at its default preset.
+/// Found once at startup and advertised in TXT `enc`; sessions only apply a
+/// client's flag when the matching cap is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoCaps {
+    /// Honours CLIENT_HELLO's `encoder_quality` (every backend has presets).
+    pub quality: bool,
+    /// False only when NVENC was asked and has no HEVC encoder (a GTX 750 Ti,
+    /// say): sessions then use H.264 even when the client offers HEVC.
+    pub hevc: bool,
+    /// HEVC 4:4:4 (in process NVENC only).
+    pub full_color: bool,
+    /// HEVC 10-bit (in process NVENC only).
+    pub ten_bit: bool,
+}
+
+impl VideoCaps {
+    /// The ffmpeg fallback: quality presets only; the flags are not wired up.
+    pub const FFMPEG: Self = Self {
+        quality: true,
+        hevc: true,
+        full_color: false,
+        ten_bit: false,
+    };
+
+    /// Ask NVENC on the selected GPU when the in-process path will encode;
+    /// anything else (or a failed query) gets the ffmpeg fallback's caps.
+    pub fn detect(gpu: &GpuInfo, prefer_ffmpeg: bool) -> Self {
+        if gpu.vendor != Vendor::Nvidia || prefer_ffmpeg {
+            return Self::FFMPEG;
+        }
+        match crate::native_nvenc::query_caps(gpu) {
+            Ok(caps) => caps,
+            Err(e) => {
+                log::warn!("could not query NVENC capabilities ({e:#}); advertising presets only");
+                Self::FFMPEG
+            }
+        }
+    }
+
+    /// TXT `enc`: "q,444,10", or empty (key omitted) when nothing is supported.
+    pub fn txt_value(self) -> String {
+        [
+            self.quality.then_some("q"),
+            self.full_color.then_some("444"),
+            self.ten_bit.then_some("10"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +123,10 @@ pub struct EncoderConfig {
     /// Keyframe interval in frames.
     pub gop: u32,
     pub quality: Quality,
+    /// HEVC 4:4:4 / 10-bit, already negotiated against `VideoCaps`. Only the
+    /// in-process NVENC path applies them; ffmpeg encodes 8-bit 4:2:0.
+    pub full_color: bool,
+    pub ten_bit: bool,
     pub intra_refresh: bool,
     /// Skip the in-process NVIDIA path and always use the ffmpeg child. A
     /// diagnostic/escape hatch: the native path shares one D3D11 device for
@@ -307,6 +394,11 @@ impl FfmpegEncoder {
                 cfg.capture_adapter_idx,
                 cfg.encode_adapter_idx
             );
+        }
+        if cfg.full_color || cfg.ten_bit {
+            // Only after native NVENC failed: STREAM_START already reported
+            // the flags, but the client reads the real format from the SPS.
+            log::warn!("the ffmpeg fallback encodes 8-bit 4:2:0; 4:4:4/10-bit not applied");
         }
         let mut cmd = build_command(cfg);
         log::info!("starting encoder: {:?}", cmd);
@@ -791,9 +883,76 @@ mod tests {
             codec,
             gop: 240,
             quality: Quality::Balanced,
+            full_color: false,
+            ten_bit: false,
             intra_refresh: false,
             prefer_ffmpeg: false,
         }
+    }
+
+    #[test]
+    fn quality_wire_values_round_trip() {
+        for quality in [Quality::Speed, Quality::Balanced, Quality::Quality] {
+            assert_eq!(Quality::from_wire(quality.wire()), Some(quality));
+        }
+        assert_eq!(Quality::Speed.wire(), 1);
+        assert_eq!(Quality::Balanced.wire(), 2);
+        assert_eq!(Quality::Quality.wire(), 3);
+        assert_eq!(Quality::from_wire(0), None);
+        assert_eq!(Quality::from_wire(4), None);
+    }
+
+    #[test]
+    fn enc_txt_lists_only_what_is_supported() {
+        assert_eq!(VideoCaps::FFMPEG.txt_value(), "q");
+        let all = VideoCaps {
+            quality: true,
+            hevc: true,
+            full_color: true,
+            ten_bit: true,
+        };
+        assert_eq!(all.txt_value(), "q,444,10");
+        let none = VideoCaps {
+            quality: false,
+            hevc: true,
+            full_color: false,
+            ten_bit: false,
+        };
+        assert_eq!(none.txt_value(), "");
+    }
+
+    #[test]
+    fn non_nvidia_and_ffmpeg_hosts_advertise_quality_only() {
+        let gpu = |vendor| GpuInfo {
+            adapter_index: 0,
+            name: "test".into(),
+            vendor,
+            dedicated_vram: 0,
+            luid: crate::gpu::Luid { low: 0, high: 0 },
+            kind: crate::gpu::AdapterKind::default(),
+        };
+        assert_eq!(
+            VideoCaps::detect(&gpu(Vendor::Amd), false),
+            VideoCaps::FFMPEG
+        );
+        assert_eq!(
+            VideoCaps::detect(&gpu(Vendor::Other), false),
+            VideoCaps::FFMPEG
+        );
+        // --no-native never opens NVENC.
+        assert_eq!(
+            VideoCaps::detect(&gpu(Vendor::Nvidia), true),
+            VideoCaps::FFMPEG
+        );
+    }
+
+    #[test]
+    fn ffmpeg_ignores_picture_flags() {
+        let plain = cfg(Vendor::Nvidia, Codec::Hevc, 0, 0);
+        let mut flagged = plain.clone();
+        flagged.full_color = true;
+        flagged.ten_bit = true;
+        assert_eq!(argv(&build_command(&plain)), argv(&build_command(&flagged)));
     }
 
     fn argv(cmd: &Command) -> Vec<String> {
