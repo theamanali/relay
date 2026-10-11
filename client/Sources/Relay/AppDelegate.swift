@@ -82,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
            Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil {
             NSApp.applicationIconImage = IconExport.appIcon()
         }
-        do { renderer = try VideoRenderer(metalVSync: options.metalVSync) }
+        prefs = SessionPrefs.load().overridden(by: options)
+        // Start in the saved VSync state (or --metal-vsync); applyPrefs keeps it.
+        do { renderer = try VideoRenderer(metalVSync: prefs.preventTearing) }
         catch {
             let alert = NSAlert()
             alert.messageText = "Relay could not start"
@@ -94,7 +96,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         let screen = NSScreen.main ?? NSScreen.screens[0]
         view = StreamView(frame: screen.frame)
         view.delegate = self
-        prefs = SessionPrefs.load().overridden(by: options)
         pickerModel.prefs = prefs
         applyPrefs()
         view.attach(videoLayer: renderer.layer)
@@ -298,6 +299,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     }
 
     private func applyPrefs() {
+        renderer.setVSync(prefs.preventTearing)
+        view.scrollDirection = prefs.scrollDirection
         view.keyMap = KeyMap(modifiers: prefs.modifiers)
         view.setForwardInput(prefs.forwardInput)
         view.latencyVisible = prefs.showLatency

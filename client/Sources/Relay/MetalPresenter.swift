@@ -125,11 +125,20 @@ final class MetalPresenter: @unchecked Sendable {
         layer.isOpaque = true
         layer.maximumDrawableCount = 2
         layer.presentsWithTransaction = false
-        layer.displaySyncEnabled = vsync
-        NSLog("MetalPresenter: VSync %@", vsync ? "on" : "off (tearing possible)")
+        setVSync(vsync)
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
     }
+
+    /// Prevent screen tearing, at up to a frame of delay; takes effect with
+    /// the next drawable, so it can change mid-session.
+    func setVSync(_ on: Bool) {
+        guard layer.displaySyncEnabled != on || !vsyncLogged else { return }
+        vsyncLogged = true
+        layer.displaySyncEnabled = on
+        NSLog("MetalPresenter: VSync %@", on ? "on" : "off (tearing possible)")
+    }
+    private var vsyncLogged = false
 
     func reset(generation: Int, clearMetrics: Bool = false) {
         lock.withLock {

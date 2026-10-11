@@ -148,7 +148,7 @@ struct RelayCommands: Commands {
             Toggle(isOn: Binding(get: { model.prefs.showLatency }, set: {
                 var prefs = model.prefs; prefs.showLatency = $0; model.setPrefs(prefs)
             })) {
-                Label("Show Latency Stats", systemImage: "chart.xyaxis.line")
+                Label("Show Latency Overlay", systemImage: "chart.xyaxis.line")
             }
             .keyboardShortcut("l", modifiers: [.control, .option, .command])
             .disabled(!model.pickerActive)

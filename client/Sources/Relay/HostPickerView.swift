@@ -435,6 +435,14 @@ struct SessionSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Video").font(Style.Font.section).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Style.Space.tight) {
+                Text("Bitrate")
+                Text("Higher looks sharper but needs a faster connection.")
+                    .font(Style.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.top, Style.Space.xs)
             HStack(spacing: Style.Space.s) {
                 Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.prefs.bitrateMbps) }, set: {
                     var prefs = model.prefs
@@ -452,33 +460,72 @@ struct SessionSettingsView: View {
                 Text("Mbps").font(Style.Font.body)
             }
             .padding(.top, Style.Space.xs)
-            Text("Keyboard").font(Style.Font.section).foregroundStyle(.secondary)
-                .padding(.top, Style.Space.l)
-            Picker("Modifier keys", selection: preference(\.modifiers)) {
-                Text("⌘ acts as Ctrl (Mac shortcuts work)").tag(ModifierMapping.mac)
-                Text("Keys by physical position").tag(ModifierMapping.physical)
-            }
-            .labelsHidden()
-            .fixedSize()
-            .padding(.top, Style.Space.xs)
-            // PC ▸ Control / Observe as radio buttons. Shortcuts belong in
-            // the menu, not here.
-            Picker("Input", selection: preference(\.forwardInput)) {
-                Text("Control the PC").tag(true)
-                Text("Observe only").tag(false)
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            .padding(.top, Style.Space.s)
-            Toggle("Show latency stats", isOn: preference(\.showLatency))
+            DescribedCheckbox("Enable VSync",
+                              detail: "Prevents tearing but adds up to a frame of delay.",
+                              isOn: preference(\.preventTearing))
+                .padding(.top, Style.Space.s)
+            Toggle("Show latency overlay", isOn: preference(\.showLatency))
                 .toggleStyle(.checkbox)
                 .padding(.top, Style.Space.s)
+            // Keyboard and pointer: modifier keys, scrolling, and whether the
+            // Mac controls the PC at all.
+            Text("Input").font(Style.Font.section).foregroundStyle(.secondary)
+                .padding(.top, Style.Space.l)
+            // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
+            // matter while the Mac controls the PC; they keep their values.
+            Toggle("Control the PC", isOn: preference(\.forwardInput))
+                .toggleStyle(.checkbox)
+                .padding(.top, Style.Space.xs)
+            Group {
+                // Off sends keys by their physical position instead.
+                DescribedCheckbox("Mac-style modifier keys",
+                                  detail: "⌘ is Ctrl, ⌥ is Alt, ⌃ is the Windows key.",
+                                  isOn: Binding(get: { model.prefs.modifiers == .mac }, set: {
+                                      var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
+                                  }))
+                    .padding(.top, Style.Space.s)
+                Toggle("Natural scrolling", isOn: Binding(get: {
+                    model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
+                }, set: {
+                    var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
+                }))
+                .toggleStyle(.checkbox)
+                .padding(.top, Style.Space.s)
+            }
+            .disabled(!model.prefs.forwardInput)
         }
         .padding(Style.Space.l)
         .frame(width: Style.settingsWidth, alignment: .leading)
         // The popover would otherwise make the bitrate field first responder,
         // and the first keystroke would change the bitrate. Click to edit it.
         .background(NoInitialFocus())
+    }
+}
+
+/// A settings checkbox with a line of explanation under its title.
+private struct DescribedCheckbox: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, detail: String, isOn: Binding<Bool>) {
+        self.title = title
+        self.detail = detail
+        _isOn = isOn
+    }
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: Style.Space.tight) {
+                Text(verbatim: title)
+                // One line: the popover is narrow, so keep details short.
+                Text(verbatim: detail)
+                    .font(Style.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .toggleStyle(.checkbox)
     }
 }
 

@@ -335,7 +335,13 @@ documented there. What follows is only the mechanics that are easy to break:
   would try the left side next). Opening it focuses nothing: AppKit makes the
   popover's first control (the bitrate field) first responder, which
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
-  clears it once when the popover becomes key.
+  clears it once when the popover becomes key. Its captions stay on one
+  line (user request; ⌘⌥⌃ glyphs render wider than they look, measure).
+  Control the PC sits first under Input and disables the options that only
+  matter while forwarding. Enable VSync flips `displaySyncEnabled` on the
+  live layer; Natural scrolling follows the Mac (`com.apple.swipescrolldirection`)
+  until chosen, and the sign is decided per event from
+  `isDirectionInvertedFromDevice`, since AppKit's deltas already follow the Mac.
   A disabled segmented control still draws its selection in the accent
   color, so the refresh-rate picker has no selection (an optional binding
   returning nil) while it is disabled; a gray tint looked odd. Its background

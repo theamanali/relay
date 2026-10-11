@@ -84,6 +84,8 @@ final class VideoRenderer: @unchecked Sendable {
 
     func isCurrent(generation: Int) -> Bool { lock.withLock { self.generation == generation } }
 
+    func setVSync(_ on: Bool) { metal.setVSync(on) }
+
     deinit {
         if let session { VTDecompressionSessionInvalidate(session) }
     }
