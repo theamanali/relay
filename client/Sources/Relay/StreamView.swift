@@ -14,6 +14,7 @@ protocol StreamViewDelegate: AnyObject {
 final class StreamView: NSView {
     weak var delegate: StreamViewDelegate?
     var keyMap = KeyMap()
+    var scrollDirection: ScrollDirection = .system
     var forwardInput = true
 
     /// Aspect ratio of the incoming stream; used to map pointer positions onto
@@ -183,7 +184,8 @@ final class StreamView: NSView {
         // Windows: 120 units per notch, ~3 lines or ~48 px of content.
         let perPixel = 2.5
         let perLine = 40.0
-        let factor = event.hasPreciseScrollingDeltas ? perPixel : perLine
+        let factor = (event.hasPreciseScrollingDeltas ? perPixel : perLine)
+            * scrollDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
         wheelRemainderX += Double(event.scrollingDeltaX) * factor
         wheelRemainderY += Double(event.scrollingDeltaY) * factor
         let dx = wheelRemainderX.rounded(.towardZero)

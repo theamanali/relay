@@ -98,11 +98,18 @@ is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
 rate). The **View** menu mirrors both and adds a **Bitrate** submenu of presets.
 The **Settings** gear in the footer opens:
 
-- **Video bitrate**: a logarithmic slider from 1 to 1000 Mbps with exact entry;
-  120 Mbps by default.
-- **Keyboard mapping**: Mac-style or physical positions (below).
-- **Control the PC / Observe only**: whether keyboard and mouse go to the PC.
-- **Latency overlay**.
+- **Bitrate**: a logarithmic slider from 1 to 1000 Mbps with exact entry;
+  120 Mbps by default. Higher looks sharper but needs a faster connection.
+- **Enable VSync**: prevents tearing but adds up to a frame of delay.
+  Off by default and switchable mid-session.
+- **Show latency overlay**: timing numbers over the stream (also ⌃⌥⌘L).
+- **Control the PC**: whether your keyboard and pointer go to the PC; off
+  watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
+  apply only while it is on.
+- **Mac-style modifier keys**: on by default, ⌘ is Ctrl, ⌥ is Alt and ⌃ is the
+  Windows key, so ⌘C copies; off maps them by position (below).
+- **Natural scrolling**: content tracks finger movement on the PC. Follows this
+  Mac's own setting until changed here.
 
 All of it is remembered between launches. The matching command-line flag
 overrides it for one launch.
@@ -156,7 +163,7 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--modifiers mac\|physical` | Keyboard mapping (above). |
 | `--no-input` | Observe only. |
 | `--latency-stats` | Start with the latency overlay on. |
-| `--metal-vsync` | Turn VSync on for Metal: no tearing, slightly more latency. Off by default. |
+| `--metal-vsync` | Enable VSync for this launch, as the setting does: no tearing, slightly more latency. |
 | `--render-icons <dir>` | Write the PC's tray icons and exit (see [Icons](#icons)). |
 | `--render-app-icon <dir>` | Write the Mac app icon and exit. |
 
@@ -339,8 +346,8 @@ output.
 ## Limitations
 
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys.
-- With VSync off (the default) the picture can tear; `--metal-vsync` trades a
-  little latency for no tearing.
+- With VSync off (the default) the picture can tear; **Enable VSync** (or
+  `--metal-vsync`) trades a little latency for no tearing.
 - Earlier hardware runs verified Metal colour, orientation and streaming. The
   SwiftUI migration still needs a real-PC streaming/latency comparison and
   qualification on a 60 Hz Air, 120 Hz Pro and external display.
