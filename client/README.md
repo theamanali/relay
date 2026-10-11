@@ -107,7 +107,8 @@ The **Settings** gear in the footer opens:
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
   apply only while it is on.
 - **Mac-style modifier keys**: on by default, ⌘ is Ctrl, ⌥ is Alt and ⌃ is the
-  Windows key, so ⌘C copies; off maps them by position (below).
+  Windows key, so ⌘C copies; off maps them by position (below). The note under
+  it shows the mapping currently in use.
 - **Natural scrolling**: content tracks finger movement on the PC. Follows this
   Mac's own setting until changed here.
 
