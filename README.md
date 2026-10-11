@@ -206,7 +206,20 @@ Host logs support delayed pairing, UNPAIR, the Mac name before streaming,
 3024×1964@120 streaming and successful restoration. See the
 [verification record](docs/KNOWN-PEER-PIN-HANDOFF.md#windows-verification-record--2026-10-10).
 
+Picture options (encoder quality Fastest / Balanced / Best, HEVC 4:4:4 and
+10-bit) are now in the host and the [wire contract](docs/PROTOCOL.md); the Mac
+side shipped first. On 2026-10-10 the host passed 161 unit tests, the probe
+integration test, strict clippy and a release build. Against a `--no-vdd` dev
+host (the PC's 2560×1440@120 primary monitor), probe sessions for each option
+decoded cleanly in ffprobe with the expected profile and pixel format (Main,
+Main 10, Rext; yuv420p, yuv420p10le, yuv444p, yuv444p10le), and H.264 ignored the
+flags. The installed service advertises `enc=q,444,10`. The real Mac comparison
+at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-quality-444-and-10-bit-on-the-pc-2026-10-10).
+
 **Next:**
+
+- [ ] Picture options on the real Mac: Fastest / Balanced / Best and 4:2:0 vs
+      4:4:4 at the same bitrate with `--latency-stats`
 
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and

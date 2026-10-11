@@ -194,8 +194,9 @@ matrix from the decoded buffer, so the client needed no change.
   the remaining wait for the next refresh. It needs a protocol change.
 - **`--scale 0.75`.** Not measured yet; it encodes and decodes about half
   the pixels.
-- **Encoder quality, 4:4:4 and 10-bit** (`docs/VIDEO-OPTIONS-HANDOFF.md`):
-  not measured until the host supports them.
+- **Encoder quality, 4:4:4 and 10-bit on the real Mac** at 3024×1964: the
+  host supports them now, but only the PC side has been measured, and only at
+  1440p ([below](#encoder-quality-444-and-10-bit-on-the-pc-2026-10-10)).
 
 ## HEVC vs H.264 (2026-10-10)
 
@@ -219,6 +220,40 @@ beyond H.264's common levels. Both runs showed occasional on-screen p95
 spikes (16–19 ms, one or two per run, and ~30 ms while the first window
 filled), so they are not the codec's.
 
+## Encoder quality, 4:4:4 and 10-bit on the PC (2026-10-10)
+
+RTX 3080 Ti, a `--no-vdd` dev host streaming the PC's own 2560×1440@120 primary
+monitor to `probe` over loopback, 120 Mbps, about 8 s per setting. The desktop
+was mostly static (a terminal and this app updating), so these are not the
+Mac's moving-content numbers. PC work (capture + encode + send) comes from
+about 240 FRAME_TIMING samples per run, the same sum the Mac's overlay shows;
+encode is the host's 600-frame average.
+
+| setting | profile, pix_fmt | `video_format` | PC work p50 / p95 | encode avg | fps |
+|---|---|---|---|---|---|
+| Fastest (P1), 4:2:0 8-bit | Main, yuv420p | 0x01 | 4.08 / 4.39 ms | 3.36 ms | 117.6 |
+| Balanced (P4) | Main, yuv420p | 0x02 | 6.16 / 6.25 ms | 5.96 ms | 119.1 |
+| Best (P6) | Main, yuv420p | 0x03 | 7.39 / 7.50 ms | 7.18 ms | 117.5 |
+| Fastest, 4:4:4 | Rext, yuv444p | 0x05 | 5.68 / 5.93 ms | 4.92 ms | 119.1 |
+| Fastest, 10-bit | Main 10, yuv420p10le | 0x09 | 3.91 / 4.42 ms | 3.26 ms | 119.2 |
+| Fastest, 4:4:4 10-bit | Rext, yuv444p10le | 0x0d | 5.82 / 6.07 ms | 5.11 ms | 119.1 |
+| H.264, Best, both flags asked | High, yuv420p (flags ignored) | 0x03 | 6.07 / 6.28 ms | 5.66 ms | 116.7 |
+
+- 10-bit costs nothing measurable. 4:4:4 adds about 1.6 ms of encode, Balanced
+  about 2.6 ms and Best about 3.8 ms over Fastest.
+- Encode time grows with pixel count (the Results above: 1440p 3.2–3.8 ms, 6 MP
+  4.3–5.9 ms). Scaled by the Mac's 1.61× pixel count, Fastest would be about
+  5.4 ms, 4:4:4 about 7.9 ms, Balanced about 9.6 ms and Best about 11.6 ms.
+  This is an estimate, not a measurement. If it holds, Balanced and Best can't
+  keep 120 fps at 3024×1964, because the GPU has a single NVENC engine, and
+  4:4:4 has little headroom. This is why the real-Mac A/B matters and why
+  Fastest stays the default.
+- Every dump decoded in ffprobe/ffmpeg without errors, with the BT.601 matrix,
+  BT.709 primaries and transfer and limited range intact. In the 4:4:4 dumps
+  the U plane differs from its own 2×2-averaged copy (PSNR 39.8 dB; an
+  upsampled 4:2:0 plane would be identical), so NVENC encodes full-resolution
+  chroma straight from the ARGB input.
+
 ## Reproducing
 
 PC, without the virtual display (doesn't black out the PC's monitors):
@@ -226,7 +261,12 @@ PC, without the virtual display (doesn't black out the PC's monitors):
 ```powershell
 relay-host --no-vdd
 probe --hz 120 --wiggle
+probe --quality balanced --444 --out x.hevc    # picture options; prints PC work p50 / p95
 ```
+
+The installed service's worker holds the single-host mutex and `identity.key` is
+readable only by Administrators and SYSTEM, so stop the service and run the dev
+host from an elevated prompt (`Stop-Service Relay`, then `Start-Service Relay`).
 
 Mac, against a real session:
 

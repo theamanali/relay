@@ -40,6 +40,21 @@ each omitted when unknown and truncated to fit a 255-byte TXT string:
 26100)`), and `ip` (comma-separated IPv4 addresses, routable before link-local). Like `pk`
 they are public and purely informational.
 
+`enc` lists, comma-separated, the picture options this host's encoder honours
+(see "Picture options" under Client → host):
+
+| item | meaning |
+|---|---|
+| `q` | honours CLIENT_HELLO's `encoder_quality` |
+| `444` | can encode HEVC 4:4:4 (8-bit, and 10-bit when `10` is also listed) |
+| `10` | can encode HEVC 10-bit |
+
+The host omits the key when it supports none of them; clients ignore items
+they don't know. It is fixed for the life of the host process: the host
+derives it once at startup (on NVIDIA, from NVENC's HEVC capabilities; its
+ffmpeg fallback lists only `q`). Like the other facts it only tells a client
+which controls to offer; the host still checks every request itself.
+
 ## Framing
 
 Every message is an 8-byte header followed by `length` bytes of payload. On the
@@ -131,8 +146,9 @@ the initiator (A) and the host as the responder (B):
 | 0xA2 | UNPAIR       | client -> host | empty. Sent instead of CLIENT_HELLO (it may follow msg3 without waiting for SERVER_HELLO): the host forgets the client's key, answers STREAM_STOP reason 5 (`UNPAIRED`) and closes. |
 
 **Optional name extension (v4).** SERVER_HELLO may append one capability byte
-after `paired`. Bit `0x01` is `CAP_PAIR_NAME`; an absent byte means zero,
-and clients ignore unknown bits. Only when that bit is set, a client sends
+after `paired`. Bit `0x01` is `CAP_PAIR_NAME` (bit `0x02`, `CAP_VIDEO_OPTIONS`,
+is described under "Picture options"); an absent byte means zero, and clients
+ignore unknown bits. Only when that bit is set, a client sends
 PAIR = `Ya[32] | u8 client_name_len | client_name_utf8`. The name is capped
 at 255 UTF-8 bytes, truncated on a Unicode scalar boundary, without a terminator;
 the largest payload is 288 bytes. The complete suffix, including its length
@@ -306,8 +322,8 @@ another session" rather than retry in a loop.
 
 | type | name           | payload |
 |------|----------------|---------|
-| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`; missing = 0, ignore unknown bits) |
-| 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 reserved` |
+| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`, `0x02` = `CAP_VIDEO_OPTIONS`; missing = 0, ignore unknown bits) |
+| 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 video_format` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
 | 0x05 | CURSOR         | `i32 x`, `i32 y` (pixels, relative to the streamed display), `u8 visible`. Reserved for a future cursor-overlay path; currently the Windows cursor is composited into the video. |
@@ -316,6 +332,20 @@ another session" rather than retry in a loop.
 | 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
 
 `codec`: 1 = H.264, 2 = HEVC, 3 = AV1 (reserved).
+
+`video_format` (a reserved 0 before picture options) describes the stream the
+host configured:
+
+| bits | meaning |
+|---|---|
+| 0–1 | encoder quality used: 1 = fastest, 2 = balanced, 3 = best; 0 = not reported (older hosts) |
+| 2 | the stream is 4:4:4 |
+| 3 | the stream is 10-bit |
+| 4–7 | 0 |
+
+It is for status and logs: a decoder reads chroma format and bit depth from the
+SPS, which stays authoritative (a host that has to fall back to another encoder
+after STREAM_START encodes 8-bit 4:2:0 without sending a new STREAM_START).
 
 FRAME payloads are already in the length-prefixed layout that `CMSampleBuffer`
 and `hvcC`/`avcC` expect (4-byte NAL lengths), so the client can hand them to
@@ -343,7 +373,7 @@ retry reason 7 without a lower user-selected value.
 
 | type | name         | payload |
 |------|--------------|---------|
-| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name` |
+| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name`, optional `u8 encoder_quality`, `u8 video_flags` (Picture options, below) |
 | 0x87 | PONG         | echo of the PING payload |
 | 0x90 | MOUSE_MOVE   | `u16 x`, `u16 y` — position normalised to 0..65535 across the streamed frame |
 | 0x91 | MOUSE_BUTTON | `u8 button` (0 left, 1 right, 2 middle, 3 back, 4 forward), `u8 down` |
@@ -358,6 +388,33 @@ request; the host may answer with a lower `fps` in STREAM_START.
 `bitrate_mbps` is the requested CBR video bitrate and must be 1 through 1000.
 The host uses it unless it was started with an explicit `--bitrate` override;
 `STREAM_START` reports the bitrate actually selected.
+
+**Picture options.** When SERVER_HELLO has `CAP_VIDEO_OPTIONS` (`0x02`), a
+client may append two bytes after `name`:
+
+| offset after `name` | type | field |
+|---|---|---|
+| 0 | u8 | `encoder_quality`: 0 = the host's default, 1 = fastest, 2 = balanced, 3 = best |
+| 1 | u8 | `video_flags`: bit 0 = wants 4:4:4, bit 1 = wants 10-bit; other bits 0, ignored by the host |
+
+- Clients send the extension only to a host with the capability. Hosts have
+  always ignored bytes after `name`, so an older host is unaffected. A missing
+  byte counts as 0.
+- `encoder_quality` picks the encoder preset (NVENC P1 / P4 / P6, all with
+  ultra-low-latency tuning; other encoders map it to their own presets). An
+  explicit host `--quality` overrides it, as `--bitrate` overrides
+  `bitrate_mbps`. With neither, or with a value the host does not know, the
+  host uses fastest.
+- The host applies a flag only to an HEVC session, and only when its encoder can
+  do it (the capability `enc` advertises; its ffmpeg fallback applies none).
+  H.264 sessions ignore both flags. 4:4:4 is HEVC Range Extensions (profile
+  Rext) at 8 or 10 bits; 10-bit 4:2:0 is Main 10. The color description is the
+  same in every format: BT.601 matrix, BT.709 primaries and transfer, limited
+  range.
+- A client should ask only for what it decodes. STREAM_START's `video_format`
+  reports what the host applied.
+- 4:4:4 needs more bits for the same luma quality. The bandwidth check (stop
+  reason 7) is the same for every format.
 
 Keys are sent as HID usages so the protocol is platform-neutral; the client
 decides how macOS modifiers map (default: ⌘→Ctrl, ⌥→Alt, ⌃→Win) and the host

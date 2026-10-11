@@ -35,6 +35,40 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   `docs/WINDOWS-PLATFORM-HANDOFF.md` on the PC. Details and acceptance gates:
   `docs/PLATFORM-REVIEW.md#implementation-status`.
 
+- Picture options, host + spec (2026-10-10; the Mac side shipped first by user
+  decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
+  `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup
+  (`native_nvenc::query_caps`, a short NVENC session: HEVC GUID present,
+  `SUPPORT_YUV444_ENCODE`, `SUPPORT_10BIT_ENCODE`; RTX 3080 Ti → `q,444,10`;
+  non-NVIDIA, `--no-native` or a failed query → `q`). SERVER_HELLO's
+  capability byte is now `0x03`. `ClientHello` has optional `encoder_quality` /
+  `video_flags`. STREAM_START's last byte is `VideoFormat`. `--quality` is an
+  `Option` override (`quality_override`): host flag > client > Speed
+  (`negotiate_video`). Flags apply only to HEVC on the in-process path with
+  the display on the encoding GPU (cross-adapter capture means ffmpeg, which
+  ignores them and warns if it takes over after STREAM_START). A GPU without
+  HEVC gets H.264 (`choose_codec`). Native NVENC uses profile Rext / Main10 /
+  Main, `chromaFormatIDC` 3 and `pixelBitDepthMinus8` 2. SDK 12.1's HEVC
+  config has no input-depth field, so the input depth comes from the ARGB
+  buffer format. `probe` gained `--quality fastest|balanced|best`, `--444`,
+  `--10bit` and `--codec`, and prints `video_format` and PC work p50/p95.
+  Verified on Windows 2026-10-10:
+  - fmt, 161 unit tests plus the probe integration test (the desktop test
+    ignored), clippy `-D warnings` on 1.98 and 1.99, release build.
+  - An elevated `--no-vdd` dev host (service stopped; 2560×1440@120 primary)
+    with `probe`: no extension / balanced / best / `--444` / `--10bit` / both.
+    STREAM_START 0x01 / 02 / 03 / 05 / 09 / 0d. ffprobe: Main yuv420p, Main
+    10 yuv420p10le, Rext yuv444p, Rext yuv444p10le. Every dump decoded without
+    errors and kept the color description. H.264 with flags → High yuv420p,
+    0x03, logged as not applied.
+  - Elevated `install-host.ps1 -SkipDriver`; service Running, installed
+    SHA-256 matches the release (`1DF94C59...2320D2E7`). The SYSTEM worker
+    logged the same caps, and `browse` shows `enc=q,444,10`.
+
+  Not verified: the real-Mac A/B at 3024×1964 (the user's to run;
+  `docs/LATENCY.md` extrapolates Balanced/Best past the 8.3 ms budget there),
+  the host `--quality` override end to end (unit-tested only), ffmpeg/AMD/Intel
+  paths, and a GPU without HEVC or 4:4:4.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over
@@ -354,8 +388,8 @@ documented there. What follows is only the mechanics that are easy to break:
   `--codec h264|hevc` (hidden, for measurements) narrows CLIENT_HELLO's
   codec mask; the PC already falls back to whatever the Mac offers.
   Picture options (2026-10-10, Mac side ahead of the host by user decision;
-  `docs/VIDEO-OPTIONS-HANDOFF.md` is the draft spec, PROTOCOL.md waits for
-  the host): Encoder / Full color (4:4:4) / 10-bit color are enabled only
+  the host and PROTOCOL.md followed the same day with no wire change, see
+  Status): Encoder / Full color (4:4:4) / 10-bit color are enabled only
   when the selected PC's TXT `enc` lists them and, for color, when
   `VideoCapabilities` (hardware-only VT sessions for canned parameter sets)
   says this Mac decodes them; disabled ones show why in their note. The
@@ -372,7 +406,8 @@ documented there. What follows is only the mechanics that are easy to break:
   the bitrate). `setBitrate` ignores the value already shown: the field
   writes it back on focus loss, which turned Automatic off. Verified end to
   end with `fakehost --clip` (420v/x420/444v/x444 outputs, 4:4:4 text sharp
-  where 4:2:0 smears); the real PC is untested until the host lands.
+  where 4:2:0 smears); the real PC streams all four since 2026-10-10 (probe +
+  ffprobe), and the real Mac against it is untested.
   A disabled segmented control still draws its selection in the accent
   color, so the refresh-rate picker has no selection (an optional binding
   returning nil) while it is disabled; a gray tint looked odd. Its background
@@ -499,7 +534,15 @@ documented there. What follows is only the mechanics that are easy to break:
   host still `shutdown(Write)`s and drains until close/timeout before returning.
 - A session-less host in the same session as the SYSTEM worker cannot be run for
   tests (`Local\Relay.host` mutex): redeploy with `install-host.ps1 -SkipDriver`
-  (elevated) and test against the service instead. The probe's persisted identity
+  (elevated) and test against the service instead, or stop the service and run
+  the `--no-vdd` dev host **elevated** (`identity.key` is Administrators/SYSTEM
+  only), then start the service again. Picture options were tested that way on
+  2026-10-10 (one UAC prompt for a script that stopped the service, ran the dev
+  host on port 18468 until told to stop, then installed).
+- **NVENC (API 12.1) turns the 8-bit ARGB input into HEVC 4:4:4 and/or 10-bit
+  itself:** `chromaFormatIDC = 3`, `pixelBitDepthMinus8 = 2` with
+  `NV_ENC_BUFFER_FORMAT_ARGB` unchanged. No shader conversion is needed, and
+  the 4:4:4 chroma is full resolution (checked against a 2×2-averaged copy). The probe's persisted identity
   is paired with it again since the v4 checks (2026-10-08; the list had been empty since
   2026-09-19); `probe --unpair` removes it.
 - ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,

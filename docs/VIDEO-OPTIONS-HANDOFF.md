@@ -1,5 +1,13 @@
 # Handoff for the PC session: picture options (encoder quality, 4:4:4, 10-bit)
 
+**Status (2026-10-10): host and spec done.** The proposal below landed as
+written: no byte, value or name changed, so `client/` needed nothing. The
+contract is now `docs/PROTOCOL.md` (Discovery `enc`, SERVER_HELLO `0x02`,
+CLIENT_HELLO "Picture options", STREAM_START `video_format`). The optional
+H.264 fallback for a GPU without an HEVC encoder is in too, but untested on
+such a GPU. Verification and PC-side numbers: `AGENTS.md` status and
+`docs/LATENCY.md`. Still open: step 4 below, the real-Mac A/B.
+
 The Mac app now offers three picture options in its settings popover: an
 encoder quality choice (Fastest / Balanced / Best quality), Full color (4:4:4)
 and 10-bit color. They are greyed out ("Needs Relay to be updated on the PC.")
