@@ -88,43 +88,81 @@ final class PickerModel {
     /// Pair only for a selected available PC; Connect otherwise, as before SwiftUI.
     var connectTitle: String { connecting ? "Cancel" : selected?.paired == false ? "Pair" : "Connect" }
     /// What the list shows, top to bottom. Plain rows rather than Section
-    /// headers (the list's own headers float on a band). Once any PC is
-    /// known, Available is always listed, since discovery never stops and its
-    /// spinner says so; with none at all the list is empty and the picker
-    /// shows a centered empty state over it instead.
+    /// headers (the list's own headers float on a band). Once any PC is known
+    /// both sections are listed, each collapsible; with none at all the list
+    /// is empty and the picker shows a centered empty state over it instead.
     enum ListItem: Identifiable {
-        case title(PickerSection, first: Bool)
+        case title(PickerSection, collapsed: Bool, collapsible: Bool)
         case host(Row)
+        /// Under Paired while nothing is paired.
+        case noPaired
+        /// Under Available while nothing unpaired is around; discovery goes on.
+        case searching
 
         var id: String {
             switch self {
-            case let .title(section, _): "title.\(section == .paired ? "paired" : "available")"
+            case let .title(section, _, _): "title.\(section == .paired ? "paired" : "available")"
             // The section is part of a PC's identity: pairing removes it from
-            // Available (fade) and inserts it under Paired, as the AppKit
-            // table did, instead of a move that slides it through the rows
-            // in between. Selection uses the row's tag, so it survives.
+            // Available and inserts it under Paired rather than moving it
+            // through the rows in between. Selection uses the row's tag.
             case let .host(row): "host.\(row.paired ? "paired" : "available").\(row.id)"
+            case .noPaired: "no-paired"
+            case .searching: "searching"
+            }
+        }
+
+        /// The row's height, for the list's own (PickerLayout).
+        var height: CGFloat {
+            switch self {
+            // Paired is always first; Available gets room above its title.
+            case let .title(section, _, _): Style.sectionRowHeight + (section == .paired ? 0 : Style.Space.l)
+            case .host, .searching: Style.rowHeight
+            case .noPaired: Style.noteRowHeight
             }
         }
     }
 
+    /// Sections the user folded away by clicking their titles.
+    var collapsed: Set<PickerSection> = []
+
+    /// Paired folds only once something is paired: "No paired devices yet"
+    /// is not worth hiding. Available always folds.
+    func canCollapse(_ section: PickerSection) -> Bool {
+        section == .available || !pairedRows.isEmpty
+    }
+
     var listItems: [ListItem] {
         guard !rows.isEmpty else { return [] }
-        let paired = pairedRows
-        var items: [ListItem] = []
-        if !paired.isEmpty {
-            items.append(.title(.paired, first: true))
-            items += paired.map(ListItem.host)
+        var items: [ListItem] = [.title(.paired, collapsed: collapsed.contains(.paired), collapsible: canCollapse(.paired))]
+        if !collapsed.contains(.paired) {
+            items += pairedRows.isEmpty ? [.noPaired] : pairedRows.map(ListItem.host)
         }
-        items.append(.title(.available, first: paired.isEmpty))
-        items += availableRows.map(ListItem.host)
+        items.append(.title(.available, collapsed: collapsed.contains(.available), collapsible: true))
+        if !collapsed.contains(.available) {
+            items += availableRows.isEmpty ? [.searching] : availableRows.map(ListItem.host)
+        }
         return items
+    }
+
+    /// The PCs a user can see and so select, top to bottom.
+    private var visibleRowIDs: [String] {
+        listItems.compactMap { if case let .host(row) = $0 { row.id } else { nil } }
+    }
+
+    /// Fold or unfold a section. A selection folded away moves to the first
+    /// PC still shown, so Connect never acts on a hidden row; unfolding with
+    /// nothing selected selects the first PC, as the list does elsewhere.
+    func toggle(_ section: PickerSection) {
+        guard canCollapse(section) else { return }
+        if collapsed.remove(section) == nil { collapsed.insert(section) }
+        if selection.map({ !visibleRowIDs.contains($0) }) ?? true { selection = visibleRowIDs.first }
     }
 
     var pairedRows: [Row] { rows.filter(\.paired) }
     var availableRows: [Row] { rows.filter { !$0.paired } }
-    var listHeight: CGFloat { PickerLayout.listHeight(paired: pairedRows.count, available: availableRows.count) }
-    var listOverflows: Bool { PickerLayout.overflows(paired: pairedRows.count, available: availableRows.count) }
+    private var rowsHeight: CGFloat { listItems.reduce(0) { $0 + $1.height } }
+    var listHeight: CGFloat { PickerLayout.listHeight(rows: rowsHeight) }
+    var listOverflows: Bool { PickerLayout.overflows(rows: rowsHeight) }
 
     /// "Native (3024 × 1964)", "75% (2268 × 1474)": the footer popup and the
     /// View menu say the same thing. Built as a plain string so SwiftUI does
@@ -142,20 +180,29 @@ final class PickerModel {
         }
         if let editing = renamingID, !next.contains(where: { $0.id == editing }) { finishRename() }
         rows = next
+        if pairedRows.isEmpty { collapsed.remove(.paired) }
         if let wanted, let row = rows.first(where: { ($0.host.publicKey != nil && $0.host.publicKey == wanted.key) || $0.id == wanted.name }) {
-            selection = row.id
+            reveal(row)
             self.wanted = nil
-        } else if !rows.contains(where: { $0.id == selection }) {
-            selection = rows.first?.id
+        } else if let selection, !visibleRowIDs.contains(selection) {
+            self.selection = visibleRowIDs.first
+        } else if selection == nil {
+            selection = visibleRowIDs.first
         }
     }
 
     func preselect(key: Data?, name: String) {
         wanted = (key, name)
         if let row = rows.first(where: { ($0.host.publicKey != nil && $0.host.publicKey == key) || $0.id == name }) {
-            selection = row.id
+            reveal(row)
             wanted = nil
         }
+    }
+
+    /// Select a row, unfolding its section if it was folded away.
+    private func reveal(_ row: Row) {
+        collapsed.remove(row.paired ? .paired : .available)
+        selection = row.id
     }
 
     func configure(native: CGSize, maxRefresh: Int, initial: StreamMode?) {

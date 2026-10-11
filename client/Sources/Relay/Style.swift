@@ -34,6 +34,8 @@ enum Style {
     static let windowWidth: CGFloat = 410
     static let rowHeight: CGFloat = 52
     static let sectionRowHeight: CGFloat = 28
+    /// A one-line note under a section title ("No paired devices yet").
+    static let noteRowHeight: CGFloat = 24
     /// From the hidden title bar, which stays a safe area above the content
     /// (28 points tall on older SDKs, 32 on the macOS 26+ SDK), to the hero.
     static let headerTopInset: CGFloat = 16
@@ -47,27 +49,21 @@ enum PickerLayout {
     static let listInsets: CGFloat = 20
     static let maxHostRows = 5
 
-    /// Paired (when any) and Available titles and the PCs; with none at all
-    /// the empty state takes the two-row floor.
-    static func listHeight(paired: Int, available: Int) -> CGFloat {
+    /// `rows` is the height of the list's rows (titles, PCs, notes); with
+    /// none at all the empty state takes the two-row floor.
+    static func listHeight(rows: CGFloat) -> CGFloat {
         // Never so short that the first PC to appear makes the window jump far.
         let floor = listInsets + Style.sectionRowHeight + 2 * Style.rowHeight
-        return min(max(contentHeight(paired: paired, available: available), floor), scrollingHeight)
+        return min(max(listInsets + rows, floor), scrollingHeight)
     }
 
     /// More rows than fit: only then does the list scroll and show a scroller.
-    static func overflows(paired: Int, available: Int) -> Bool {
-        contentHeight(paired: paired, available: available) > scrollingHeight
+    static func overflows(rows: CGFloat) -> Bool {
+        listInsets + rows > scrollingHeight
     }
 
     /// Both titles and `maxHostRows` PCs, plus half a row. A height that ended
     /// on a row boundary hid the overflow: nothing showed there was more.
     private static let scrollingHeight = listInsets + 2 * Style.sectionRowHeight + Style.Space.l
         + (CGFloat(maxHostRows) + 0.5) * Style.rowHeight
-
-    private static func contentHeight(paired: Int, available: Int) -> CGFloat {
-        let titles = paired > 0 ? 2 * Style.sectionRowHeight + Style.Space.l : Style.sectionRowHeight
-        let rows = CGFloat(max(paired + available, 1))
-        return listInsets + titles + rows * Style.rowHeight
-    }
 }

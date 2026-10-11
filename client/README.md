@@ -54,8 +54,11 @@ from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchange
 
 Relay opens a small window listing the PCs it finds, under **Paired** and
 **Available**. The window is as tall as the list and scrolls past five PCs.
-Available is shown with a small spinner, since Relay keeps searching; with no
-PC at all the list shows "No PCs Found" with a spinner and what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
+Paired says "No paired devices yet" until a PC is paired, and Available shows
+"Searching for PCs…" while no unpaired PC is around, since Relay keeps
+searching. Click a section's title to collapse or expand it (Paired once
+something is paired). With no PC at all
+the list shows "No PCs Found" with a spinner and what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
 or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
 and its key fingerprint.
