@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Observation
 
 /// Main-thread presentation state. Video frames never enter this model.
@@ -47,6 +48,8 @@ final class PickerModel {
     var nativePixelSize = CGSize(width: 2, height: 2)
     var maxRefresh = 60
     var settingsPresented = false
+    /// Which side of the gear the settings popover opens on.
+    var settingsEdge: Edge = .trailing
     var renamingID: String?
     var renameDraft = ""
     var pinPrompt: PINPrompt?
@@ -57,6 +60,17 @@ final class PickerModel {
     var pickerActive = true
 
     @ObservationIgnored var connect: (() -> Void)?
+    /// Whether the screen has room for the settings popover to the right of
+    /// the gear; HostPickerWindowController measures the window's screen.
+    @ObservationIgnored var settingsFitsRight: () -> Bool = { true }
+
+    /// Open settings to the right of the gear, or below it when the window
+    /// sits too close to the screen's right edge. Chosen here because
+    /// AppKit's own fallback for a popover would try the left side next.
+    func showSettings() {
+        settingsEdge = settingsFitsRight() ? .trailing : .bottom
+        settingsPresented = true
+    }
     /// Replaced in tests; Wi-Fi is decided from the Mac's live interfaces.
     @ObservationIgnored var connectsOverWiFi: (DiscoveredHost) -> Bool = { $0.connectsOverWiFi }
     /// The Wi-Fi alert's "do not show this message again".

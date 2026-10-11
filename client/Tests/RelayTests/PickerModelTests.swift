@@ -238,4 +238,17 @@ final class PickerModelTests: XCTestCase {
         model.update(hosts: [a, b], known: [a.publicKey!: "A"], nicknames: [:])
         XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "host.paired.A"])
     }
+
+    @MainActor func testSettingsOpenRightThenBelow() async {
+        let model = PickerModel()
+        var room = true
+        model.settingsFitsRight = { room }
+        model.showSettings()
+        XCTAssertTrue(model.settingsPresented)
+        XCTAssertEqual(model.settingsEdge, .trailing)
+        model.settingsPresented = false
+        room = false // window against the screen's right edge
+        model.showSettings()
+        XCTAssertEqual(model.settingsEdge, .bottom)
+    }
 }

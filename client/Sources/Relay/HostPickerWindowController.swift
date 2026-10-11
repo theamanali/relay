@@ -39,6 +39,13 @@ final class HostPickerWindowController: NSWindowController {
             self.pickerDelegate?.picker(self, rename: host, to: name)
         }
         model.prefsChanged = { [weak self] prefs in self?.onPrefsChange?(prefs) }
+        model.settingsFitsRight = { [weak self] in
+            guard let window = self?.window, let screen = window.screen else { return true }
+            // The gear's right edge is a margin in from the window's; the
+            // popover adds its arrow and border to the content width.
+            let gearMaxX = window.frame.maxX - Style.Space.margin
+            return gearMaxX + Style.settingsWidth + 24 <= screen.visibleFrame.maxX
+        }
         model.modeChanged = { [weak self] mode in self?.onModeChange?(mode) }
     }
 
