@@ -45,6 +45,10 @@ struct HostPickerView: View {
         } message: { _ in
             Text("Your MacBook will no longer be paired with this PC. To connect again, you’ll need to enter its PIN.")
         }
+        // Presented from its own view: the suppression toggle applies to every
+        // dialog presented within the view it modifies, and Forget must not
+        // offer "Don't ask again".
+        .background { WiFiConnectAlert(model: model) }
     }
 
     /// Hero glyph, title, one-line purpose.
@@ -64,6 +68,32 @@ struct HostPickerView: View {
     }
 }
 
+/// Connecting over Wi-Fi works, but a cable is the better link: say so once,
+/// in the system's alert, with its own "Don't ask again".
+private struct WiFiConnectAlert: View {
+    @Bindable var model: PickerModel
+    @AppStorage(PickerModel.wifiWarningSuppressedKey) private var suppressed = false
+
+    var body: some View {
+        Color.clear
+            .alert(
+                "Connect to “\(model.wifiCandidate?.name ?? "this PC")” over Wi-Fi?",
+                isPresented: Binding(get: { model.wifiCandidate != nil }, set: { if !$0 { model.wifiCandidate = nil } }),
+                presenting: model.wifiCandidate
+            ) { _ in
+                Button("Connect") {
+                    model.wifiCandidate = nil
+                    model.connect?()
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) { model.wifiCandidate = nil }
+            } message: { _ in
+                Text("Relay works over Wi-Fi, but the picture may lag or drop frames. For the best experience, connect your MacBook directly to your PC with an Ethernet cable.")
+            }
+            .dialogSuppressionToggle(isSuppressed: $suppressed)
+    }
+}
+
 // MARK: list
 
 private struct HostList: View {
@@ -73,39 +103,31 @@ private struct HostList: View {
     static let rowInsets = EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
 
     var body: some View {
+        // One ForEach over stably identified items, so rows are never matched
+        // by position (that cross-faded the Paired and Available titles).
         List(selection: $model.selection) {
-            // Plain rows rather than Section headers: the list's own headers
-            // float with a band behind them.
-            let paired = model.pairedRows
-            if !paired.isEmpty {
-                SectionHeaderRow(title: PickerSection.paired.title, first: true, searching: false)
-                    .pickerListRow()
-                    .selectionDisabled()
-                ForEach(paired) { row in
+            ForEach(model.listItems) { item in
+                switch item {
+                case let .title(section, first):
+                    SectionHeaderRow(title: section.title, first: first, searching: section == .available)
+                        .pickerListRow()
+                        .selectionDisabled()
+                case let .host(row):
                     HostRow(row: row, model: model).tag(row.id).pickerListRow()
                 }
             }
-            // Always listed: discovery never stops, and the spinner says so,
-            // as System Settings' Bluetooth list does for nearby devices.
-            SectionHeaderRow(title: PickerSection.available.title, first: paired.isEmpty, searching: true)
-                .pickerListRow()
-                .selectionDisabled()
-            ForEach(model.availableRows) { row in
-                HostRow(row: row, model: model).tag(row.id).pickerListRow()
-            }
-            if model.rows.isEmpty {
-                FirstRunHintRow()
-                    .pickerListRow()
-                    .selectionDisabled()
-            }
         }
         .listStyle(.inset)
+        // No PC at all: the list's background stays, with the empty state on it.
+        .overlay { if model.rows.isEmpty { NoPCsFound() } }
+        // Rows and titles update in place. The list's own insert, remove and
+        // move animations slid rows over a fading one and through each other;
+        // only the window's height animates (HostPickerWindowController).
+        .transaction { $0.animation = nil }
         // A list that fits its rows reserves no scroller gutter on the right.
         .scrollIndicators(model.listOverflows ? .automatic : .never)
         .accessibilityLabel("PCs")
         .onDeleteCommand { if model.selected?.paired == true { model.forgetCandidate = model.selected } }
-        .animation(.easeInOut(duration: 0.2), value: model.rows.map(\.id))
-        .animation(.easeInOut(duration: 0.2), value: model.rows.map(\.paired))
     }
 }
 
@@ -138,16 +160,30 @@ private struct SectionHeaderRow: View {
     }
 }
 
-/// The empty state: no PC at all yet, paired or not. The spinner beside
-/// Available already says Relay is searching; this says what to do on the PC.
-private struct FirstRunHintRow: View {
+/// The empty state: no PC at all yet, paired or not. Discovery keeps
+/// running, which the spinner says; the instruction says what to do on the PC.
+private struct NoPCsFound: View {
     var body: some View {
-        Text("Open Relay on the PC and connect it to this MacBook or the same network.")
-            .font(Style.Font.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: Style.rowHeight)
+        VStack(spacing: Style.Space.m) {
+            Text("No PCs Found")
+                .font(.title3.weight(.semibold))
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Searching for PCs")
+            Text("Open Relay on the PC and connect it to this MacBook or the same network.")
+                .font(Style.Font.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300)
+        }
+        .padding(.horizontal, Style.Space.margin)
+        // The list starts Space.margin below the header; the same margin here
+        // centers the block between the subtitle and the footer's rule, and
+        // 2 more points even out the subtitle's descenders (44 pt both ways).
+        .padding(.bottom, Style.Space.margin + 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -189,7 +225,7 @@ private struct HostRow: View {
         .onTapGesture(count: 2) {
             guard !model.connecting else { return }
             model.selection = row.id
-            model.connect?()
+            model.requestConnect()
         }
         .simultaneousGesture(TapGesture().onEnded {
             if model.renamingID != row.id { model.finishRename() }
@@ -231,7 +267,7 @@ private struct HostRow: View {
         if !model.connecting {
             Button(row.paired ? "Connect" : "Pair", systemImage: row.paired ? "display" : "link") {
                 model.selection = row.id
-                model.connect?()
+                model.requestConnect()
             }
             if named { Divider() }
         }
@@ -278,10 +314,15 @@ private struct PickerFooter: View {
                 .frame(maxWidth: .infinity)
                 .help("Resolution to stream")
                 if model.refreshRates.count > 1 {
-                    Picker("Refresh rate", selection: Binding(get: { model.mode.refresh }, set: {
-                        model.setMode(StreamMode(scale: model.mode.scale, refresh: $0))
+                    // Disabled, no segment is selected: a selected one still
+                    // draws in the accent color and looks live beside the
+                    // dimmed popup and gear. The rate comes back with a PC.
+                    Picker("Refresh rate", selection: Binding<Int?>(get: {
+                        model.canConfigure ? model.mode.refresh : nil
+                    }, set: {
+                        if let rate = $0 { model.setMode(StreamMode(scale: model.mode.scale, refresh: rate)) }
                     })) {
-                        ForEach(model.refreshRates, id: \.self) { Text(verbatim: "\($0) Hz").tag($0) }
+                        ForEach(model.refreshRates, id: \.self) { Text(verbatim: "\($0) Hz").tag(Int?.some($0)) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -311,7 +352,7 @@ private struct PickerFooter: View {
                     .truncationMode(.tail)
                     .help(shown == model.status ? "" : model.status)
                 Spacer(minLength: 0)
-                Button { model.finishRename(); model.connect?() } label: {
+                Button { model.requestConnect() } label: {
                     Text(model.connectTitle).frame(minWidth: 74)
                 }
                 // Return has to reach the rename box while it is open.

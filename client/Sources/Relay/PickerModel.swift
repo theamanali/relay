@@ -52,9 +52,29 @@ final class PickerModel {
     var pinPrompt: PINPrompt?
     var notice: Notice?
     var forgetCandidate: Row?
+    /// A paired PC about to be connected over Wi-Fi: the picker asks first.
+    var wifiCandidate: Row?
     var pickerActive = true
 
     @ObservationIgnored var connect: (() -> Void)?
+    /// Replaced in tests; Wi-Fi is decided from the Mac's live interfaces.
+    @ObservationIgnored var connectsOverWiFi: (DiscoveredHost) -> Bool = { $0.connectsOverWiFi }
+    /// The Wi-Fi alert's "do not show this message again".
+    static let wifiWarningSuppressedKey = "SuppressWiFiConnectionWarning"
+
+    /// Every Connect goes through here (button, Return, double-click,
+    /// menus). Streaming over Wi-Fi works but is not the best link, so a
+    /// paired PC reached that way gets a warning first, unless the user has
+    /// turned it off. Cancel and Pair pass straight through.
+    func requestConnect() {
+        finishRename()
+        if !connecting, let row = selected, row.paired, connectsOverWiFi(row.host),
+           !UserDefaults.standard.bool(forKey: Self.wifiWarningSuppressedKey) {
+            wifiCandidate = row
+            return
+        }
+        connect?()
+    }
     @ObservationIgnored var forget: ((DiscoveredHost) -> Void)?
     @ObservationIgnored var rename: ((DiscoveredHost, String) -> Void)?
     @ObservationIgnored var prefsChanged: ((SessionPrefs) -> Void)?
@@ -67,12 +87,42 @@ final class PickerModel {
     var refreshRates: [Int] { StreamMode.refreshRates(max: maxRefresh) }
     /// Pair only for a selected available PC; Connect otherwise, as before SwiftUI.
     var connectTitle: String { connecting ? "Cancel" : selected?.paired == false ? "Pair" : "Connect" }
+    /// What the list shows, top to bottom. Plain rows rather than Section
+    /// headers (the list's own headers float on a band). Once any PC is
+    /// known, Available is always listed, since discovery never stops and its
+    /// spinner says so; with none at all the list is empty and the picker
+    /// shows a centered empty state over it instead.
+    enum ListItem: Identifiable {
+        case title(PickerSection, first: Bool)
+        case host(Row)
+
+        var id: String {
+            switch self {
+            case let .title(section, _): "title.\(section == .paired ? "paired" : "available")"
+            // The section is part of a PC's identity: pairing removes it from
+            // Available (fade) and inserts it under Paired, as the AppKit
+            // table did, instead of a move that slides it through the rows
+            // in between. Selection uses the row's tag, so it survives.
+            case let .host(row): "host.\(row.paired ? "paired" : "available").\(row.id)"
+            }
+        }
+    }
+
+    var listItems: [ListItem] {
+        guard !rows.isEmpty else { return [] }
+        let paired = pairedRows
+        var items: [ListItem] = []
+        if !paired.isEmpty {
+            items.append(.title(.paired, first: true))
+            items += paired.map(ListItem.host)
+        }
+        items.append(.title(.available, first: paired.isEmpty))
+        items += availableRows.map(ListItem.host)
+        return items
+    }
+
     var pairedRows: [Row] { rows.filter(\.paired) }
     var availableRows: [Row] { rows.filter { !$0.paired } }
-    /// The topmost section, which needs no gap above its title. Available is
-    /// always listed (its spinner says discovery is running), Paired only when
-    /// there is one.
-    var firstSection: PickerSection { rows.contains(where: \.paired) ? .paired : .available }
     var listHeight: CGFloat { PickerLayout.listHeight(paired: pairedRows.count, available: availableRows.count) }
     var listOverflows: Bool { PickerLayout.overflows(paired: pairedRows.count, available: availableRows.count) }
 

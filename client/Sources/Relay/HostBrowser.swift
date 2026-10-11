@@ -83,6 +83,9 @@ struct DiscoveredHost {
         return Self.label(top)
     }
 
+    /// No cable to the PC, and Wi-Fi is the first link that reaches it.
+    var connectsOverWiFi: Bool { connectLink == Self.label(.wifi) }
+
     private static func rank(_ type: NWInterface.InterfaceType) -> Int {
         switch type {
         case .wiredEthernet: return 0

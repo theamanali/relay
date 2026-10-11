@@ -40,26 +40,30 @@ enum Style {
 }
 
 /// The picker's list is as tall as its rows, so a single PC leaves no empty
-/// band above the footer; past `maxHostRows` it scrolls.
+/// band above the footer. Past `maxHostRows` it scrolls, and is half a row
+/// taller than that so a partly shown row says there is more below.
 enum PickerLayout {
     /// The inset list's own padding above the first row and below the last.
     static let listInsets: CGFloat = 20
     static let maxHostRows = 5
 
-    /// Paired (when any) and Available titles, the PCs, and the first-run
-    /// hint while there is no PC at all.
+    /// Paired (when any) and Available titles and the PCs; with none at all
+    /// the empty state takes the two-row floor.
     static func listHeight(paired: Int, available: Int) -> CGFloat {
         // Never so short that the first PC to appear makes the window jump far.
         let floor = listInsets + Style.sectionRowHeight + 2 * Style.rowHeight
-        return min(max(contentHeight(paired: paired, available: available), floor), cap)
+        return min(max(contentHeight(paired: paired, available: available), floor), scrollingHeight)
     }
 
     /// More rows than fit: only then does the list scroll and show a scroller.
     static func overflows(paired: Int, available: Int) -> Bool {
-        contentHeight(paired: paired, available: available) > cap
+        contentHeight(paired: paired, available: available) > scrollingHeight
     }
 
-    private static let cap = listInsets + 2 * Style.sectionRowHeight + Style.Space.l + CGFloat(maxHostRows) * Style.rowHeight
+    /// Both titles and `maxHostRows` PCs, plus half a row. A height that ended
+    /// on a row boundary hid the overflow: nothing showed there was more.
+    private static let scrollingHeight = listInsets + 2 * Style.sectionRowHeight + Style.Space.l
+        + (CGFloat(maxHostRows) + 0.5) * Style.rowHeight
 
     private static func contentHeight(paired: Int, available: Int) -> CGFloat {
         let titles = paired > 0 ? 2 * Style.sectionRowHeight + Style.Space.l : Style.sectionRowHeight

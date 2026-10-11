@@ -97,31 +97,46 @@ final class PickerModelTests: XCTestCase {
         XCTAssertFalse(PickerModel.Row(host: pc, paired: true, nickname: nil).hoverRows.contains { $0.label == "Name:" })
     }
 
-    @MainActor func testOnlyTheTopSectionSkipsTheGapAboveItsTitle() async {
+    @MainActor func testListItemsKeepTitlesStableAndReinsertPairedPCs() async {
         let model = PickerModel()
         let a = host("A", key: 1), b = host("B", key: 2)
-        // Available is always listed, with its searching spinner.
-        XCTAssertEqual(model.firstSection, .available)
-        model.update(hosts: [a], known: [:], nicknames: [:])
-        XCTAssertEqual(model.firstSection, .available)
+        // Nothing yet: no titles at all; the picker's empty state covers the list.
+        XCTAssertEqual(model.listItems.map(\.id), [])
+        model.update(hosts: [a, b], known: [:], nicknames: [:])
+        XCTAssertEqual(model.listItems.map(\.id), ["title.available", "host.available.A", "host.available.B"])
+        // B pairs: it leaves Available and appears under a new Paired title
+        // (a new ID, so a fade out and an insert rather than a move through
+        // A), and the titles keep their IDs so they slide rather than fade
+        // through each other. B stays selected through its tag.
+        model.selection = "B"
         model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
-        XCTAssertEqual(model.firstSection, .paired)
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.B", "title.available", "host.available.A"])
+        XCTAssertEqual(model.selection, "B")
+        let firsts = model.listItems.compactMap { item -> Bool? in
+            if case let .title(_, first) = item { return first } else { return nil }
+        }
+        XCTAssertEqual(firsts, [true, false]) // only the top title skips the gap
     }
 
-    func testListIsAsTallAsItsRowsUpToFive() {
+    func testListIsAsTallAsItsRowsThenScrollsWithAPeek() {
         let row = Style.rowHeight, title = Style.sectionRowHeight, insets = PickerLayout.listInsets
-        // Empty: the Available title and the first-run hint, held at a two-row floor.
+        // Empty: the empty state, held at the two-row floor.
         let floor = insets + title + 2 * row
         XCTAssertEqual(PickerLayout.listHeight(paired: 0, available: 0), floor)
         // One paired PC and nothing available: both titles and the PC, under the floor.
         XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 0), floor)
         XCTAssertEqual(PickerLayout.listHeight(paired: 1, available: 2), insets + 2 * title + Style.Space.l + 3 * row)
-        // Past five PCs the list stops growing and scrolls.
-        let capped = insets + 2 * title + Style.Space.l + 5 * row
-        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 3), capped)
+        // Five PCs still fit exactly.
+        let five = insets + 2 * title + Style.Space.l + 5 * row
+        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 3), five)
         XCTAssertFalse(PickerLayout.overflows(paired: 2, available: 3))
-        XCTAssertEqual(PickerLayout.listHeight(paired: 3, available: 5), capped)
-        XCTAssertTrue(PickerLayout.overflows(paired: 3, available: 5))
+        // Past that the list scrolls, half a row taller so a partly shown row
+        // says there is more below.
+        XCTAssertEqual(PickerLayout.listHeight(paired: 2, available: 4), five + row / 2)
+        XCTAssertTrue(PickerLayout.overflows(paired: 2, available: 4))
+        XCTAssertEqual(PickerLayout.listHeight(paired: 3, available: 5), five + row / 2)
+        // Six available and nothing paired: one title fewer, so all six fit.
+        XCTAssertFalse(PickerLayout.overflows(paired: 0, available: 6))
     }
 
     @MainActor func testFooterButtonSaysPairOnlyForAnAvailablePC() async {
@@ -130,5 +145,54 @@ final class PickerModelTests: XCTestCase {
         let a = host("A", key: 1)
         model.update(hosts: [a], known: [:], nicknames: [:])
         XCTAssertEqual(model.connectTitle, "Pair")
+    }
+
+    @MainActor func testWiFiConnectAsksFirstUnlessSuppressed() async {
+        let key = PickerModel.wifiWarningSuppressedKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set(false, forKey: key)
+
+        let model = PickerModel()
+        var connects = 0
+        model.connect = { connects += 1 }
+        var overWiFi = true
+        model.connectsOverWiFi = { _ in overWiFi }
+        let paired = host("Desk", key: 1), available = host("New", key: 2)
+        model.update(hosts: [paired, available], known: [paired.publicKey!: "Desk"], nicknames: [:])
+
+        // Paired over Wi-Fi: the alert, no connection yet.
+        model.selection = "Desk"
+        model.requestConnect()
+        XCTAssertEqual(model.wifiCandidate?.id, "Desk")
+        XCTAssertEqual(connects, 0)
+        model.wifiCandidate = nil
+
+        // Pairing an available PC streams nothing: no warning.
+        model.selection = "New"
+        model.requestConnect()
+        XCTAssertNil(model.wifiCandidate)
+        XCTAssertEqual(connects, 1)
+
+        // Over a cable: straight through.
+        overWiFi = false
+        model.selection = "Desk"
+        model.requestConnect()
+        XCTAssertNil(model.wifiCandidate)
+        XCTAssertEqual(connects, 2)
+
+        // Cancel while connecting is never held up.
+        overWiFi = true
+        model.connecting = true
+        model.requestConnect()
+        XCTAssertNil(model.wifiCandidate)
+        XCTAssertEqual(connects, 3)
+        model.connecting = false
+
+        // "Do not show this message again".
+        UserDefaults.standard.set(true, forKey: key)
+        model.requestConnect()
+        XCTAssertNil(model.wifiCandidate)
+        XCTAssertEqual(connects, 4)
     }
 }
