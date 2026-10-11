@@ -63,7 +63,7 @@ struct RelayCommands: Commands {
             Button("About Relay") { delegate.showAbout(nil) }
         }
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { model.settingsPresented = true }
+            Button("Settings…") { model.showSettings() }
                 .keyboardShortcut(",").disabled(!paired)
         }
         // Relay has no documents; the PC menu takes File's place.
@@ -139,7 +139,7 @@ struct RelayCommands: Commands {
                     })) { Text(verbatim: "\(bitrate) Mbps") }
                 }
                 Divider()
-                Button("Custom…") { model.settingsPresented = true }
+                Button("Custom…") { model.showSettings() }
             } label: {
                 Label("Bitrate", systemImage: "speedometer")
             }

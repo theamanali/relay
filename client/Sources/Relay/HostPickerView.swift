@@ -382,12 +382,12 @@ private struct PickerFooter: View {
                     .fixedSize()
                     .help("Refresh rate")
                 }
-                Button { model.settingsPresented = true } label: {
+                Button { model.showSettings() } label: {
                     Image(systemName: "gearshape").frame(width: 24)
                 }
                 .help("Settings")
                 .accessibilityLabel("Settings")
-                .popover(isPresented: $model.settingsPresented, arrowEdge: .top) {
+                .popover(isPresented: $model.settingsPresented, arrowEdge: model.settingsEdge) {
                     SessionSettingsView(model: model)
                 }
             }
@@ -475,7 +475,37 @@ struct SessionSettingsView: View {
                 .padding(.top, Style.Space.s)
         }
         .padding(Style.Space.l)
-        .frame(width: 312, alignment: .leading)
+        .frame(width: Style.settingsWidth, alignment: .leading)
+        // The popover would otherwise make the bitrate field first responder,
+        // and the first keystroke would change the bitrate. Click to edit it.
+        .background(NoInitialFocus())
+    }
+}
+
+/// Clears the keyboard focus AppKit gives a popover's first control when it
+/// opens, once; SwiftUI's focus state does not override that choice.
+private struct NoInitialFocus: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Clearer() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Clearer: NSView {
+        private var done = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            guard let window, !done else { return }
+            NotificationCenter.default.addObserver(self, selector: #selector(clear),
+                                                   name: NSWindow.didBecomeKeyNotification, object: window)
+            DispatchQueue.main.async { [weak self] in self?.clear() }
+        }
+
+        @objc private func clear() {
+            guard !done, let window, window.isKeyWindow else { return }
+            done = true
+            NotificationCenter.default.removeObserver(self)
+            window.makeFirstResponder(nil)
+        }
     }
 }
 

@@ -329,7 +329,13 @@ documented there. What follows is only the mechanics that are easy to break:
   alert wording. Keep the SwiftUI colors: the inset list's own background spans
   the window (its selection inset is fixed at 10 pt; a painted background did
   not match the list's translucent fill), and the footer has no material.
-  The gear icon replaces the old Advanced button at the end of the mode row.
+  The gear icon replaces the old Advanced button at the end of the mode row;
+  its popover opens to the right, or below when the window is too close to
+  the screen's right edge (`PickerModel.showSettings`; AppKit's own fallback
+  would try the left side next). Opening it focuses nothing: AppKit makes the
+  popover's first control (the bitrate field) first responder, which
+  SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
+  clears it once when the popover becomes key.
   A disabled segmented control still draws its selection in the accent
   color, so the refresh-rate picker has no selection (an optional binding
   returning nil) while it is disabled; a gray tint looked odd. Its background
