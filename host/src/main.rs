@@ -7,8 +7,8 @@
 #![windows_subsystem = "windows"]
 
 use relay_host::{
-    crypto, discovery, display, driver, encoder, gpu, protocol, server, service, status, topology,
-    tray,
+    crypto, discovery, display, driver, encoder, gpu, nvenc_caps, protocol, server, service,
+    status, topology, tray,
 };
 
 use std::path::PathBuf;
@@ -46,6 +46,16 @@ enum Command {
     Displays,
     /// List GPUs and show which one would be used
     Gpus,
+    /// Show the selected GPU's NVENC capabilities and try Relay's encoder
+    /// configuration at a mode. Read-only: no display or topology change
+    EncoderCaps {
+        #[arg(long, default_value_t = 3024)]
+        width: u32,
+        #[arg(long, default_value_t = 1964)]
+        height: u32,
+        #[arg(long, default_value_t = 120)]
+        hz: u32,
+    },
     /// Put the displays back the way they were (if a session or crash left them off)
     Restore,
     /// Show the pairing PIN (or generate a new one with --new)
@@ -381,6 +391,9 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
             print!("{}", gpu::describe(&gpus, chosen.as_ref()));
             Ok(())
         }
+        Some(Command::EncoderCaps { width, height, hz }) => {
+            encoder_caps_report(&cli.serve, Mode { width, height, hz })
+        }
         Some(Command::Restore) => restore_displays(cli.serve.driver),
         Some(Command::Pin { new }) => show_pin(new),
         Some(Command::Paired { forget }) => paired_clients(forget),
@@ -446,6 +459,130 @@ fn select_gpu(want: Option<&str>) -> Result<GpuInfo> {
         );
     }
     Ok(chosen)
+}
+
+/// `encoder-caps`: every adapter, the selected one's identity and NVENC
+/// record, then Relay's real encoder configuration initialized (and torn
+/// down) for each codec, preset and picture option at `mode`. Says which
+/// pass; a pass is a capability, not a measured frame rate.
+fn encoder_caps_report(args: &ServeArgs, mode: Mode) -> Result<()> {
+    let gpus = gpu::enumerate()?;
+    let chosen = gpu::choose(&gpus, args.gpu.as_deref());
+    println!("adapters:");
+    print!("{}", gpu::describe(&gpus, chosen.as_ref().ok()));
+    let gpu = chosen?;
+    println!(
+        "\nselected: {} (DXGI adapter {}, LUID {:x}:{:x}), driver {}",
+        gpu.name,
+        gpu.adapter_index,
+        gpu.luid.high,
+        gpu.luid.low,
+        gpu::driver_version(gpu.luid).map_or("version unknown".into(), |raw| format!(
+            "{} ({})",
+            gpu::nvidia_driver_version(raw),
+            gpu::umd_version(raw)
+        ))
+    );
+    let caps = nvenc_caps::query(&gpu)?;
+    print!("\n{}", caps.describe(args.intra_refresh));
+
+    let fps = mode.hz.max(1);
+    let bitrate_mbps = u32::from(args.bitrate.unwrap_or(120));
+    println!(
+        "\nRelay's configuration at {}x{}@{fps}, {bitrate_mbps} Mbps CBR, ultra-low latency{}:",
+        mode.width,
+        mode.height,
+        if args.intra_refresh {
+            ", intra refresh"
+        } else {
+            ""
+        }
+    );
+    let mut passed = 0;
+    for codec in &caps.codecs {
+        let hevc = codec.codec == Codec::Hevc;
+        let mut variants: Vec<(Quality, bool, bool)> = Quality::ALL
+            .into_iter()
+            .map(|q| (q, false, false))
+            .collect();
+        if hevc {
+            variants.extend([
+                (Quality::Balanced, true, false),
+                (Quality::Balanced, false, true),
+                (Quality::Balanced, true, true),
+            ]);
+        }
+        for (quality, full_color, ten_bit) in variants {
+            let label = format!(
+                "{} {} {}{}",
+                nvenc_caps::Profile::for_session(codec.codec, full_color, ten_bit).label(),
+                quality.preset_name(),
+                if full_color { "4:4:4" } else { "4:2:0" },
+                if ten_bit { " 10-bit" } else { "" },
+            );
+            let requirement = nvenc_caps::Requirement {
+                width: mode.width,
+                height: mode.height,
+                fps,
+                quality,
+                full_color,
+                ten_bit,
+                intra_refresh: args.intra_refresh,
+            };
+            if let Err(e) = codec.check(&requirement) {
+                println!("  {label}: not supported: {e:#}");
+                continue;
+            }
+            let cfg = encoder::EncoderConfig {
+                ffmpeg: args.ffmpeg.clone(),
+                vendor: gpu.vendor,
+                capture_adapter_idx: gpu.adapter_index,
+                encode_adapter_idx: gpu.adapter_index,
+                output_idx: 0,
+                width: mode.width,
+                height: mode.height,
+                fps,
+                bitrate_mbps,
+                codec: codec.codec,
+                gop: args.gop.max(1) * fps,
+                quality,
+                full_color,
+                ten_bit,
+                intra_refresh: args.intra_refresh,
+                prefer_ffmpeg: false,
+            };
+            let started = std::time::Instant::now();
+            match nvenc_caps::trial_initialize(&gpu, &cfg) {
+                Ok(()) => {
+                    passed += 1;
+                    println!(
+                        "  {label}: initializes ({:.0} ms)",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
+                Err(e) => println!("  {label}: the driver refused it: {e:#}"),
+            }
+        }
+        if let Some(rated) = codec.rated_fps(mode.width, mode.height) {
+            println!(
+                "  NVIDIA's rated macroblock rate is about {rated:.0} fps at {}x{} \
+                 (a rating, not a limit or a measurement)",
+                mode.width, mode.height
+            );
+        }
+    }
+    println!(
+        "\nThese are capabilities. Whether {fps} fps is sustained shows only in a session's own stats."
+    );
+    caps.ensure_usable(args.intra_refresh)?;
+    if passed == 0 {
+        anyhow::bail!(
+            "no configuration initialized at {}x{}@{fps}",
+            mode.width,
+            mode.height
+        );
+    }
+    Ok(())
 }
 
 /// Open the driver and undo whatever an earlier session left behind (physical
@@ -651,7 +788,18 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
     let status = Arc::new(Mutex::new(status::HostStatus::new(
         pin, pin_fixed, pin_path,
     )));
-    let video_caps = encoder::VideoCaps::detect(&gpu, args.no_native);
+    // A vendor id does not prove NVENC exists, and an old driver cannot run
+    // the 12.1 API: nothing can stream without these, so do not serve.
+    let encoder_caps =
+        nvenc_caps::query(&gpu).with_context(|| format!("querying NVENC on {}", gpu.name))?;
+    for line in encoder_caps.describe(args.intra_refresh).lines() {
+        log::info!("{line}");
+    }
+    encoder_caps.ensure_usable(args.intra_refresh)?;
+    let mut video_caps = encoder_caps.video_caps(args.intra_refresh);
+    if args.no_native {
+        video_caps = video_caps.for_ffmpeg();
+    }
     log::info!("encoder capabilities: {video_caps:?}");
 
     let cfg = server::ServerConfig {

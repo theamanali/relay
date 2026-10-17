@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 
-use crate::gpu::{GpuInfo, Vendor};
+use crate::gpu::Vendor;
 use crate::protocol::{encoder_quality, Codec};
 
 /// Speed/quality trade-off, mapped to each vendor's own preset scale.
@@ -50,6 +50,17 @@ impl Quality {
             Quality::Quality => "quality",
         }
     }
+
+    pub const ALL: [Quality; 3] = [Quality::Speed, Quality::Balanced, Quality::Quality];
+
+    /// The NVENC preset it selects.
+    pub fn preset_name(self) -> &'static str {
+        match self {
+            Quality::Speed => "P1",
+            Quality::Balanced => "P4",
+            Quality::Quality => "P6",
+        }
+    }
 }
 
 /// What this host's encoder can do beyond 8-bit 4:2:0 at its default preset.
@@ -77,18 +88,12 @@ impl VideoCaps {
         ten_bit: false,
     };
 
-    /// Ask NVENC on the selected GPU when the in-process path will encode;
-    /// anything else (or a failed query) gets the ffmpeg fallback's caps.
-    pub fn detect(gpu: &GpuInfo, prefer_ffmpeg: bool) -> Self {
-        if gpu.vendor != Vendor::Nvidia || prefer_ffmpeg {
-            return Self::FFMPEG;
-        }
-        match crate::native_nvenc::query_caps(gpu) {
-            Ok(caps) => caps,
-            Err(e) => {
-                log::warn!("could not query NVENC capabilities ({e:#}); advertising presets only");
-                Self::FFMPEG
-            }
+    /// What survives on the ffmpeg path (`--no-native`): presets and the
+    /// codec choice, not the picture flags.
+    pub fn for_ffmpeg(self) -> Self {
+        Self {
+            hevc: self.hevc,
+            ..Self::FFMPEG
         }
     }
 
@@ -117,6 +122,9 @@ pub struct EncoderConfig {
     /// `capture_adapter_idx` frames are copied through system memory.
     pub encode_adapter_idx: u32,
     pub output_idx: u32,
+    /// The session's picture size: what STREAM_START announced.
+    pub width: u32,
+    pub height: u32,
     pub fps: u32,
     pub bitrate_mbps: u32,
     pub codec: Codec,
@@ -878,6 +886,8 @@ mod tests {
             capture_adapter_idx: capture,
             encode_adapter_idx: encode,
             output_idx: 1,
+            width: 3024,
+            height: 1964,
             fps: 120,
             bitrate_mbps: 120,
             codec,
@@ -922,27 +932,21 @@ mod tests {
     }
 
     #[test]
-    fn non_nvidia_and_ffmpeg_hosts_advertise_quality_only() {
-        let gpu = |vendor| GpuInfo {
-            adapter_index: 0,
-            name: "test".into(),
-            vendor,
-            dedicated_vram: 0,
-            luid: crate::gpu::Luid { low: 0, high: 0 },
-            kind: crate::gpu::AdapterKind::default(),
+    fn the_ffmpeg_path_keeps_presets_and_hevc_but_no_picture_flags() {
+        let all = VideoCaps {
+            quality: true,
+            hevc: true,
+            full_color: true,
+            ten_bit: true,
         };
+        assert_eq!(all.for_ffmpeg(), VideoCaps::FFMPEG);
+        let h264_only = VideoCaps { hevc: false, ..all };
         assert_eq!(
-            VideoCaps::detect(&gpu(Vendor::Amd), false),
-            VideoCaps::FFMPEG
-        );
-        assert_eq!(
-            VideoCaps::detect(&gpu(Vendor::Other), false),
-            VideoCaps::FFMPEG
-        );
-        // --no-native never opens NVENC.
-        assert_eq!(
-            VideoCaps::detect(&gpu(Vendor::Nvidia), true),
-            VideoCaps::FFMPEG
+            h264_only.for_ffmpeg(),
+            VideoCaps {
+                hevc: false,
+                ..VideoCaps::FFMPEG
+            }
         );
     }
 
@@ -1027,7 +1031,7 @@ mod tests {
 }
 
 /// Marker in an error chain: Desktop Duplication refused the current desktop
-/// (`E_ACCESSDENIED`). Not a fault of the pipeline — retry when the desktop
+/// (`E_ACCESSDENIED`). Not a fault of the pipeline â€” retry when the desktop
 /// changes (unlock, sign-in, UAC prompt dismissed).
 #[derive(Debug)]
 pub struct DesktopNotCapturable;

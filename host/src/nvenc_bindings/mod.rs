@@ -40,7 +40,7 @@ pub struct ApiVersion {
 }
 
 impl ApiVersion {
-    fn from_driver(raw: u32) -> Self {
+    pub(crate) fn from_driver(raw: u32) -> Self {
         Self {
             major: raw >> 4,
             minor: raw & 0xf,

@@ -38,88 +38,263 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::cursor_overlay::CursorOverlay;
-use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality, VideoCaps};
+use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality};
 use crate::gpu::{GpuInfo, Luid};
+use crate::nvenc_caps::{codec_label, CodecCaps, EncoderCaps, Profile};
 use crate::protocol::Codec;
 
-/// Open a short-lived NVENC session on the selected GPU and read what it can
-/// encode: HEVC at all, and HEVC 4:4:4 and 10-bit. Runs once at startup.
-pub fn query_caps(gpu: &GpuInfo) -> Result<VideoCaps> {
-    let device = create_device_for(gpu.luid)?;
-    let api = NvApi::load()?;
-    log::info!("NVIDIA driver supports NVENC API {}", api.driver_api);
-    let mut open: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = unsafe { zeroed() };
-    open.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
-    open.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
-    open.device = device.as_raw();
-    open.apiVersion = NVENCAPI_VERSION;
-    let open_session = api.required(
-        api.functions.nvEncOpenEncodeSessionEx,
-        "NvEncOpenEncodeSessionEx",
+/// Open a short-lived NVENC session on a D3D11 device for the selected GPU and
+/// read what it can encode. No Desktop Duplication, no display change; safe
+/// while another process (the service) streams.
+pub fn query_caps(gpu: &GpuInfo) -> Result<EncoderCaps> {
+    let session = CapsSession::open(gpu)?;
+    let listed = session.list(
+        "NvEncGetEncodeGUIDs",
+        GUID::default(),
+        |encoder, count| unsafe {
+            Ok(session.api.required(
+                session.api.functions.nvEncGetEncodeGUIDCount,
+                "NvEncGetEncodeGUIDCount",
+            )?(encoder, count))
+        },
+        |encoder, items, size, written| unsafe {
+            Ok(session.api.required(
+                session.api.functions.nvEncGetEncodeGUIDs,
+                "NvEncGetEncodeGUIDs",
+            )?(encoder, items, size, written))
+        },
     )?;
-    let mut encoder = ptr::null_mut();
-    nv_check(
-        &api,
-        ptr::null_mut(),
-        unsafe { open_session(&mut open, &mut encoder) },
-        "NvEncOpenEncodeSessionEx",
-    )?;
-
-    let caps = (|| -> Result<VideoCaps> {
-        let guid_count = api.required(
-            api.functions.nvEncGetEncodeGUIDCount,
-            "NvEncGetEncodeGUIDCount",
-        )?;
-        let mut count = 0u32;
-        nv_check(
-            &api,
-            encoder,
-            unsafe { guid_count(encoder, &mut count) },
-            "NvEncGetEncodeGUIDCount",
-        )?;
-        let get_guids = api.required(api.functions.nvEncGetEncodeGUIDs, "NvEncGetEncodeGUIDs")?;
-        let mut guids = vec![GUID::default(); count as usize];
-        let mut written = 0u32;
-        nv_check(
-            &api,
-            encoder,
-            unsafe { get_guids(encoder, guids.as_mut_ptr(), count, &mut written) },
-            "NvEncGetEncodeGUIDs",
-        )?;
-        guids.truncate(written as usize);
-        let hevc = guids.contains(&NV_ENC_CODEC_HEVC_GUID);
-
-        let get_caps = api.required(api.functions.nvEncGetEncodeCaps, "NvEncGetEncodeCaps")?;
-        let hevc_cap = |which: NV_ENC_CAPS| -> Result<bool> {
-            if !hevc {
-                return Ok(false);
-            }
-            let mut param: NV_ENC_CAPS_PARAM = unsafe { zeroed() };
-            param.version = NV_ENC_CAPS_PARAM_VER;
-            param.capsToQuery = which;
-            let mut value = 0;
-            nv_check(
-                &api,
-                encoder,
-                unsafe { get_caps(encoder, NV_ENC_CODEC_HEVC_GUID, &mut param, &mut value) },
-                "NvEncGetEncodeCaps",
-            )?;
-            Ok(value != 0)
-        };
-        Ok(VideoCaps {
-            quality: true,
-            hevc,
-            full_color: hevc_cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_YUV444_ENCODE)?,
-            ten_bit: hevc_cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_10BIT_ENCODE)?,
-        })
-    })();
-
-    if let Some(destroy) = api.functions.nvEncDestroyEncoder {
-        unsafe {
-            let _ = destroy(encoder);
+    let mut codecs = Vec::new();
+    for codec in [Codec::Hevc, Codec::H264] {
+        if listed.contains(&codec_guid(codec)) {
+            codecs.push(
+                session.codec_caps(codec).with_context(|| {
+                    format!("querying {}", crate::nvenc_caps::codec_label(codec))
+                })?,
+            );
         }
     }
-    caps
+    Ok(EncoderCaps {
+        adapter: gpu.name.clone(),
+        luid: gpu.luid,
+        driver_api: session.api.driver_api,
+        codecs,
+    })
+}
+
+/// The temporary session `query_caps` reads from. Dropping it destroys the
+/// encoder before `api` unloads the driver DLL, whatever the query returned.
+struct CapsSession {
+    api: NvApi,
+    encoder: *mut c_void,
+    _device: ID3D11Device,
+}
+
+impl CapsSession {
+    fn open(gpu: &GpuInfo) -> Result<Self> {
+        let device = create_device_for(gpu.luid)?;
+        let mut session = CapsSession {
+            api: NvApi::load()?,
+            encoder: ptr::null_mut(),
+            _device: device,
+        };
+        open_encode_session(&session.api, &session._device, &mut session.encoder)?;
+        Ok(session)
+    }
+
+    /// NVENC's count-then-fill enumeration.
+    fn list<T: Copy>(
+        &self,
+        operation: &str,
+        empty: T,
+        count: impl FnOnce(*mut c_void, &mut u32) -> Result<NVENCSTATUS>,
+        fill: impl FnOnce(*mut c_void, *mut T, u32, &mut u32) -> Result<NVENCSTATUS>,
+    ) -> Result<Vec<T>> {
+        let mut size = 0u32;
+        nv_check(
+            &self.api,
+            self.encoder,
+            count(self.encoder, &mut size)?,
+            operation,
+        )?;
+        let mut items = vec![empty; size as usize];
+        let mut written = 0u32;
+        nv_check(
+            &self.api,
+            self.encoder,
+            fill(self.encoder, items.as_mut_ptr(), size, &mut written)?,
+            operation,
+        )?;
+        items.truncate(written.min(size) as usize);
+        Ok(items)
+    }
+
+    fn cap(&self, codec: GUID, which: NV_ENC_CAPS) -> Result<i32> {
+        let get_caps = self
+            .api
+            .required(self.api.functions.nvEncGetEncodeCaps, "NvEncGetEncodeCaps")?;
+        let mut param: NV_ENC_CAPS_PARAM = unsafe { zeroed() };
+        param.version = NV_ENC_CAPS_PARAM_VER;
+        param.capsToQuery = which;
+        let mut value = 0;
+        nv_check(
+            &self.api,
+            self.encoder,
+            unsafe { get_caps(self.encoder, codec, &mut param, &mut value) },
+            "NvEncGetEncodeCaps",
+        )
+        .with_context(|| format!("{which:?}"))?;
+        Ok(value)
+    }
+
+    fn codec_caps(&self, codec: Codec) -> Result<CodecCaps> {
+        let guid = codec_guid(codec);
+        let functions = &self.api.functions;
+        let profiles = self.list(
+            "NvEncGetEncodeProfileGUIDs",
+            GUID::default(),
+            |encoder, count| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetEncodeProfileGUIDCount,
+                    "NvEncGetEncodeProfileGUIDCount",
+                )?(encoder, guid, count))
+            },
+            |encoder, items, size, written| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetEncodeProfileGUIDs,
+                    "NvEncGetEncodeProfileGUIDs",
+                )?(encoder, guid, items, size, written))
+            },
+        )?;
+        let presets = self.list(
+            "NvEncGetEncodePresetGUIDs",
+            GUID::default(),
+            |encoder, count| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetEncodePresetCount,
+                    "NvEncGetEncodePresetCount",
+                )?(encoder, guid, count))
+            },
+            |encoder, items, size, written| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetEncodePresetGUIDs,
+                    "NvEncGetEncodePresetGUIDs",
+                )?(encoder, guid, items, size, written))
+            },
+        )?;
+        // The driver may list formats this binding's enum does not know, so
+        // it writes plain i32s; nothing reads them as the enum.
+        let formats = self.list(
+            "NvEncGetInputFormats",
+            0i32,
+            |encoder, count| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetInputFormatCount,
+                    "NvEncGetInputFormatCount",
+                )?(encoder, guid, count))
+            },
+            |encoder, items, size, written| unsafe {
+                Ok(self.api.required(
+                    functions.nvEncGetInputFormats,
+                    "NvEncGetInputFormats",
+                )?(
+                    encoder,
+                    guid,
+                    items.cast::<NV_ENC_BUFFER_FORMAT>(),
+                    size,
+                    written,
+                ))
+            },
+        )?;
+
+        let cap = |which| self.cap(guid, which);
+        let ull_presets = Quality::ALL
+            .into_iter()
+            .filter(|&quality| {
+                presets.contains(&preset_guid(quality))
+                    && ull_preset_config(&self.api, self.encoder, guid, preset_guid(quality))
+                        .inspect_err(|e| {
+                            log::debug!("{} {}: {e:#}", codec_label(codec), quality.preset_name())
+                        })
+                        .is_ok()
+            })
+            .collect();
+        let rate_modes = cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES)?;
+        let dimension = |which| cap(which).map(|v| u32::try_from(v).unwrap_or(0));
+        Ok(CodecCaps {
+            codec,
+            listed_profiles: profiles.iter().copied().map(profile_name).collect(),
+            listed_presets: presets.iter().copied().map(preset_name).collect(),
+            listed_input_formats: formats.iter().copied().map(input_format_name).collect(),
+            profiles: [
+                Profile::HevcMain,
+                Profile::HevcMain10,
+                Profile::HevcRext,
+                Profile::H264High,
+            ]
+            .into_iter()
+            .filter(|&p| profiles.contains(&profile_guid_of(p)))
+            .collect(),
+            argb_input: formats.contains(&(NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB as i32)),
+            ull_presets,
+            async_encode: cap(NV_ENC_CAPS::NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT)? != 0,
+            cbr: rate_modes & NV_ENC_PARAMS_RC_MODE::NV_ENC_PARAMS_RC_CBR as i32 != 0,
+            custom_vbv: cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE)? != 0,
+            intra_refresh: cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_INTRA_REFRESH)? != 0,
+            yuv444: cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_YUV444_ENCODE)? != 0,
+            ten_bit: cap(NV_ENC_CAPS::NV_ENC_CAPS_SUPPORT_10BIT_ENCODE)? != 0,
+            min_width: dimension(NV_ENC_CAPS::NV_ENC_CAPS_WIDTH_MIN)?,
+            min_height: dimension(NV_ENC_CAPS::NV_ENC_CAPS_HEIGHT_MIN)?,
+            max_width: dimension(NV_ENC_CAPS::NV_ENC_CAPS_WIDTH_MAX)?,
+            max_height: dimension(NV_ENC_CAPS::NV_ENC_CAPS_HEIGHT_MAX)?,
+            mb_per_sec_max: dimension(NV_ENC_CAPS::NV_ENC_CAPS_MB_PER_SEC_MAX)?,
+        })
+    }
+}
+
+impl Drop for CapsSession {
+    fn drop(&mut self) {
+        if !self.encoder.is_null() {
+            if let Some(destroy) = self.api.functions.nvEncDestroyEncoder {
+                unsafe {
+                    let _ = destroy(self.encoder);
+                }
+            }
+        }
+    }
+}
+
+/// Configure an encoder exactly as a session would at `cfg`'s size and frame
+/// rate, then tear it down: a driver that refuses Relay's configuration is
+/// found before any display is touched. No Desktop Duplication and no input
+/// resources.
+pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
+    let device = create_device_for(gpu.luid)?;
+    let mut trial = TrialSession(Some(EncoderSession {
+        api: NvApi::load()?,
+        device,
+        encoder: ptr::null_mut(),
+        width: cfg.width,
+        height: cfg.height,
+        fps: cfg.fps.max(1),
+        slots: Vec::new(),
+    }));
+    trial
+        .0
+        .as_mut()
+        .expect("trial session present")
+        .configure(cfg)
+}
+
+/// Destroys a trial session on every path.
+struct TrialSession(Option<EncoderSession>);
+
+impl Drop for TrialSession {
+    fn drop(&mut self) {
+        if let Some(session) = self.0.take() {
+            session.destroy();
+        }
+    }
 }
 
 /// A plain D3D11 device on the DXGI adapter with this LUID (the index can
@@ -385,7 +560,7 @@ impl NativeNvenc {
         let api = NvApi::load()?;
         // Desktop Duplication only opens from a thread on the input desktop;
         // a SYSTEM worker may bind to Winlogon (lock/login screen), a user
-        // process may not — that failure shows up as E_ACCESSDENIED below.
+        // process may not Ã¢â‚¬â€ that failure shows up as E_ACCESSDENIED below.
         match crate::desktop::bind_input_desktop() {
             Ok(name) => log::debug!("capture bound to the {name} desktop"),
             Err(e) => log::debug!("not bound to the input desktop: {e:#}"),
@@ -618,62 +793,33 @@ impl EncoderSession {
     }
 
     fn initialize_encoder(&mut self, cfg: &EncoderConfig) -> Result<()> {
-        let mut open: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = unsafe { zeroed() };
-        open.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
-        open.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
-        open.device = self.device.as_raw();
-        open.apiVersion = NVENCAPI_VERSION;
-        let open_session = self.api.required(
-            self.api.functions.nvEncOpenEncodeSessionEx,
-            "NvEncOpenEncodeSessionEx",
-        )?;
-        nv_check(
-            &self.api,
-            ptr::null_mut(),
-            unsafe { open_session(&mut open, &mut self.encoder) },
-            "NvEncOpenEncodeSessionEx",
-        )?;
+        self.configure(cfg)?;
+        for _ in 0..PIPELINE_DEPTH {
+            self.slots.push(self.create_slot()?);
+        }
+        let hevc_session = cfg.codec == Codec::Hevc;
+        log::info!(
+            "native capture: Desktop Duplication -> D3D11 -> asynchronous NVENC, {}x{}@{} {} {}-bit, preset {} (GPU cursor overlay, {} buffers)",
+            self.width,
+            self.height,
+            self.fps,
+            if hevc_session && cfg.full_color { "4:4:4" } else { "4:2:0" },
+            if hevc_session && cfg.ten_bit { 10 } else { 8 },
+            cfg.quality.label(),
+            PIPELINE_DEPTH
+        );
+        Ok(())
+    }
+
+    /// Open the session and initialize it with Relay's configuration. The
+    /// same call configures a real session and a preflight trial.
+    fn configure(&mut self, cfg: &EncoderConfig) -> Result<()> {
+        open_encode_session(&self.api, &self.device, &mut self.encoder)?;
 
         let codec_guid = codec_guid(cfg.codec);
-        let preset_guid = match cfg.quality {
-            Quality::Speed => NV_ENC_PRESET_P1_GUID,
-            Quality::Balanced => NV_ENC_PRESET_P4_GUID,
-            Quality::Quality => NV_ENC_PRESET_P6_GUID,
-        };
+        let preset_guid = preset_guid(cfg.quality);
         let tuning = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
-
-        // NV_ENC_PRESET_CONFIG contains enums whose first valid value is 1,
-        // so it cannot exist as an all-zero Rust value. Keep zero-filled raw
-        // storage until the driver has populated the output structure.
-        let mut preset = MaybeUninit::<NV_ENC_PRESET_CONFIG>::uninit();
-        unsafe {
-            ptr::write_bytes(
-                preset.as_mut_ptr().cast::<u8>(),
-                0,
-                size_of::<NV_ENC_PRESET_CONFIG>(),
-            );
-            ptr::addr_of_mut!((*preset.as_mut_ptr()).version).write(NV_ENC_PRESET_CONFIG_VER);
-            ptr::addr_of_mut!((*preset.as_mut_ptr()).presetCfg.version).write(NV_ENC_CONFIG_VER);
-        }
-        let get_preset = self.api.required(
-            self.api.functions.nvEncGetEncodePresetConfigEx,
-            "NvEncGetEncodePresetConfigEx",
-        )?;
-        nv_check(
-            &self.api,
-            self.encoder,
-            unsafe {
-                get_preset(
-                    self.encoder,
-                    codec_guid,
-                    preset_guid,
-                    tuning,
-                    preset.as_mut_ptr(),
-                )
-            },
-            "NvEncGetEncodePresetConfigEx",
-        )?;
-        let mut preset = unsafe { preset.assume_init() };
+        let mut preset = ull_preset_config(&self.api, self.encoder, codec_guid, preset_guid)?;
 
         // The server only negotiates these for HEVC on a GPU whose caps
         // allow them; H.264 never takes them.
@@ -757,23 +903,7 @@ impl EncoderSession {
             self.encoder,
             unsafe { initialize(self.encoder, &mut init) },
             "NvEncInitializeEncoder",
-        )?;
-
-        for _ in 0..PIPELINE_DEPTH {
-            self.slots.push(self.create_slot()?);
-        }
-
-        log::info!(
-            "native capture: Desktop Duplication -> D3D11 -> asynchronous NVENC, {}x{}@{} {} {}-bit, preset {} (GPU cursor overlay, {} buffers)",
-            self.width,
-            self.height,
-            self.fps,
-            if full_color { "4:4:4" } else { "4:2:0" },
-            if ten_bit { 10 } else { 8 },
-            cfg.quality.label(),
-            PIPELINE_DEPTH
-        );
-        Ok(())
+        )
     }
 
     fn create_slot(&self) -> Result<EncodeSlot> {
@@ -1493,6 +1623,167 @@ fn create_texture(device: &ID3D11Device, width: u32, height: u32) -> Result<ID3D
     texture.ok_or_else(|| anyhow!("CreateTexture2D returned no texture"))
 }
 
+/// Open an encode session on `device`. `encoder` is written even when this
+/// fails, so the caller's teardown destroys whatever the driver returned.
+fn open_encode_session(
+    api: &NvApi,
+    device: &ID3D11Device,
+    encoder: &mut *mut c_void,
+) -> Result<()> {
+    let mut open: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = unsafe { zeroed() };
+    open.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    open.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
+    open.device = device.as_raw();
+    open.apiVersion = NVENCAPI_VERSION;
+    let open_session = api.required(
+        api.functions.nvEncOpenEncodeSessionEx,
+        "NvEncOpenEncodeSessionEx",
+    )?;
+    nv_check(
+        api,
+        ptr::null_mut(),
+        unsafe { open_session(&mut open, encoder) },
+        "NvEncOpenEncodeSessionEx",
+    )
+}
+
+/// The driver's ultra-low-latency configuration for a codec and preset,
+/// which Relay's sessions start from.
+fn ull_preset_config(
+    api: &NvApi,
+    encoder: *mut c_void,
+    codec: GUID,
+    preset: GUID,
+) -> Result<NV_ENC_PRESET_CONFIG> {
+    // NV_ENC_PRESET_CONFIG contains enums whose first valid value is 1,
+    // so it cannot exist as an all-zero Rust value. Keep zero-filled raw
+    // storage until the driver has populated the output structure.
+    let mut config = MaybeUninit::<NV_ENC_PRESET_CONFIG>::uninit();
+    unsafe {
+        ptr::write_bytes(
+            config.as_mut_ptr().cast::<u8>(),
+            0,
+            size_of::<NV_ENC_PRESET_CONFIG>(),
+        );
+        ptr::addr_of_mut!((*config.as_mut_ptr()).version).write(NV_ENC_PRESET_CONFIG_VER);
+        ptr::addr_of_mut!((*config.as_mut_ptr()).presetCfg.version).write(NV_ENC_CONFIG_VER);
+    }
+    let get_preset = api.required(
+        api.functions.nvEncGetEncodePresetConfigEx,
+        "NvEncGetEncodePresetConfigEx",
+    )?;
+    nv_check(
+        api,
+        encoder,
+        unsafe {
+            get_preset(
+                encoder,
+                codec,
+                preset,
+                NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+                config.as_mut_ptr(),
+            )
+        },
+        "NvEncGetEncodePresetConfigEx",
+    )?;
+    Ok(unsafe { config.assume_init() })
+}
+
+fn profile_guid_of(profile: Profile) -> GUID {
+    match profile {
+        Profile::HevcMain => NV_ENC_HEVC_PROFILE_MAIN_GUID,
+        Profile::HevcMain10 => NV_ENC_HEVC_PROFILE_MAIN10_GUID,
+        Profile::HevcRext => NV_ENC_HEVC_PROFILE_FREXT_GUID,
+        Profile::H264High => NV_ENC_H264_PROFILE_HIGH_GUID,
+    }
+}
+
+fn preset_guid(quality: Quality) -> GUID {
+    match quality {
+        Quality::Speed => NV_ENC_PRESET_P1_GUID,
+        Quality::Balanced => NV_ENC_PRESET_P4_GUID,
+        Quality::Quality => NV_ENC_PRESET_P6_GUID,
+    }
+}
+
+fn guid_string(g: GUID) -> String {
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+        g.Data1,
+        g.Data2,
+        g.Data3,
+        g.Data4[0],
+        g.Data4[1],
+        g.Data4[2],
+        g.Data4[3],
+        g.Data4[4],
+        g.Data4[5],
+        g.Data4[6],
+        g.Data4[7]
+    )
+}
+
+fn profile_name(guid: GUID) -> String {
+    [
+        (NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID, "Autoselect"),
+        (NV_ENC_H264_PROFILE_BASELINE_GUID, "Baseline"),
+        (NV_ENC_H264_PROFILE_MAIN_GUID, "Main"),
+        (NV_ENC_H264_PROFILE_HIGH_GUID, "High"),
+        (NV_ENC_H264_PROFILE_HIGH_444_GUID, "High 4:4:4"),
+        (NV_ENC_H264_PROFILE_STEREO_GUID, "Stereo"),
+        (
+            NV_ENC_H264_PROFILE_PROGRESSIVE_HIGH_GUID,
+            "Progressive High",
+        ),
+        (
+            NV_ENC_H264_PROFILE_CONSTRAINED_HIGH_GUID,
+            "Constrained High",
+        ),
+        (NV_ENC_HEVC_PROFILE_MAIN_GUID, "Main"),
+        (NV_ENC_HEVC_PROFILE_MAIN10_GUID, "Main10"),
+        (NV_ENC_HEVC_PROFILE_FREXT_GUID, "Rext"),
+    ]
+    .into_iter()
+    .find(|(known, _)| *known == guid)
+    .map_or_else(|| guid_string(guid), |(_, name)| name.to_string())
+}
+
+fn preset_name(guid: GUID) -> String {
+    [
+        NV_ENC_PRESET_P1_GUID,
+        NV_ENC_PRESET_P2_GUID,
+        NV_ENC_PRESET_P3_GUID,
+        NV_ENC_PRESET_P4_GUID,
+        NV_ENC_PRESET_P5_GUID,
+        NV_ENC_PRESET_P6_GUID,
+        NV_ENC_PRESET_P7_GUID,
+    ]
+    .into_iter()
+    .position(|known| known == guid)
+    .map_or_else(|| guid_string(guid), |i| format!("P{}", i + 1))
+}
+
+fn input_format_name(format: i32) -> String {
+    use NV_ENC_BUFFER_FORMAT as F;
+    [
+        (F::NV_ENC_BUFFER_FORMAT_NV12, "NV12"),
+        (F::NV_ENC_BUFFER_FORMAT_YV12, "YV12"),
+        (F::NV_ENC_BUFFER_FORMAT_IYUV, "IYUV"),
+        (F::NV_ENC_BUFFER_FORMAT_YUV444, "YUV444"),
+        (F::NV_ENC_BUFFER_FORMAT_YUV420_10BIT, "YUV420 10-bit"),
+        (F::NV_ENC_BUFFER_FORMAT_YUV444_10BIT, "YUV444 10-bit"),
+        (F::NV_ENC_BUFFER_FORMAT_ARGB, "ARGB"),
+        (F::NV_ENC_BUFFER_FORMAT_ARGB10, "ARGB10"),
+        (F::NV_ENC_BUFFER_FORMAT_AYUV, "AYUV"),
+        (F::NV_ENC_BUFFER_FORMAT_ABGR, "ABGR"),
+        (F::NV_ENC_BUFFER_FORMAT_ABGR10, "ABGR10"),
+        (F::NV_ENC_BUFFER_FORMAT_U8, "U8"),
+    ]
+    .into_iter()
+    .find(|(known, _)| *known as i32 == format)
+    .map_or_else(|| format!("{format:#x}"), |(_, name)| name.to_string())
+}
+
 fn codec_guid(codec: Codec) -> GUID {
     match codec {
         Codec::Hevc => NV_ENC_CODEC_HEVC_GUID,
@@ -1502,12 +1793,7 @@ fn codec_guid(codec: Codec) -> GUID {
 
 /// Range extensions (Rext) carry 4:4:4 at either depth; Main10 is 10-bit 4:2:0.
 fn profile_guid(codec: Codec, full_color: bool, ten_bit: bool) -> GUID {
-    match codec {
-        Codec::Hevc if full_color => NV_ENC_HEVC_PROFILE_FREXT_GUID,
-        Codec::Hevc if ten_bit => NV_ENC_HEVC_PROFILE_MAIN10_GUID,
-        Codec::Hevc => NV_ENC_HEVC_PROFILE_MAIN_GUID,
-        Codec::H264 => NV_ENC_H264_PROFILE_HIGH_GUID,
-    }
+    profile_guid_of(Profile::for_session(codec, full_color, ten_bit))
 }
 
 fn nv_check(api: &NvApi, encoder: *mut c_void, status: NVENCSTATUS, operation: &str) -> Result<()> {
@@ -1556,6 +1842,56 @@ fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listed_guids_and_formats_have_readable_names() {
+        assert_eq!(profile_name(NV_ENC_HEVC_PROFILE_MAIN_GUID), "Main");
+        assert_eq!(profile_name(NV_ENC_HEVC_PROFILE_FREXT_GUID), "Rext");
+        assert_eq!(profile_name(NV_ENC_H264_PROFILE_HIGH_GUID), "High");
+        assert_eq!(preset_name(NV_ENC_PRESET_P4_GUID), "P4");
+        assert_eq!(
+            input_format_name(NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB as i32),
+            "ARGB"
+        );
+        assert_eq!(input_format_name(0x7777), "0x7777");
+        let unknown = GUID {
+            Data1: 0x01234567,
+            Data2: 0x89ab,
+            Data3: 0xcdef,
+            Data4: [0, 1, 2, 3, 4, 5, 6, 7],
+        };
+        assert_eq!(
+            profile_name(unknown),
+            "{01234567-89ab-cdef-0001-020304050607}"
+        );
+        assert_eq!(
+            preset_name(unknown),
+            "{01234567-89ab-cdef-0001-020304050607}"
+        );
+    }
+
+    #[test]
+    fn relays_profiles_map_to_their_guids() {
+        assert_eq!(
+            profile_guid_of(Profile::HevcMain),
+            NV_ENC_HEVC_PROFILE_MAIN_GUID
+        );
+        assert_eq!(
+            profile_guid_of(Profile::HevcMain10),
+            NV_ENC_HEVC_PROFILE_MAIN10_GUID
+        );
+        assert_eq!(
+            profile_guid_of(Profile::HevcRext),
+            NV_ENC_HEVC_PROFILE_FREXT_GUID
+        );
+        assert_eq!(
+            profile_guid_of(Profile::H264High),
+            NV_ENC_H264_PROFILE_HIGH_GUID
+        );
+        assert_eq!(preset_guid(Quality::Speed), NV_ENC_PRESET_P1_GUID);
+        assert_eq!(preset_guid(Quality::Balanced), NV_ENC_PRESET_P4_GUID);
+        assert_eq!(preset_guid(Quality::Quality), NV_ENC_PRESET_P6_GUID);
+    }
 
     #[test]
     fn profile_follows_chroma_and_depth() {

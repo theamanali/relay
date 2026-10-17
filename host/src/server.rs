@@ -894,10 +894,7 @@ fn handle_session(
     let caps = if source.location.adapter_index == cfg.gpu.adapter_index {
         cfg.video_caps
     } else {
-        VideoCaps {
-            hevc: cfg.video_caps.hevc,
-            ..VideoCaps::FFMPEG
-        }
+        cfg.video_caps.for_ffmpeg()
     };
     let video = negotiate_video(
         hello.encoder_quality,
@@ -981,6 +978,8 @@ fn handle_session(
         capture_adapter_idx: source.location.adapter_index,
         encode_adapter_idx: cfg.gpu.adapter_index,
         output_idx: source.location.output_index,
+        width: placement.width,
+        height: placement.height,
         fps,
         bitrate_mbps,
         codec,

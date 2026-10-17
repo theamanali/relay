@@ -14,6 +14,7 @@ pub mod gpu;
 pub mod input;
 mod native_nvenc;
 mod nvenc_bindings;
+pub mod nvenc_caps;
 pub mod protocol;
 pub mod server;
 pub mod service;

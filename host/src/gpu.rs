@@ -226,6 +226,39 @@ fn names<'a>(gpus: impl IntoIterator<Item = &'a GpuInfo>) -> String {
         .join(", ")
 }
 
+/// The user-mode driver version DXGI reports, as Windows shows it.
+pub fn umd_version(raw: i64) -> String {
+    let part = |shift: u32| (raw >> shift) & 0xffff;
+    format!("{}.{}.{}.{}", part(48), part(32), part(16), part(0))
+}
+
+/// NVIDIA's own numbering: the last digit of the third part and the fourth
+/// part, 32.0.15.8180 → 581.80.
+pub fn nvidia_driver_version(raw: i64) -> String {
+    let digits = ((raw >> 16) & 0xffff) % 10 * 10_000 + (raw & 0xffff);
+    format!("{}.{:02}", digits / 100, digits % 100)
+}
+
+/// The adapter's user-mode driver version, as DXGI reports it.
+pub fn driver_version(luid: Luid) -> Option<i64> {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let mut i = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            if adapter
+                .GetDesc1()
+                .is_ok_and(|d| Luid::from(d.AdapterLuid) == luid)
+            {
+                return adapter.CheckInterfaceSupport(&IDXGIDevice::IID).ok();
+            }
+        }
+        None
+    }
+}
+
 pub fn describe(gpus: &[GpuInfo], chosen: Option<&GpuInfo>) -> String {
     let mut s = String::new();
     for g in gpus {
@@ -356,6 +389,18 @@ mod tests {
         let gpus = [proxy, rtx()];
         assert_eq!(choose(&gpus, None).unwrap().luid, gpus[1].luid);
         assert_eq!(choose(&gpus, Some("3080")).unwrap().luid, gpus[1].luid);
+    }
+
+    #[test]
+    fn driver_versions_read_like_the_vendors_own() {
+        // 32.0.15.8180 is what Windows shows for NVIDIA 581.80.
+        let raw = (32i64 << 48) | (15 << 16) | 8180;
+        assert_eq!(umd_version(raw), "32.0.15.8180");
+        assert_eq!(nvidia_driver_version(raw), "581.80");
+        let raw = (31i64 << 48) | (15 << 16) | 3742;
+        assert_eq!(nvidia_driver_version(raw), "537.42");
+        let raw = (32i64 << 48) | (16 << 16) | 105;
+        assert_eq!(nvidia_driver_version(raw), "601.05");
     }
 
     #[test]
