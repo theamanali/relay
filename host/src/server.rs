@@ -269,6 +269,111 @@ impl Drop for KeepAwake {
     }
 }
 
+/// Keeps the displays on while a client watches without sending input
+/// (Observe, or simply not touching the Mac). Windows turns the displays off
+/// after its "turn off the display" timeout, and Desktop Duplication then
+/// delivers no frames, so the stream would freeze. Capture freshness cannot
+/// tell that apart from a desktop that is not changing, so this acts on idle
+/// time instead: once the session has had no input for `DISPLAY_NUDGE_AFTER`,
+/// it sends the same zero-distance move as `input::wake_displays`. Tested
+/// 2026-10-17: the move keeps capture going and the physical monitors the
+/// session disabled stay dark. Like any input, it also holds off the screen
+/// saver and an inactivity lock while a client is connected.
+struct DisplayKeepAlive {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+/// Below the shortest display-off timeout Windows offers (1 minute).
+const DISPLAY_NUDGE_AFTER: Duration = Duration::from_secs(30);
+const DISPLAY_IDLE_POLL: Duration = Duration::from_millis(250);
+
+impl DisplayKeepAlive {
+    fn start() -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            thread::Builder::new()
+                .name("display-keepalive".into())
+                .spawn(move || keep_displays_on(&stop))
+        };
+        let thread = match thread {
+            Ok(thread) => Some(thread),
+            Err(e) => {
+                log::warn!("could not start the display keep-alive: {e}");
+                None
+            }
+        };
+        DisplayKeepAlive { stop, thread }
+    }
+}
+
+impl Drop for DisplayKeepAlive {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Nudge once the session has been idle long enough, and never more often
+/// than that even if Windows did not count the last nudge as input.
+fn display_nudge_due(idle: Duration, since_last_nudge: Option<Duration>) -> bool {
+    idle >= DISPLAY_NUDGE_AFTER && since_last_nudge.is_none_or(|d| d >= DISPLAY_NUDGE_AFTER)
+}
+
+fn keep_displays_on(stop: &AtomicBool) {
+    // SendInput reaches the input desktop only from a thread bound to it.
+    if let Err(e) = crate::desktop::bind_input_desktop() {
+        log::debug!("display keep-alive: {e:#}; binding again at the first nudge");
+    }
+    let mut last_nudge: Option<Instant> = None;
+    let mut nudges = 0u32;
+    let mut failed = false;
+    while !stop.load(Ordering::Relaxed) {
+        thread::sleep(DISPLAY_IDLE_POLL);
+        let idle = match crate::input::idle_time() {
+            Ok(idle) => idle,
+            Err(e) => {
+                if !failed {
+                    log::warn!("display keep-alive: GetLastInputInfo: {e}");
+                    failed = true;
+                }
+                continue;
+            }
+        };
+        if !display_nudge_due(idle, last_nudge.map(|t| t.elapsed())) {
+            continue;
+        }
+        last_nudge = Some(Instant::now());
+        let result = crate::input::wake_displays().or_else(|_| -> Result<()> {
+            // The input desktop changed (lock, unlock, UAC): bind and retry.
+            crate::desktop::bind_input_desktop()?;
+            Ok(crate::input::wake_displays()?)
+        });
+        match result {
+            Ok(()) => {
+                nudges += 1;
+                if nudges == 1 {
+                    log::info!(
+                        "no input for {} s: nudging the displays to keep them on",
+                        idle.as_secs()
+                    );
+                }
+            }
+            Err(e) if !failed => {
+                log::warn!("display keep-alive: could not nudge the displays: {e:#}");
+                failed = true;
+            }
+            Err(_) => {}
+        }
+    }
+    if nudges > 0 {
+        log::info!("display keep-alive: {nudges} nudge(s) this session");
+    }
+}
+
 /// Everything that has to be undone when the session ends, in order: the
 /// user's display layout comes back first, then the virtual monitor goes away.
 struct DisplayLease {
@@ -780,6 +885,7 @@ fn handle_session(
         Err(e) => log::warn!("could not wake displays before session setup: {e:#}"),
     }
     let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
+    let displays_on = DisplayKeepAlive::start();
     let placement = source.placement;
     let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));
     let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
@@ -961,6 +1067,8 @@ fn handle_session(
     stop.store(true, Ordering::Relaxed);
     drop(encoder);
     let _ = reader.join();
+    // No nudges while the user's layout comes back.
+    drop(displays_on);
     drop(source);
     result.map(|_| ())
 }
@@ -1773,5 +1881,36 @@ mod display_claim_tests {
             120
         ));
         assert!(!is_congested(elapsed, 500, Duration::from_secs(2), 120));
+    }
+}
+
+#[cfg(test)]
+mod display_keepalive_tests {
+    use super::*;
+
+    #[test]
+    fn nudges_only_after_the_idle_threshold() {
+        let just_under = DISPLAY_NUDGE_AFTER - Duration::from_millis(1);
+        assert!(!display_nudge_due(Duration::ZERO, None));
+        assert!(!display_nudge_due(just_under, None));
+        assert!(display_nudge_due(DISPLAY_NUDGE_AFTER, None));
+        assert!(display_nudge_due(Duration::from_secs(600), None));
+    }
+
+    #[test]
+    fn never_nudges_more_often_than_the_threshold() {
+        let long_idle = Duration::from_secs(600);
+        // Even if Windows did not count the last nudge as input.
+        assert!(!display_nudge_due(long_idle, Some(Duration::ZERO)));
+        assert!(!display_nudge_due(
+            long_idle,
+            Some(DISPLAY_NUDGE_AFTER - Duration::from_millis(1))
+        ));
+        assert!(display_nudge_due(long_idle, Some(DISPLAY_NUDGE_AFTER)));
+    }
+
+    #[test]
+    fn stays_under_the_shortest_display_off_timeout() {
+        assert!(DISPLAY_NUDGE_AFTER + DISPLAY_IDLE_POLL < Duration::from_secs(60));
     }
 }

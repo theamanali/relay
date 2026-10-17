@@ -4,17 +4,19 @@
 //! arrangement. Keys arrive as USB HID usages and become PS/2 set-1 scan codes.
 
 use std::mem::size_of;
+use std::time::Duration;
 
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
-    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, MOUSE_EVENT_FLAGS,
-    VIRTUAL_KEY,
+    GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, LASTINPUTINFO,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
+    MOUSEEVENTF_XUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -72,6 +74,19 @@ pub fn wake_displays() -> windows::core::Result<()> {
         return Err(windows::core::Error::from_win32());
     }
     Ok(())
+}
+
+/// How long this session has gone without input: the Mac's forwarded input,
+/// the PC's own keyboard and mouse, and `wake_displays` all count.
+pub fn idle_time() -> windows::core::Result<Duration> {
+    let mut info = LASTINPUTINFO {
+        cbSize: size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    unsafe { GetLastInputInfo(&mut info) }.ok()?;
+    // Both are GetTickCount values, so the difference survives its wrap.
+    let now = unsafe { GetTickCount() };
+    Ok(Duration::from_millis(now.wrapping_sub(info.dwTime) as u64))
 }
 
 impl Injector {
