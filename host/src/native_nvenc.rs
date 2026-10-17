@@ -566,7 +566,7 @@ impl NativeNvenc {
         let api = NvApi::load()?;
         // Desktop Duplication only opens from a thread on the input desktop;
         // a SYSTEM worker may bind to Winlogon (lock/login screen), a user
-        // process may not Ã¢â‚¬â€ that failure shows up as E_ACCESSDENIED below.
+        // process may not — that failure shows up as E_ACCESSDENIED below.
         match crate::desktop::bind_input_desktop() {
             Ok(name) => log::debug!("capture bound to the {name} desktop"),
             Err(e) => log::debug!("not bound to the input desktop: {e:#}"),

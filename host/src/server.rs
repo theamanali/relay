@@ -438,7 +438,7 @@ impl Source {
     /// leaving fullscreen.  Keep the virtual monitor as the only output and
     /// then rediscover its DXGI index, which may change after any mode switch.
     ///
-    /// `may_reassert` gates the one heavy, dangerous step Ã¢â‚¬â€ forcing a
+    /// `may_reassert` gates the one heavy, dangerous step — forcing a
     /// virtual-only topology with `topology::exclusive`. The caller only sets it
     /// once the game's own fullscreen modeset has had time to settle and not
     /// more than once every couple of seconds, so we never trade blows with an
@@ -621,7 +621,7 @@ fn acquire_display_bound(
     if (placement.width, placement.height, placement.hz) != (want.width, want.height, want.hz) {
         if driver.dynamic_modes() {
             log::warn!(
-                "asked {} for {}x{}@{} but got {}x{}@{} Ã¢â‚¬â€ check the driver's settings file",
+                "asked {} for {}x{}@{} but got {}x{}@{} — check the driver's settings file",
                 driver.name(),
                 want.width,
                 want.height,

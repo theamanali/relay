@@ -1139,7 +1139,7 @@ mod tests {
 }
 
 /// Marker in an error chain: Desktop Duplication refused the current desktop
-/// (`E_ACCESSDENIED`). Not a fault of the pipeline â€” retry when the desktop
+/// (`E_ACCESSDENIED`). Not a fault of the pipeline — retry when the desktop
 /// changes (unlock, sign-in, UAC prompt dismissed).
 #[derive(Debug)]
 pub struct DesktopNotCapturable;

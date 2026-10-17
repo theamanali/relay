@@ -2,7 +2,7 @@
 //!
 //! Built without a console: serving shows only a tray icon and logs to a
 //! file. Run from a terminal, it attaches to that terminal instead, so the
-//! subcommands still print (after the prompt â€” a GUI process is not waited on).
+//! subcommands still print (after the prompt — a GUI process is not waited on).
 
 #![windows_subsystem = "windows"]
 
@@ -81,7 +81,7 @@ enum Command {
     /// What the service runs in the signed-in session: serve as SYSTEM (hidden)
     #[command(hide = true)]
     Worker,
-    /// Run a full session's display dance at a given mode â€” other displays go dark for a few seconds
+    /// Run a full session's display dance at a given mode — other displays go dark for a few seconds
     AttachTest {
         #[arg(long, default_value_t = 3024)]
         width: u32,
@@ -236,8 +236,8 @@ fn main() -> Result<()> {
 }
 
 /// A double-click on the exe while the Relay service is installed but
-/// stopped â€” the state "Start on system boot" off + a reboot leaves the PC
-/// in â€” should bring the *service* back (SYSTEM worker, lock screen, the
+/// stopped — the state "Start on system boot" off + a reboot leaves the PC
+/// in — should bring the *service* back (SYSTEM worker, lock screen, the
 /// checkbox to turn it on again), not start a user-session dev host. Starting
 /// a service needs an administrator, so relaunch ourselves elevated with
 /// `service start` and let that copy do it. True when handled (the caller
@@ -440,7 +440,7 @@ fn select_gpu(want: Option<&str>) -> Result<GpuInfo> {
     let gpus = gpu::enumerate()?;
     let chosen = gpu::choose(&gpus, want)?;
     log::info!(
-        "GPU: {} ({}, {:.1} GB) â€” {}",
+        "GPU: {} ({}, {:.1} GB) — {}",
         chosen.name,
         chosen.vendor.label(),
         chosen.vram_gb(),
@@ -656,8 +656,8 @@ fn restore_displays(kind: DriverKind) -> Result<()> {
     Ok(())
 }
 
-/// Runs exactly what a session does â€” snapshot, enable, exclusive, hold,
-/// restore, disable â€” and reports on every step.
+/// Runs exactly what a session does — snapshot, enable, exclusive, hold,
+/// restore, disable — and reports on every step.
 fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     let gpu = select_gpu(args.gpu.as_deref())?;
     let drv = open_driver(args.driver)?;
@@ -706,7 +706,7 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     );
     let loc = &source.location;
     log::info!(
-        "DXGI adapter {} ({}), output {} â€” {}",
+        "DXGI adapter {} ({}), output {} — {}",
         loc.adapter_index,
         loc.adapter_name,
         loc.output_index,
