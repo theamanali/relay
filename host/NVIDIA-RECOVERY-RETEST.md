@@ -194,8 +194,8 @@ virtual display on an iGPU. The monitors go dark for a few seconds.
 
 | case | date/time | result | notes (HUD fps, PC work, log lines, anything odd) |
 |---|---|---|---|
-| U1 | | | |
-| U2 | | | |
+| U1 | 2026-10-17 21:50–21:56 UTC | **pass (path)**, run with 4:4:4 + 10-bit still on | Two real-Mac sessions on the installed `3e320af`. Each: `encoder preflight: HEVC 3024x1964@120 P4 initializes` (194 / 202 ms), wake, layout saved, `virtual display \\.\DISPLAY37`/`38` `is the only display: 3024x1964@120` on the RTX (no re-check: the mode matched), native capture `4:4:4 10-bit, preset balanced`, about 95.5 fps with encode about 20.7 ms (mostly static desktop: 0–300 of 600 frames fresh), `display layout restored` on each disconnect; the user confirmed the monitors. The second connect came 3 s after the first ended and started native capture (finding 2 not reproduced at 3 s). Still to do: one session with the picture options off (4:2:0 8-bit) |
+| U2 | 2026-10-17 21:50–21:56 UTC | **pass**, via the U1 sessions | CLIENT_HELLO flags 0b11 applied: `capturing … HEVC 4:4:4 10-bit 120 Mbps, preset balanced`; layout restored |
 | U3 | | | |
 | U4 | | | LUID before/after: |
 | U5 | | | |
