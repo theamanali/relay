@@ -41,7 +41,8 @@ impl Monitor {
     }
 }
 
-/// Where a display lives in DXGI terms: what ffmpeg's `d3d11va=hw:A` + `ddagrab=output_idx=O` need.
+/// Where a display lives in DXGI terms: the adapter (by index and LUID) and
+/// output that native capture duplicates.
 #[derive(Debug, Clone)]
 pub struct OutputLocation {
     pub adapter_index: u32,
@@ -418,8 +419,8 @@ pub fn present_matching(is_virtual: &dyn Fn(&Monitor) -> bool) -> Vec<Monitor> {
 }
 
 /// Locate the DXGI (adapter index, output index) whose DeviceName matches a GDI
-/// display name. ffmpeg's `ddagrab=output_idx=N` and `-init_hw_device d3d11va=hw:A`
-/// use exactly these indices.
+/// display name: the indices native capture opens with `EnumAdapters1` /
+/// `EnumOutputs`. They move between capture attempts, so look them up again.
 pub fn dxgi_output_for(device_name: &str) -> Result<OutputLocation> {
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;

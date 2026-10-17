@@ -3,7 +3,6 @@
 
 use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -67,7 +66,6 @@ const MAX_CONNECTIONS: usize = 8;
 pub struct ServerConfig {
     pub port: u16,
     pub name: String,
-    pub ffmpeg: PathBuf,
     /// Explicit administrator override. Without it, CLIENT_HELLO owns bitrate.
     pub bitrate_override_mbps: Option<u16>,
     pub fps: Option<u32>,
@@ -82,8 +80,6 @@ pub struct ServerConfig {
     /// session is checked against it before the display is touched.
     pub encoder_caps: EncoderCaps,
     pub intra_refresh: bool,
-    /// Force the ffmpeg encoder path even on NVIDIA (skip the in-process one).
-    pub prefer_ffmpeg: bool,
     /// Disable the physical monitor device nodes for the session (keeps games
     /// from reactivating them). Off = only remove them from the desktop.
     pub lock_physical: bool,
@@ -969,15 +965,13 @@ fn handle_session(
             describe_flags(asked & !video.flags()),
             if codec != Codec::Hevc {
                 "the session is H.264"
-            } else if cfg.prefer_ffmpeg {
-                "the ffmpeg path (--no-native) encodes 8-bit 4:2:0"
             } else {
                 "this GPU's encoder cannot"
             }
         );
     }
     log::info!(
-        "capturing {} at {fps} fps, {}{} {bitrate_mbps} Mbps{}, preset {}{} via {}",
+        "capturing {} at {fps} fps, {}{} {bitrate_mbps} Mbps{}, preset {}{} via NVENC on {}",
         source.monitor().device_name,
         codec_label(codec),
         match video.flags() {
@@ -997,7 +991,7 @@ fn handle_session(
         } else {
             ""
         },
-        crate::encoder::encoder_name(gpu.vendor, codec, cfg.prefer_ffmpeg),
+        gpu.name,
     );
 
     tx.send(
@@ -1028,15 +1022,18 @@ fn handle_session(
     });
 
     let mut encoder_config = encoder_config(cfg, &gpu, &plan, bitrate_mbps, Some(&source.location));
+    // The preflight already initialized this configuration, so a failed start
+    // is a capture that is not ready yet (a refused desktop, a mode change
+    // settling, a GPU reset): the recovery loop retries it like a restart,
+    // and gives up after ENCODER_RECOVERY_TIMEOUT unless the desktop refused.
     let mut encoder = match Encoder::spawn(&encoder_config) {
         Ok(e) => e,
-        Err(e) if crate::encoder::is_desktop_not_capturable(&e) => {
-            log::warn!("{e:#}; the session starts without a picture and retries");
-            Encoder::waiting()
-        }
         Err(e) => {
-            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
-            return Err(e);
+            log::warn!(
+                "native capture did not start ({}: {e:#}); the session starts without a picture and retries",
+                crate::encoder::classify_start_failure(&e).label()
+            );
+            Encoder::waiting()
         }
     };
 
@@ -1296,7 +1293,10 @@ fn pump(
                         log::warn!("capture restart refused: {error:#}");
                     }
                     Err(error) => {
-                        log::debug!("encoder restart failed: {error:#}");
+                        log::warn!(
+                            "capture restart failed ({}): {error:#}",
+                            crate::encoder::classify_start_failure(&error).label()
+                        );
                     }
                 }
                 continue;
@@ -1486,10 +1486,7 @@ fn encoder_config(
     location: Option<&OutputLocation>,
 ) -> EncoderConfig {
     EncoderConfig {
-        ffmpeg: cfg.ffmpeg.clone(),
-        vendor: gpu.vendor,
         capture_adapter_idx: location.map_or(gpu.adapter_index, |l| l.adapter_index),
-        encode_adapter_idx: gpu.adapter_index,
         capture_luid: location.map_or(gpu.luid, |l| l.adapter_luid),
         encode_luid: gpu.luid,
         output_idx: location.map_or(0, |l| l.output_index),
@@ -1503,7 +1500,6 @@ fn encoder_config(
         full_color: plan.video.full_color,
         ten_bit: plan.video.ten_bit,
         intra_refresh: cfg.intra_refresh,
-        prefer_ffmpeg: cfg.prefer_ffmpeg,
     }
 }
 
@@ -1593,7 +1589,6 @@ struct HostVideo<'a> {
     quality_override: Option<Quality>,
     fps_override: Option<u32>,
     intra_refresh: bool,
-    prefer_ffmpeg: bool,
     caps: &'a EncoderCaps,
 }
 
@@ -1604,7 +1599,6 @@ impl<'a> HostVideo<'a> {
             quality_override: cfg.quality_override,
             fps_override: cfg.fps,
             intra_refresh: cfg.intra_refresh,
-            prefer_ffmpeg: cfg.prefer_ffmpeg,
             caps,
         }
     }
@@ -1615,12 +1609,7 @@ impl<'a> HostVideo<'a> {
     }
 
     fn video_caps(&self) -> VideoCaps {
-        let caps = self.caps.video_caps(self.intra_refresh);
-        if self.prefer_ffmpeg {
-            caps.for_ffmpeg()
-        } else {
-            caps
-        }
+        self.caps.video_caps(self.intra_refresh)
     }
 
     /// Everything a session at this size and rate needs from its codec.
@@ -1851,6 +1840,7 @@ fn is_congested(elapsed: Duration, frames: u64, send_time: Duration, target_fps:
 #[cfg(test)]
 mod pairing_wait_tests {
     use super::*;
+    use std::path::PathBuf;
 
     struct TestState(PathBuf);
 
@@ -1933,16 +1923,14 @@ mod pairing_wait_tests {
         let cfg = ServerConfig {
             port: 0,
             name: "Test PC".into(),
-            ffmpeg: PathBuf::new(),
             bitrate_override_mbps: None,
             fps: None,
             codec: Codec::Hevc,
             gop_seconds: 1,
             quality_override: None,
-            video_caps: VideoCaps::FFMPEG,
+            video_caps: crate::nvenc_caps::fixture::rtx().video_caps(false),
             encoder_caps: crate::nvenc_caps::fixture::rtx(),
             intra_refresh: false,
-            prefer_ffmpeg: false,
             lock_physical: true,
             gpu: GpuInfo {
                 adapter_index: 0,
@@ -2043,6 +2031,7 @@ mod pairing_wait_tests {
 #[cfg(test)]
 mod display_claim_tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn exactly_one_connection_owns_the_display_and_drop_releases_it() {
@@ -2143,7 +2132,11 @@ mod display_claim_tests {
             Some(BOTH_FLAGS),
             None,
             Codec::Hevc,
-            VideoCaps::FFMPEG,
+            VideoCaps {
+                full_color: false,
+                ten_bit: false,
+                ..ALL_CAPS
+            },
         );
         assert_eq!(video.flags(), 0);
         assert_eq!(video.quality, Quality::Balanced);
@@ -2308,7 +2301,6 @@ mod preflight_tests {
             quality_override: None,
             fps_override: None,
             intra_refresh: false,
-            prefer_ffmpeg: false,
             caps,
         }
     }
@@ -2391,16 +2383,12 @@ mod preflight_tests {
     }
 
     #[test]
-    fn picture_flags_follow_the_gpu_and_the_ffmpeg_path() {
+    fn picture_flags_follow_the_gpu() {
         let caps = fixture::rtx();
         let mut flagged = hello(1920, 1080, 60, BOTH);
         flagged.video_flags = Some(video_flags::FULL_COLOR | video_flags::TEN_BIT);
         let plan = plan_session(&flagged, &host(&caps)).unwrap();
         assert!(plan.video.full_color && plan.video.ten_bit);
-
-        let mut ffmpeg = host(&caps);
-        ffmpeg.prefer_ffmpeg = true;
-        assert_eq!(plan_session(&flagged, &ffmpeg).unwrap().video.flags(), 0);
 
         let mut no_444 = fixture::hevc();
         no_444.yuv444 = false;

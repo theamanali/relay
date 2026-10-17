@@ -105,10 +105,6 @@ struct ServeArgs {
     #[arg(long)]
     name: Option<String>,
 
-    /// Path to ffmpeg.exe (searched on PATH by default)
-    #[arg(long, default_value = "ffmpeg")]
-    ffmpeg: PathBuf,
-
     /// Override the client's requested video bitrate in Mbps (CBR).
     #[arg(
         long,
@@ -130,12 +126,12 @@ struct ServeArgs {
     #[arg(long, default_value_t = 2)]
     gop: u32,
 
-    /// Override the client's encoder speed/quality trade-off, mapped to each
-    /// vendor's presets. Without it the client chooses; speed when it does not.
+    /// Override the client's encoder speed/quality trade-off (NVENC P1 / P4 /
+    /// P6). Without it the client chooses; speed when it does not.
     #[arg(long, value_enum)]
     quality: Option<Quality>,
 
-    /// NVIDIA only: spread intra refresh over the GOP instead of sending full IDR frames
+    /// Spread intra refresh over the GOP instead of sending full IDR frames
     #[arg(long)]
     intra_refresh: bool,
 
@@ -151,12 +147,6 @@ struct ServeArgs {
     /// Dev mode: stream the primary monitor, don't touch the virtual display driver
     #[arg(long)]
     no_vdd: bool,
-
-    /// NVIDIA only: skip the in-process D3D11/NVENC capture path and use the
-    /// ffmpeg child instead. The in-process path is the default (lower latency);
-    /// this is the fallback if it misbehaves.
-    #[arg(long)]
-    no_native: bool,
 
     /// Don't disable the physical monitor device nodes during a session, only
     /// remove them from the desktop (diagnostic / workaround for GPU hangs)
@@ -534,10 +524,7 @@ fn encoder_caps_report(args: &ServeArgs, mode: Mode) -> Result<()> {
                 continue;
             }
             let cfg = encoder::EncoderConfig {
-                ffmpeg: args.ffmpeg.clone(),
-                vendor: gpu.vendor,
                 capture_adapter_idx: gpu.adapter_index,
-                encode_adapter_idx: gpu.adapter_index,
                 capture_luid: gpu.luid,
                 encode_luid: gpu.luid,
                 output_idx: 0,
@@ -551,7 +538,6 @@ fn encoder_caps_report(args: &ServeArgs, mode: Mode) -> Result<()> {
                 full_color,
                 ten_bit,
                 intra_refresh: args.intra_refresh,
-                prefer_ffmpeg: false,
             };
             let started = std::time::Instant::now();
             match nvenc_caps::trial_initialize(&gpu, &cfg) {
@@ -716,11 +702,7 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
             "NOT on the selected GPU"
         }
     );
-    log::info!(
-        "encoder would be {} on {}",
-        encoder::encoder_name(gpu.vendor, Codec::Hevc, false),
-        gpu.name
-    );
+    log::info!("encoder would be NVENC on {}", gpu.name);
     log::info!("holding for {seconds}s (your other displays are off until then)");
     std::thread::sleep(Duration::from_secs(seconds));
     let ended = std::time::Instant::now();
@@ -798,16 +780,12 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         log::info!("{line}");
     }
     encoder_caps.ensure_usable(args.intra_refresh)?;
-    let mut video_caps = encoder_caps.video_caps(args.intra_refresh);
-    if args.no_native {
-        video_caps = video_caps.for_ffmpeg();
-    }
+    let video_caps = encoder_caps.video_caps(args.intra_refresh);
     log::info!("encoder capabilities: {video_caps:?}");
 
     let cfg = server::ServerConfig {
         port: args.port,
         name,
-        ffmpeg: args.ffmpeg,
         bitrate_override_mbps: args.bitrate,
         fps: args.fps,
         codec: args.codec.into(),
@@ -816,7 +794,6 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         video_caps,
         encoder_caps,
         intra_refresh: args.intra_refresh,
-        prefer_ffmpeg: args.no_native,
         lock_physical: !args.no_lock_physical,
         gpu,
         gpu_want: args.gpu.clone(),

@@ -29,13 +29,14 @@ input back from the Mac.
   `relay-host encoder-caps` shows what the GPU can do.
 - **Rust** with the MSVC toolchain, and the Visual Studio Build Tools with the
   Windows 11 SDK.
-- **ffmpeg** on `PATH`, only for `--no-native` (being removed).
+- Optional: **ffmpeg**, for `ffprobe` / `ffplay` on `probe --out` dumps. The host never runs it.
 - An administrator account for the one-time install.
 
 ## Build and install
 
 ```powershell
-winget install Rustlang.Rustup Gyan.FFmpeg
+winget install Rustlang.Rustup
+winget install Gyan.FFmpeg   # optional: ffprobe for probe dumps
 winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621"
 
 cd host
@@ -164,14 +165,12 @@ Starting a second host shows a "Relay is already running" box.
 | `--gop <seconds>` | `2` | Keyframe interval. |
 | `--quality speed\|balanced\|quality` | the Mac's choice, else `speed` | Override the Mac's encoder preset (NVENC P1 / P4 / P6); `speed` is the low-latency one. |
 | `--intra-refresh` | off | NVIDIA: spread refresh over the GOP instead of keyframes. Measured slower, so off. |
-| `--no-native` | | Use the ffmpeg path instead of in-process NVENC (no picture options). Kept until the native failure/recovery gate passes, then removed. |
 | `--no-vdd` | | Stream the primary monitor; don't touch the driver or the layout. |
 | `--no-lock-physical` | | Take physical monitors off the desktop but don't disable their devices. |
 | `--no-input` | | Ignore keyboard and mouse input from the Mac. |
 | `--pin <4–8 digits>` | stored PIN | Use this PIN and don't rotate it. |
 | `--name <text>` | computer name | Name shown on the Mac. |
 | `--port <n>` | `8468` | TCP port. |
-| `--ffmpeg <path>` | `ffmpeg` | ffmpeg executable for the fallback paths. |
 | `-v`, `-vv`, `-vvv` | info | Debug and trace logging. |
 
 ## Files
@@ -203,7 +202,7 @@ The unit tests cover the crypto (including the
 [v4 test vector](../docs/PROTOCOL.md) the Mac client generated, the CPace
 draft-21 vectors and the field arithmetic reference values), records and
 pairing end to end, the pairing rate limit and digest, the display lease,
-bitrate choice and congestion detection, the ffmpeg command lines and stream
+bitrate choice and congestion detection, stream
 splitting, the MTT settings-file rewriting, the layout snapshot format, input
 coordinate mapping and the tray text, NVIDIA-only GPU selection, the NVENC
 driver-version check (including that a refused driver leaves the DLL
@@ -335,7 +334,7 @@ learns within seconds that the tray forgot it.
 | [`nvenc_caps.rs`](src/nvenc_caps.rs) | The NVENC capability record and its checks (pure; filled by `native_nvenc::query_caps`) |
 | [`native_nvenc.rs`](src/native_nvenc.rs) | In-process Desktop Duplication → D3D11 → NVENC, phase-locked capture timer; capability query and trial initialization |
 | [`cursor_overlay.rs`](src/cursor_overlay.rs) | Drawing the Windows cursor into the frame on the GPU |
-| [`encoder.rs`](src/encoder.rs) | One interface over the native path and the ffmpeg fallback |
+| [`encoder.rs`](src/encoder.rs) | The session's encoder: native start with retirement wait and busy-output retry, failure classification, Annex-B splitting |
 | [`nvenc_bindings/`](src/nvenc_bindings/) | NVENC API bindings, loaded at runtime (derived from `nvidia-video-codec-sdk`, MIT) |
 | [`input.rs`](src/input.rs) | Mapping the Mac's pointer and HID key codes to `SendInput` |
 | [`desktop.rs`](src/desktop.rs) | Binding capture and input threads to the active desktop (lock screen included) |
@@ -378,9 +377,10 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
 
 ## Limitations
 
-- NVIDIA only. AMD and Intel adapters are never selected; the ffmpeg AMF, Quick
-  Sync and software command lines are still in the code until the cleanup that
-  follows the failure/recovery gate, but no session reaches them.
+- NVIDIA only: AMD and Intel adapters are never selected, and there is no
+  ffmpeg, AMF, Quick Sync or software encoder. A capture that will not start is
+  retried by the session's recovery loop for up to 15 s, then the session ends
+  with the layout restored.
 - Capture and encode must be on the same adapter; there is no cross-adapter
   copy path any more.
 - The encoder capability check is a capability, not a frame-rate promise:
@@ -389,8 +389,6 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
   PC refused a session.
 - parsec-vdd is untested, can't pin the render GPU and offers at most five fixed
   modes (to be removed).
-- The ffmpeg path (`--no-native`) streams a completely static screen at about
-  100 fps rather than 120. That is duplicated frames, not lost ones.
 - The service can't pass options to its worker; it always runs with defaults.
 - The exe has no file icon of its own yet (only the tray icon is drawn).
 - The BIOS and anything before Windows starts are not visible.

@@ -114,7 +114,9 @@ fn adapter_kind(luid: LUID) -> Option<AdapterKind> {
 
 #[derive(Debug, Clone)]
 pub struct GpuInfo {
-    /// Index in DXGI adapter enumeration (what ffmpeg's `d3d11va=hw:N` refers to).
+    /// Index in DXGI adapter enumeration at the time it was read; it can move
+    /// when the virtual display's proxy adapter comes and goes, so identity
+    /// is the LUID.
     pub adapter_index: u32,
     /// DXGI description, e.g. "NVIDIA GeForce RTX 3080 Ti". This exact string is
     /// what the virtual display driver matches its render adapter against.
