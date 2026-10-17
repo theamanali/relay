@@ -515,13 +515,16 @@ documented there. What follows is only the mechanics that are easy to break:
   a returning TXT updates the facts and cancels removal. A picker row is re-rendered on every
   `NWPathMonitor` update too: a freshly plugged cable is seen by Bonjour (IPv6
   link-local) seconds before it has an IPv4, and Bonjour never fires for the latter.
-- **Video playback elsewhere on the Mac (Netflix, 2026-10-17) throttles
-  presentation to ~22 ms per frame** while decode keeps up; Metal still says
-  Direct and the panel stays at 120 Hz. It looked like a regression in three
-  builds until playback stopped. Close video before measuring. Relay opts into
-  Game Mode (Info.plist games category + `GCSupportsGameMode`), which only
-  partly helps. `CFFIXED_USER_HOME` isolates Relay's files but not its
-  UserDefaults: a "fresh" test run still uses the real HUD/prefs settings.
+- **An open Netflix tab in Chrome (2026-10-17), even paused, throttles
+  presentation to one frame every 20–25 ms** while decode keeps up; Metal
+  still says Direct and the panel stays at 120 Hz. Open/closed A/B against
+  fakehost: ~20–30 ms vs 3.6–3.7 ms p50. It looked like a regression in three
+  builds until the tab was closed. Close such tabs before measuring
+  (`docs/LATENCY.md`). Relay opts into Game Mode (Info.plist games category +
+  `GCSupportsGameMode`), which only partly helps. `CFFIXED_USER_HOME`
+  isolates Relay's files but not its UserDefaults: a "fresh" test run still
+  uses the real HUD/prefs settings, and fakehost writes `fakehost.key` into
+  its working directory.
 - `StreamView.flagsChanged` decides press vs release from its own held-key record
   **and** the event's flags: the record alone tells left from right, but forwards the
   release of a modifier it never sent down (control turned on by ⌃⌥⌘K with ⌃⌥⌘ still

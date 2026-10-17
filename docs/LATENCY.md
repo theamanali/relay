@@ -57,27 +57,32 @@ There are also three traps in reading the Mac's numbers:
   stays opaque and alone. Against `fakehost` at 3024×1964 / 120 fps the
   detailed HUD was on and Metal's own HUD (`MTL_HUD_ENABLED=1`) still said
   Direct, at 3.8 ms p50 (2026-10-17). Not yet repeated against the real PC.
-- **Video playing anywhere on the Mac throttles presentation.** With Netflix
-  playing on another display, every build tested (today's, the commit before
-  the in-frame HUD, the commit before the SwiftUI migration) showed the same
-  pattern: decode kept up, but frames reached the screen only every ~22 ms.
-  Stopping playback brought it back at once, with no code change. Metal still
-  reported Direct and the built-in panel stayed at 120 Hz, so it is neither
-  compositing nor a refresh-rate drop; the contention itself is not
-  identified (an Instruments Metal System Trace would show it). Close video
-  playback before measuring. fakehost, 3024×1964 at ~95 fps, 2026-10-17:
+- **An open Netflix tab in Chrome throttles presentation, even paused.**
+  Decode keeps up, but frames reach the screen only every 20–25 ms, so most
+  are replaced before they are shown. It looked like a regression: every build
+  tested (today's, the commit before the in-frame HUD, the commit before the
+  SwiftUI migration) was slow while the tab was open. Metal still reports
+  Direct and the built-in panel stays at 120 Hz, so it is neither compositing
+  nor a refresh drop. An Instruments Metal System Trace showed the slow
+  seconds as 400–700 ms of drawable waits each, with the GPU mostly in its
+  Minimum performance state; keeping the GPU lightly busy from another
+  process made no difference while the tab was closed, so that was not
+  tested further. Close such tabs before measuring. fakehost, 3024×1964 at
+  ~95 fps, 15 s runs, 2026-10-17:
 
-  | run | Netflix | to screen p50 | p95 | shown |
+  | Netflix tab | to screen p50 | p95 | shown | replaced |
   |---|---|---|---|---|
-  | current build | paused | 3.8 ms | 8.2 ms | 90 fps (all sent) |
-  | current build | playing | 28.1 ms | 36.1 ms | 50 fps |
-  | same, Game Mode on | playing | 20.0 ms | 35.7 ms | 57.5 fps |
+  | open, paused | 29.6 ms | 36.1 ms | 44.7 fps | 714 |
+  | open, paused | 19.5 ms | 35.8 ms | 57.3 fps | 536 |
+  | closed | 3.7 ms | 8.2 ms | 90.5 fps (all sent) | 52 |
+  | closed | 3.6 ms | 8.4 ms | 92.1 fps (all sent) | 30 |
 
   Game Mode (macOS lowers background work's priority while a game is full
-  screen) only halves the time spent throttled: the sparkline alternated
-  between ~4 ms and ~30 ms stretches. Relay opts into it anyway
+  screen) only partly helped while it was playing: 20 ms instead of 28 ms
+  p50, alternating ~4 ms and ~30 ms stretches. Relay opts into it anyway
   (`LSApplicationCategoryType` games + `GCSupportsGameMode` in Info.plist);
-  the kiosk window counts as full screen.
+  the kiosk window counts as full screen. The real-PC sessions of 02:39–02:56
+  that day ran with the tab open and are not valid measurements.
 - **The link matters.** Two runs with identical settings over a LAN switch
   had RTT/2 values 1 ms apart. Treat sub-millisecond differences measured over
   a LAN as noise.
