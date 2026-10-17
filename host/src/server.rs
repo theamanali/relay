@@ -769,6 +769,16 @@ fn handle_session(
             hello.refresh as u32
         },
     };
+    // Displays powered down after inactivity give Desktop Duplication no
+    // frames until there is input, and KeepAwake must not wake them (see there).
+    // The physical monitors are still on the desktop here, so this lights only
+    // what the session is about to take over. Never fail the session over it.
+    match crate::desktop::with_input_desktop("wake displays", || {
+        crate::input::wake_displays().context("SendInput")
+    }) {
+        Ok(()) => log::info!("woke displays before session setup"),
+        Err(e) => log::warn!("could not wake displays before session setup: {e:#}"),
+    }
     let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
     let placement = source.placement;
     let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));

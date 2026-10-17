@@ -49,6 +49,31 @@ pub fn enable_physical_pixel_coordinates() -> windows::core::Result<()> {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
 }
 
+/// Turn the displays back on if Windows has powered them down after
+/// inactivity: Desktop Duplication delivers no frames until there is input.
+/// One relative move of zero distance counts as user activity without moving
+/// the cursor, clicking or typing. The calling thread must be bound to the
+/// input desktop.
+pub fn wake_displays() -> windows::core::Result<()> {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    if unsafe { SendInput(&[input], size_of::<INPUT>() as i32) } == 0 {
+        return Err(windows::core::Error::from_win32());
+    }
+    Ok(())
+}
+
 impl Injector {
     pub fn new(target: Placement, exclusive: bool) -> Self {
         // A normal Relay session has already made the target the only
