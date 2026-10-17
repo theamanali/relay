@@ -17,8 +17,9 @@ use crate::crypto::{self, Identity, PairLimiter, PeerList, SecureReader, SecureW
 use crate::display::{self, Mode, Monitor, OutputLocation, Placement};
 use crate::driver::{Attachment, VirtualDisplay};
 use crate::encoder::{Encoder, EncoderConfig, Quality, VideoCaps};
-use crate::gpu::GpuInfo;
+use crate::gpu::{GpuInfo, Luid};
 use crate::input::Injector;
+use crate::nvenc_caps::{codec_label, EncoderCaps, Requirement};
 use crate::protocol::{
     self, msg, stop_reason, video_flags, ClientHello, Codec, FrameTiming, VideoFormat,
     FLAG_KEYFRAME, UNKNOWN_MICROS,
@@ -77,6 +78,9 @@ pub struct ServerConfig {
     pub quality_override: Option<Quality>,
     /// What the encoder can do (TXT `enc`), found once at startup.
     pub video_caps: VideoCaps,
+    /// The selected GPU's NVENC record, queried once at startup; every
+    /// session is checked against it before the display is touched.
+    pub encoder_caps: EncoderCaps,
     pub intra_refresh: bool,
     /// Force the ffmpeg encoder path even on NVIDIA (skip the in-process one).
     pub prefer_ffmpeg: bool,
@@ -431,7 +435,7 @@ impl Source {
     /// leaving fullscreen.  Keep the virtual monitor as the only output and
     /// then rediscover its DXGI index, which may change after any mode switch.
     ///
-    /// `may_reassert` gates the one heavy, dangerous step — forcing a
+    /// `may_reassert` gates the one heavy, dangerous step Ã¢â‚¬â€ forcing a
     /// virtual-only topology with `topology::exclusive`. The caller only sets it
     /// once the game's own fullscreen modeset has had time to settle and not
     /// more than once every couple of seconds, so we never trade blows with an
@@ -445,8 +449,17 @@ impl Source {
         may_reassert: bool,
     ) -> Result<bool> {
         let Some(driver) = driver else {
+            let location = display::dxgi_output_for(&self.lease.monitor.device_name)?;
+            if location.adapter_luid != gpu.luid {
+                bail!(
+                    "{} moved to '{}' instead of selected GPU '{}'",
+                    self.lease.monitor.device_name,
+                    location.adapter_name,
+                    gpu.name
+                );
+            }
             self.placement = display::current_placement(&self.lease.monitor.device_name)?;
-            self.location = display::dxgi_output_for(&self.lease.monitor.device_name)?;
+            self.location = location;
             return Ok(false);
         };
 
@@ -605,7 +618,7 @@ fn acquire_display_bound(
     if (placement.width, placement.height, placement.hz) != (want.width, want.height, want.hz) {
         if driver.dynamic_modes() {
             log::warn!(
-                "asked {} for {}x{}@{} but got {}x{}@{} — check the driver's settings file",
+                "asked {} for {}x{}@{} but got {}x{}@{} Ã¢â‚¬â€ check the driver's settings file",
                 driver.name(),
                 want.width,
                 want.height,
@@ -632,7 +645,7 @@ fn acquire_display_bound(
     if location.adapter_luid != gpu.luid {
         log::warn!(
             "virtual display {} is rendered by '{}' instead of the selected '{}'; \
-             capture will be copied to the encoder through system memory",
+             a session needs capture and encode on one adapter",
             name,
             location.adapter_name,
             gpu.name
@@ -835,43 +848,42 @@ fn handle_session(
         bail!("unsupported protocol version {}", hello.version);
     }
     let Some(_display_claim) = DisplayClaim::acquire(display_claimed, &cfg.status) else {
-        tx.send(msg::STREAM_STOP, 0, &[stop_reason::BUSY])?;
         log::info!("refused stream request from client {client_fp}: display is in another session");
-        // HostConnection becomes input-ready as soon as it sends CLIENT_HELLO,
-        // so input can already be in flight. Half-close and drain it: closing
-        // with unread bytes could produce an RST that discards BUSY on Windows.
-        tx.shutdown_write();
-        rx.set_read_timeout(Some(HELLO_TIMEOUT))?;
-        while rx.recv().is_ok() {}
+        refuse_stream(&mut tx, &mut rx, stop_reason::BUSY);
         return Ok(());
     };
     if !hello.name.is_empty() {
         // Remember the client by the name it gives itself.
         let _ = cfg.paired.lock().unwrap().add(hs.peer, &hello.name);
     }
-    let Some(codec) = choose_codec(hello.codecs, cfg.codec, cfg.video_caps.hevc) else {
-        bail!(
-            "client supports no codec we can produce (mask 0b{:03b}){}",
-            hello.codecs,
-            if cfg.video_caps.hevc {
-                ""
-            } else {
-                "; this GPU has no HEVC encoder"
-            }
-        )
+
+    // --- preflight: everything that can fail without touching a display ---
+    let host_video = HostVideo::from_config(cfg);
+    let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
+    let plan = match plan_session(&hello, &host_video)
+        .and_then(|plan| trial_encoder(cfg, &plan, bitrate_mbps).map(|()| plan))
+    {
+        Ok(plan) => plan,
+        Err(e) => {
+            // STREAM_STOP carries only the reason code: the Mac shows a
+            // generic stop and the detail stays in this log.
+            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
+            return Err(e.context("session preflight refused the stream (no display was changed)"));
+        }
     };
-    if !cfg.video_caps.hevc && hello.codecs & Codec::Hevc.bit() != 0 {
-        log::info!("client offers HEVC, but this GPU has no HEVC encoder: using H.264");
+    if !cfg.encoder_caps.video_caps(cfg.intra_refresh).hevc && hello.codecs & Codec::Hevc.bit() != 0
+    {
+        log::info!("client offers HEVC, but this GPU's HEVC encoder is not usable: using H.264");
     }
 
     let _awake = KeepAwake::new();
     let want = Mode {
-        width: hello.width as u32,
-        height: hello.height as u32,
+        width: plan.width,
+        height: plan.height,
         hz: if hello.refresh == 0 {
             60
         } else {
-            hello.refresh as u32
+            u32::from(hello.refresh)
         },
     };
     // Displays powered down after inactivity give Desktop Duplication no
@@ -885,24 +897,46 @@ fn handle_session(
         Err(e) => log::warn!("could not wake displays before session setup: {e:#}"),
     }
     let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
-    let displays_on = DisplayKeepAlive::start();
     let placement = source.placement;
-    let fps = cfg.fps.unwrap_or(placement.hz.clamp(30, 240));
-    let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
-    // Only the in-process encoder applies 4:4:4 / 10-bit, and it needs the
-    // display on the encoding GPU (cross-adapter capture goes through ffmpeg).
-    let caps = if source.location.adapter_index == cfg.gpu.adapter_index {
-        cfg.video_caps
-    } else {
-        cfg.video_caps.for_ffmpeg()
+    let actual = Mode {
+        width: placement.width,
+        height: placement.height,
+        hz: placement.hz,
     };
-    let video = negotiate_video(
-        hello.encoder_quality,
-        hello.video_flags,
-        cfg.quality_override,
-        codec,
-        caps,
-    );
+    let plan = match revalidate_plan(plan, actual, source.location.adapter_luid, &host_video)
+        .with_context(|| {
+            format!(
+                "the display came up at {}x{}@{} on '{}'",
+                actual.width, actual.height, actual.hz, source.location.adapter_name
+            )
+        })
+        .and_then(|checked| {
+            if checked == plan {
+                Ok(checked)
+            } else {
+                log::info!(
+                    "display runs at {}x{}@{}, not the requested {}x{}@{}; checked the encoder again",
+                    checked.width,
+                    checked.height,
+                    checked.fps,
+                    plan.width,
+                    plan.height,
+                    plan.fps
+                );
+                trial_encoder(cfg, &checked, bitrate_mbps).map(|()| checked)
+            }
+        }) {
+        Ok(plan) => plan,
+        Err(e) => {
+            // Roll back first: the user's layout comes back before the
+            // client hears anything.
+            drop(source);
+            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
+            return Err(e.context("the attached display failed revalidation (layout restored)"));
+        }
+    };
+    let displays_on = DisplayKeepAlive::start();
+    let (codec, video, fps) = (plan.codec, plan.video, plan.fps);
     let asked = hello.video_flags.unwrap_or(0) & (video_flags::FULL_COLOR | video_flags::TEN_BIT);
     if asked != video.flags() {
         log::info!(
@@ -910,21 +944,17 @@ fn handle_session(
             describe_flags(asked & !video.flags()),
             if codec != Codec::Hevc {
                 "the session is H.264"
-            } else if caps != cfg.video_caps {
-                "capture is on another GPU (ffmpeg path)"
+            } else if cfg.prefer_ffmpeg {
+                "the ffmpeg path (--no-native) encodes 8-bit 4:2:0"
             } else {
-                "this host's encoder cannot"
+                "this GPU's encoder cannot"
             }
         );
     }
     log::info!(
         "capturing {} at {fps} fps, {}{} {bitrate_mbps} Mbps{}, preset {}{} via {}",
         source.monitor().device_name,
-        if codec == Codec::Hevc {
-            "HEVC"
-        } else {
-            "H.264"
-        },
+        codec_label(codec),
         match video.flags() {
             0 => String::new(),
             flags => format!(" {}", describe_flags(flags)),
@@ -949,8 +979,8 @@ fn handle_session(
         msg::STREAM_START,
         0,
         &protocol::stream_start(
-            placement.width as u16,
-            placement.height as u16,
+            plan.width as u16,
+            plan.height as u16,
             fps as u16,
             bitrate_mbps as u16,
             codec,
@@ -972,31 +1002,17 @@ fn handle_session(
         end_request: Arc::clone(&end_request),
     });
 
-    let mut encoder_config = EncoderConfig {
-        ffmpeg: cfg.ffmpeg.clone(),
-        vendor: cfg.gpu.vendor,
-        capture_adapter_idx: source.location.adapter_index,
-        encode_adapter_idx: cfg.gpu.adapter_index,
-        output_idx: source.location.output_index,
-        width: placement.width,
-        height: placement.height,
-        fps,
-        bitrate_mbps,
-        codec,
-        gop: cfg.gop_seconds.max(1) * fps,
-        quality: video.quality,
-        full_color: video.full_color,
-        ten_bit: video.ten_bit,
-        intra_refresh: cfg.intra_refresh,
-        prefer_ffmpeg: cfg.prefer_ffmpeg,
-    };
+    let mut encoder_config = encoder_config(cfg, &plan, bitrate_mbps, Some(&source.location));
     let mut encoder = match Encoder::spawn(&encoder_config) {
         Ok(e) => e,
         Err(e) if crate::encoder::is_desktop_not_capturable(&e) => {
             log::warn!("{e:#}; the session starts without a picture and retries");
             Encoder::waiting()
         }
-        Err(e) => return Err(e),
+        Err(e) => {
+            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
+            return Err(e);
+        }
     };
 
     // Reader thread: client -> host messages (input, pongs).
@@ -1222,6 +1238,7 @@ fn pump(
                 }
                 recovery.encoder_config.capture_adapter_idx =
                     recovery.source.location.adapter_index;
+                recovery.encoder_config.capture_luid = recovery.source.location.adapter_luid;
                 recovery.encoder_config.output_idx = recovery.source.location.output_index;
                 thread::sleep(ENCODER_RESTART_DELAY);
                 if let Some(end) = ending.check(tx) {
@@ -1249,6 +1266,9 @@ fn pump(
                             desktop_wait = Some(Instant::now());
                         }
                         thread::sleep(DESKTOP_RETRY);
+                    }
+                    Err(error) if crate::encoder::is_capture_mismatch(&error) => {
+                        log::warn!("capture restart refused: {error:#}");
                     }
                     Err(error) => {
                         log::debug!("encoder restart failed: {error:#}");
@@ -1416,14 +1436,243 @@ fn selected_bitrate(requested: u16, override_mbps: Option<u16>) -> u32 {
     u32::from(override_mbps.unwrap_or(requested))
 }
 
+/// End a stream request with a STREAM_STOP reason code (it carries no text),
+/// then drain what the client already sent: HostConnection is input-ready as
+/// soon as it sends CLIENT_HELLO, and closing with unread bytes can produce an
+/// RST that discards the stop on Windows.
+fn refuse_stream(tx: &mut SecureWriter, rx: &mut SecureReader, reason: u8) {
+    if let Err(e) = tx.send(msg::STREAM_STOP, 0, &[reason]) {
+        log::debug!("STREAM_STOP {reason} not delivered: {e:#}");
+        return;
+    }
+    tx.shutdown_write();
+    if rx.set_read_timeout(Some(HELLO_TIMEOUT)).is_ok() {
+        while rx.recv().is_ok() {}
+    }
+}
+
+/// The encoder settings for a plan. Before the display exists `location` is
+/// `None` and the selected GPU stands in for the capture adapter.
+fn encoder_config(
+    cfg: &ServerConfig,
+    plan: &SessionPlan,
+    bitrate_mbps: u32,
+    location: Option<&OutputLocation>,
+) -> EncoderConfig {
+    EncoderConfig {
+        ffmpeg: cfg.ffmpeg.clone(),
+        vendor: cfg.gpu.vendor,
+        capture_adapter_idx: location.map_or(cfg.gpu.adapter_index, |l| l.adapter_index),
+        encode_adapter_idx: cfg.gpu.adapter_index,
+        capture_luid: location.map_or(cfg.gpu.luid, |l| l.adapter_luid),
+        encode_luid: cfg.gpu.luid,
+        output_idx: location.map_or(0, |l| l.output_index),
+        width: plan.width,
+        height: plan.height,
+        fps: plan.fps,
+        bitrate_mbps,
+        codec: plan.codec,
+        gop: cfg.gop_seconds.max(1) * plan.fps,
+        quality: plan.video.quality,
+        full_color: plan.video.full_color,
+        ten_bit: plan.video.ten_bit,
+        intra_refresh: cfg.intra_refresh,
+        prefer_ffmpeg: cfg.prefer_ffmpeg,
+    }
+}
+
+/// Initialize Relay's real encoder configuration on the selected GPU at the
+/// plan's size and tear it down again, so a driver that refuses it is found
+/// before any display changes.
+fn trial_encoder(cfg: &ServerConfig, plan: &SessionPlan, bitrate_mbps: u32) -> Result<()> {
+    let started = Instant::now();
+    crate::nvenc_caps::trial_initialize(&cfg.gpu, &encoder_config(cfg, plan, bitrate_mbps, None))
+        .with_context(|| {
+        format!(
+            "NVENC on {} refused {} {}x{}@{}",
+            cfg.gpu.name,
+            codec_label(plan.codec),
+            plan.width,
+            plan.height,
+            plan.fps
+        )
+    })?;
+    log::info!(
+        "encoder preflight: {} {}x{}@{} {} initializes ({:.0} ms)",
+        codec_label(plan.codec),
+        plan.width,
+        plan.height,
+        plan.fps,
+        plan.video.quality.preset_name(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+
 /// The host's preferred codec when the client offers it, else HEVC, else
-/// H.264. HEVC counts only when this GPU can encode it.
-fn choose_codec(offered: u8, preferred: Codec, hevc_available: bool) -> Option<Codec> {
-    let usable =
-        |codec: Codec| offered & codec.bit() != 0 && (codec != Codec::Hevc || hevc_available);
+/// H.264; only codecs in `host_mask`, the ones this GPU can run.
+fn choose_codec(offered: u8, preferred: Codec, host_mask: u8) -> Option<Codec> {
     [preferred, Codec::Hevc, Codec::H264]
         .into_iter()
-        .find(|&codec| usable(codec))
+        .find(|&codec| offered & host_mask & codec.bit() != 0)
+}
+
+/// What a session will encode, decided before any display is touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionPlan {
+    codec: Codec,
+    video: SessionVideo,
+    width: u32,
+    height: u32,
+    fps: u32,
+}
+
+/// The host's side of the preflight.
+struct HostVideo<'a> {
+    preferred: Codec,
+    quality_override: Option<Quality>,
+    fps_override: Option<u32>,
+    intra_refresh: bool,
+    prefer_ffmpeg: bool,
+    caps: &'a EncoderCaps,
+}
+
+impl HostVideo<'_> {
+    fn from_config(cfg: &ServerConfig) -> HostVideo<'_> {
+        HostVideo {
+            preferred: cfg.codec,
+            quality_override: cfg.quality_override,
+            fps_override: cfg.fps,
+            intra_refresh: cfg.intra_refresh,
+            prefer_ffmpeg: cfg.prefer_ffmpeg,
+            caps: &cfg.encoder_caps,
+        }
+    }
+
+    /// The session frame rate for a display refresh rate.
+    fn fps(&self, hz: u32) -> u32 {
+        self.fps_override.unwrap_or(hz.clamp(30, 240))
+    }
+
+    fn video_caps(&self) -> VideoCaps {
+        let caps = self.caps.video_caps(self.intra_refresh);
+        if self.prefer_ffmpeg {
+            caps.for_ffmpeg()
+        } else {
+            caps
+        }
+    }
+
+    /// Everything a session at this size and rate needs from its codec.
+    fn check(
+        &self,
+        codec: Codec,
+        video: SessionVideo,
+        width: u32,
+        height: u32,
+        fps: u32,
+    ) -> Result<()> {
+        let caps = self.caps.codec(codec).ok_or_else(|| {
+            anyhow!(
+                "{} has no {} encoder",
+                self.caps.adapter,
+                codec_label(codec)
+            )
+        })?;
+        caps.check(&Requirement {
+            width,
+            height,
+            fps,
+            quality: video.quality,
+            full_color: video.full_color,
+            ten_bit: video.ten_bit,
+            intra_refresh: self.intra_refresh,
+        })
+    }
+}
+
+/// The session's codec is the host's preference among what the Mac offers
+/// and this GPU can run; picture options follow the GPU; the requested mode
+/// must be one the encoder accepts. Pure: no display or driver call.
+fn plan_session(hello: &ClientHello, host: &HostVideo) -> Result<SessionPlan> {
+    let host_mask = host.caps.codec_mask(host.intra_refresh);
+    let codec = choose_codec(hello.codecs, host.preferred, host_mask).ok_or_else(|| {
+        anyhow!(
+            "no codec in common: the Mac offers {}, this GPU encodes {}",
+            codec_names(hello.codecs),
+            codec_names(host_mask)
+        )
+    })?;
+    let video = negotiate_video(
+        hello.encoder_quality,
+        hello.video_flags,
+        host.quality_override,
+        codec,
+        host.video_caps(),
+    );
+    let hz = if hello.refresh == 0 {
+        60
+    } else {
+        u32::from(hello.refresh)
+    };
+    let (width, height, fps) = (
+        u32::from(hello.width),
+        u32::from(hello.height),
+        host.fps(hz),
+    );
+    host.check(codec, video, width, height, fps)?;
+    Ok(SessionPlan {
+        codec,
+        video,
+        width,
+        height,
+        fps,
+    })
+}
+
+/// After the display is attached, and before capture starts: it must be on
+/// the selected GPU (capture and encode share one adapter), and a mode other
+/// than the planned one must pass the same checks.
+fn revalidate_plan(
+    plan: SessionPlan,
+    actual: Mode,
+    display_luid: Luid,
+    host: &HostVideo,
+) -> Result<SessionPlan> {
+    if display_luid != host.caps.luid {
+        bail!(
+            "the display is not on the selected GPU {} (LUID {:x}:{:x} instead of {:x}:{:x}); capture and encode must share one adapter",
+            host.caps.adapter,
+            display_luid.high,
+            display_luid.low,
+            host.caps.luid.high,
+            host.caps.luid.low
+        );
+    }
+    let fps = host.fps(actual.hz);
+    if (actual.width, actual.height, fps) == (plan.width, plan.height, plan.fps) {
+        return Ok(plan);
+    }
+    host.check(plan.codec, plan.video, actual.width, actual.height, fps)?;
+    Ok(SessionPlan {
+        width: actual.width,
+        height: actual.height,
+        fps,
+        ..plan
+    })
+}
+
+fn codec_names(mask: u8) -> String {
+    let names: Vec<&str> = [Codec::Hevc, Codec::H264]
+        .into_iter()
+        .filter(|c| mask & c.bit() != 0)
+        .map(codec_label)
+        .collect();
+    if names.is_empty() {
+        "nothing Relay knows".into()
+    } else {
+        names.join(" and ")
+    }
 }
 
 /// One session's encoder quality and picture flags.
@@ -1631,6 +1880,7 @@ mod pairing_wait_tests {
             gop_seconds: 1,
             quality_override: None,
             video_caps: VideoCaps::FFMPEG,
+            encoder_caps: crate::nvenc_caps::fixture::rtx(),
             intra_refresh: false,
             prefer_ffmpeg: false,
             lock_physical: true,
@@ -1853,15 +2103,14 @@ mod display_claim_tests {
     #[test]
     fn hevc_is_skipped_on_a_gpu_without_an_hevc_encoder() {
         let both = Codec::H264.bit() | Codec::Hevc.bit();
-        assert_eq!(choose_codec(both, Codec::Hevc, true), Some(Codec::Hevc));
-        assert_eq!(choose_codec(both, Codec::H264, true), Some(Codec::H264));
-        assert_eq!(
-            choose_codec(Codec::H264.bit(), Codec::Hevc, true),
-            Some(Codec::H264)
-        );
-        assert_eq!(choose_codec(both, Codec::Hevc, false), Some(Codec::H264));
-        assert_eq!(choose_codec(Codec::Hevc.bit(), Codec::Hevc, false), None);
-        assert_eq!(choose_codec(0b100, Codec::Hevc, true), None);
+        let h264 = Codec::H264.bit();
+        assert_eq!(choose_codec(both, Codec::Hevc, both), Some(Codec::Hevc));
+        assert_eq!(choose_codec(both, Codec::H264, both), Some(Codec::H264));
+        assert_eq!(choose_codec(h264, Codec::Hevc, both), Some(Codec::H264));
+        assert_eq!(choose_codec(both, Codec::Hevc, h264), Some(Codec::H264));
+        assert_eq!(choose_codec(Codec::Hevc.bit(), Codec::Hevc, h264), None);
+        assert_eq!(choose_codec(0b100, Codec::Hevc, both), None);
+        assert_eq!(choose_codec(both, Codec::Hevc, 0), None);
     }
 
     #[test]
@@ -1880,6 +2129,193 @@ mod display_claim_tests {
             120
         ));
         assert!(!is_congested(elapsed, 500, Duration::from_secs(2), 120));
+    }
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+    use crate::nvenc_caps::fixture;
+
+    const BOTH: u8 = 0b11;
+
+    fn hello(width: u16, height: u16, refresh: u16, codecs: u8) -> ClientHello {
+        ClientHello {
+            version: protocol::VERSION,
+            width,
+            height,
+            refresh,
+            bitrate_mbps: 120,
+            wants_input: true,
+            codecs,
+            name: "MacBook".into(),
+            encoder_quality: Some(protocol::encoder_quality::BALANCED),
+            video_flags: Some(0),
+        }
+    }
+
+    fn host(caps: &EncoderCaps) -> HostVideo<'_> {
+        HostVideo {
+            preferred: Codec::Hevc,
+            quality_override: None,
+            fps_override: None,
+            intra_refresh: false,
+            prefer_ffmpeg: false,
+            caps,
+        }
+    }
+
+    fn error(result: Result<SessionPlan>) -> String {
+        format!("{:#}", result.unwrap_err())
+    }
+
+    #[test]
+    fn a_macbook_session_plans_hevc_at_its_own_mode() {
+        let caps = fixture::rtx();
+        let plan = plan_session(&hello(3024, 1964, 120, BOTH), &host(&caps)).unwrap();
+        assert_eq!(plan.codec, Codec::Hevc);
+        assert_eq!((plan.width, plan.height, plan.fps), (3024, 1964, 120));
+        assert_eq!(plan.video.quality, Quality::Balanced);
+        assert_eq!(plan.video.flags(), 0);
+    }
+
+    #[test]
+    fn the_codec_is_what_the_mac_offers_the_gpu_runs_and_the_host_prefers() {
+        let caps = fixture::rtx();
+        let mut h264_host = host(&caps);
+        h264_host.preferred = Codec::H264;
+        let plan = plan_session(&hello(1920, 1080, 60, BOTH), &h264_host).unwrap();
+        assert_eq!(plan.codec, Codec::H264);
+
+        // A GTX 750 Ti has no HEVC encoder.
+        let h264_gpu = fixture::caps(vec![fixture::h264()]);
+        let plan = plan_session(&hello(1920, 1080, 60, BOTH), &host(&h264_gpu)).unwrap();
+        assert_eq!(plan.codec, Codec::H264);
+        let refused = error(plan_session(
+            &hello(1920, 1080, 60, Codec::Hevc.bit()),
+            &host(&h264_gpu),
+        ));
+        assert!(
+            refused.contains("offers HEVC") && refused.contains("encodes H.264"),
+            "{refused}"
+        );
+        let refused = error(plan_session(&hello(1920, 1080, 60, 0b100), &host(&caps)));
+        assert!(refused.contains("offers nothing"), "{refused}");
+    }
+
+    #[test]
+    fn intra_refresh_rules_out_a_codec_that_lacks_it() {
+        let mut hevc = fixture::hevc();
+        hevc.intra_refresh = false;
+        let caps = fixture::caps(vec![hevc, fixture::h264()]);
+        let mut wants_refresh = host(&caps);
+        wants_refresh.intra_refresh = true;
+        let plan = plan_session(&hello(1920, 1080, 60, BOTH), &wants_refresh).unwrap();
+        assert_eq!(plan.codec, Codec::H264);
+    }
+
+    #[test]
+    fn an_unsupported_mode_is_refused_before_the_display_is_touched() {
+        let caps = fixture::rtx();
+        let refused = error(plan_session(
+            &hello(5120, 2880, 60, Codec::H264.bit()),
+            &host(&caps),
+        ));
+        assert!(refused.contains("5120x2880"), "{refused}");
+        assert!(plan_session(&hello(0, 0, 60, BOTH), &host(&caps)).is_err());
+    }
+
+    #[test]
+    fn the_frame_rate_follows_the_request_unless_the_host_sets_it() {
+        let caps = fixture::rtx();
+        let fps = |refresh, fps_override| {
+            let mut h = host(&caps);
+            h.fps_override = fps_override;
+            plan_session(&hello(1920, 1080, refresh, BOTH), &h)
+                .unwrap()
+                .fps
+        };
+        assert_eq!(fps(0, None), 60);
+        assert_eq!(fps(120, None), 120);
+        assert_eq!(fps(24, None), 30);
+        assert_eq!(fps(500, None), 240);
+        assert_eq!(fps(120, Some(90)), 90);
+    }
+
+    #[test]
+    fn picture_flags_follow_the_gpu_and_the_ffmpeg_path() {
+        let caps = fixture::rtx();
+        let mut flagged = hello(1920, 1080, 60, BOTH);
+        flagged.video_flags = Some(video_flags::FULL_COLOR | video_flags::TEN_BIT);
+        let plan = plan_session(&flagged, &host(&caps)).unwrap();
+        assert!(plan.video.full_color && plan.video.ten_bit);
+
+        let mut ffmpeg = host(&caps);
+        ffmpeg.prefer_ffmpeg = true;
+        assert_eq!(plan_session(&flagged, &ffmpeg).unwrap().video.flags(), 0);
+
+        let mut no_444 = fixture::hevc();
+        no_444.yuv444 = false;
+        let caps = fixture::caps(vec![no_444]);
+        let plan = plan_session(&flagged, &host(&caps)).unwrap();
+        assert!(!plan.video.full_color && plan.video.ten_bit);
+    }
+
+    #[test]
+    fn a_preset_without_its_low_latency_config_is_refused() {
+        let mut hevc = fixture::hevc();
+        hevc.ull_presets = vec![Quality::Speed, Quality::Balanced];
+        let caps = fixture::caps(vec![hevc]);
+        let mut best = hello(1920, 1080, 60, BOTH);
+        best.encoder_quality = Some(protocol::encoder_quality::BEST);
+        let refused = error(plan_session(&best, &host(&caps)));
+        assert!(refused.contains("P6"), "{refused}");
+    }
+
+    #[test]
+    fn revalidation_requires_the_display_on_the_selected_gpu() {
+        let caps = fixture::rtx();
+        let host = host(&caps);
+        let plan = plan_session(&hello(3024, 1964, 120, BOTH), &host).unwrap();
+        let mode = Mode {
+            width: 3024,
+            height: 1964,
+            hz: 120,
+        };
+        assert_eq!(revalidate_plan(plan, mode, caps.luid, &host).unwrap(), plan);
+        let elsewhere = Luid {
+            low: 0x9999,
+            high: 0,
+        };
+        let refused = error(revalidate_plan(plan, mode, elsewhere, &host));
+        assert!(refused.contains("NVIDIA GeForce RTX 3080 Ti"), "{refused}");
+    }
+
+    #[test]
+    fn revalidation_rechecks_a_mode_that_differs_from_the_request() {
+        let caps = fixture::rtx();
+        let host = host(&caps);
+        // Dev mode streams the primary display at whatever it runs at.
+        let plan = plan_session(&hello(1920, 1080, 60, BOTH), &host).unwrap();
+        let primary = Mode {
+            width: 2560,
+            height: 1440,
+            hz: 144,
+        };
+        let replanned = revalidate_plan(plan, primary, caps.luid, &host).unwrap();
+        assert_eq!(
+            (replanned.width, replanned.height, replanned.fps),
+            (2560, 1440, 144)
+        );
+        assert_eq!(replanned.codec, plan.codec);
+
+        let h264 = plan_session(&hello(1920, 1080, 60, Codec::H264.bit()), &host).unwrap();
+        let too_wide = Mode {
+            width: 5120,
+            height: 1440,
+            hz: 60,
+        };
+        assert!(revalidate_plan(h264, too_wide, caps.luid, &host).is_err());
     }
 }
 

@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 
-use crate::gpu::Vendor;
+use crate::gpu::{Luid, Vendor};
 use crate::protocol::{encoder_quality, Codec};
 
 /// Speed/quality trade-off, mapped to each vendor's own preset scale.
@@ -118,9 +118,13 @@ pub struct EncoderConfig {
     pub vendor: Vendor,
     /// DXGI adapter that owns the captured output.
     pub capture_adapter_idx: u32,
-    /// DXGI adapter of the selected (encoding) GPU. If it differs from
-    /// `capture_adapter_idx` frames are copied through system memory.
+    /// DXGI adapter of the selected (encoding) GPU, for ffmpeg's command line.
     pub encode_adapter_idx: u32,
+    /// The adapters by identity: indices move when the virtual display's
+    /// proxy adapter comes and goes. If they differ, frames are copied
+    /// through system memory (ffmpeg only; native capture refuses).
+    pub capture_luid: Luid,
+    pub encode_luid: Luid,
     pub output_idx: u32,
     /// The session's picture size: what STREAM_START announced.
     pub width: u32,
@@ -145,8 +149,47 @@ pub struct EncoderConfig {
 
 impl EncoderConfig {
     pub fn cross_adapter(&self) -> bool {
-        self.capture_adapter_idx != self.encode_adapter_idx
+        self.capture_luid != self.encode_luid
     }
+}
+
+/// Native capture opened an output that is not the session's: on another
+/// adapter (the index moved) or at another size than STREAM_START said.
+/// Not worth an ffmpeg fallback; the session's recovery loop retries until
+/// the topology settles, then ends the session and restores the layout.
+#[derive(Debug)]
+pub struct CaptureMismatch;
+
+impl std::fmt::Display for CaptureMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the captured output does not match the session")
+    }
+}
+
+impl std::error::Error for CaptureMismatch {}
+
+/// Revalidate what Desktop Duplication opened against the session.
+pub fn check_capture(cfg: &EncoderConfig, luid: Luid, width: u32, height: u32) -> Result<()> {
+    if luid != cfg.encode_luid {
+        return Err(anyhow::Error::new(CaptureMismatch).context(format!(
+            "captured output is on adapter LUID {:x}:{:x}, not the encoding GPU's {:x}:{:x}",
+            luid.high, luid.low, cfg.encode_luid.high, cfg.encode_luid.low
+        )));
+    }
+    if (width, height) != (cfg.width, cfg.height) {
+        return Err(anyhow::Error::new(CaptureMismatch).context(format!(
+            "captured output is {width}x{height}, the session is {}x{}",
+            cfg.width, cfg.height
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `error` (anywhere in its chain) is a `CaptureMismatch`.
+pub fn is_capture_mismatch(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|e| e.downcast_ref::<CaptureMismatch>().is_some())
 }
 
 /// One coded picture, ready for the wire.
@@ -574,6 +617,9 @@ impl Encoder {
                 // ffmpeg would fail the same way: report it, the session
                 // waits for the desktop to come back.
                 Err(e) if is_access_denied(&e) => return Err(e.context(DesktopNotCapturable)),
+                // Another adapter or size than the session's: ffmpeg would
+                // capture the same wrong output. Recovery retries instead.
+                Err(e) if is_capture_mismatch(&e) => return Err(e),
                 Err(e) => {
                     log::warn!(
                         "native NVENC startup failed ({e:#}); falling back to ffmpeg {}",
@@ -885,6 +931,14 @@ mod tests {
             vendor,
             capture_adapter_idx: capture,
             encode_adapter_idx: encode,
+            capture_luid: Luid {
+                low: 0x1000 + capture,
+                high: 0,
+            },
+            encode_luid: Luid {
+                low: 0x1000 + encode,
+                high: 0,
+            },
             output_idx: 1,
             width: 3024,
             height: 1964,
@@ -898,6 +952,45 @@ mod tests {
             intra_refresh: false,
             prefer_ffmpeg: false,
         }
+    }
+
+    #[test]
+    fn capture_must_match_the_sessions_adapter_and_size() {
+        let session = cfg(Vendor::Nvidia, Codec::Hevc, 0, 0);
+        check_capture(&session, session.encode_luid, 3024, 1964).unwrap();
+
+        let other = Luid {
+            low: 0x7777,
+            high: 0,
+        };
+        let moved = check_capture(&session, other, 3024, 1964).unwrap_err();
+        assert!(is_capture_mismatch(&moved), "{moved:#}");
+        assert!(format!("{moved:#}").contains("7777"), "{moved:#}");
+
+        let resized = check_capture(&session, session.encode_luid, 1920, 1080).unwrap_err();
+        assert!(is_capture_mismatch(&resized));
+        let text = format!("{resized:#}");
+        assert!(
+            text.contains("1920x1080") && text.contains("3024x1964"),
+            "{text}"
+        );
+
+        assert!(!is_capture_mismatch(&anyhow::anyhow!(
+            "NvEncInitializeEncoder failed"
+        )));
+    }
+
+    #[test]
+    fn cross_adapter_compares_luids_not_indices() {
+        // The IDD proxy can shift DXGI indices; the LUID is the identity.
+        let mut session = cfg(Vendor::Nvidia, Codec::Hevc, 0, 0);
+        session.capture_adapter_idx = 1;
+        assert!(!session.cross_adapter());
+        session.capture_luid = Luid {
+            low: 0x7777,
+            high: 0,
+        };
+        assert!(session.cross_adapter());
     }
 
     #[test]

@@ -565,8 +565,11 @@ impl NativeNvenc {
             Ok(name) => log::debug!("capture bound to the {name} desktop"),
             Err(e) => log::debug!("not bound to the input desktop: {e:#}"),
         }
-        let (device, context, duplication, width, height) =
+        let (device, context, duplication, adapter_luid, width, height) =
             create_capture(cfg.capture_adapter_idx, cfg.output_idx)?;
+        // On every start and restart: the index may have moved to another
+        // adapter, or the output changed size since STREAM_START.
+        crate::encoder::check_capture(cfg, adapter_luid, width, height)?;
         let composition_texture = create_texture(&device, width, height)?;
         let cursor = CursorOverlay::new(&device, &composition_texture, width, height)?;
 
@@ -1543,6 +1546,7 @@ fn create_capture(
     ID3D11Device,
     ID3D11DeviceContext,
     IDXGIOutputDuplication,
+    Luid,
     u32,
     u32,
 )> {
@@ -1551,6 +1555,12 @@ fn create_capture(
         let adapter = factory
             .EnumAdapters1(adapter_idx)
             .with_context(|| format!("DXGI adapter {adapter_idx}"))?;
+        let adapter_luid = Luid::from(
+            adapter
+                .GetDesc1()
+                .context("IDXGIAdapter1::GetDesc1")?
+                .AdapterLuid,
+        );
         let output = adapter
             .EnumOutputs(output_idx)
             .with_context(|| format!("DXGI adapter {adapter_idx} output {output_idx}"))?;
@@ -1597,7 +1607,7 @@ fn create_capture(
         if width == 0 || height == 0 {
             bail!("Desktop Duplication reported a zero-sized output");
         }
-        Ok((device, context, duplication, width, height))
+        Ok((device, context, duplication, adapter_luid, width, height))
     }
 }
 
