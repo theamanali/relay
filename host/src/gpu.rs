@@ -1,6 +1,7 @@
 //! GPU enumeration and selection. The chosen GPU is what the virtual display is
 //! rendered on (through the driver's render-adapter setting) and what encodes
-//! the stream, so on a PC with an iGPU we must reliably pick the discrete card.
+//! the stream. Only NVIDIA adapters are eligible; on a hybrid laptop that is
+//! the discrete half, and the iGPU stays listed for diagnostics.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -33,17 +34,6 @@ impl Vendor {
             0x1002 | 0x1022 => Vendor::Amd,
             0x8086 => Vendor::Intel,
             _ => Vendor::Other,
-        }
-    }
-
-    /// Tie-breaker between adapters with the same amount of VRAM: prefer the
-    /// vendor whose hardware encoder we trust most.
-    fn rank(self) -> u8 {
-        match self {
-            Vendor::Nvidia => 3,
-            Vendor::Amd => 2,
-            Vendor::Intel => 1,
-            Vendor::Other => 0,
         }
     }
 
@@ -174,36 +164,66 @@ pub fn enumerate() -> Result<Vec<GpuInfo>> {
     Ok(out)
 }
 
+/// Relay encodes with NVENC only, so only a real NVIDIA adapter may render and
+/// encode. Every other adapter stays in `enumerate` for diagnostics and for
+/// telling which GPU a display is on. A NVIDIA vendor id does not prove NVENC
+/// exists; `native_nvenc::query_caps` checks that.
+pub fn eligible(gpu: &GpuInfo) -> bool {
+    gpu.vendor == Vendor::Nvidia && !gpu.kind.software && !gpu.kind.indirect_display
+}
+
 /// Pick the GPU to render and encode on. An explicit `want` (case-insensitive
-/// substring of the adapter name) wins; otherwise the most dedicated VRAM, with
-/// vendor as the tie-breaker. On every PC with an iGPU + discrete card this is
-/// the discrete card.
+/// substring of the adapter name) must name an eligible NVIDIA adapter;
+/// otherwise the eligible adapter with the most dedicated VRAM, the first in
+/// DXGI order on a tie.
 pub fn choose(gpus: &[GpuInfo], want: Option<&str>) -> Result<GpuInfo> {
     if gpus.is_empty() {
         bail!("no hardware display adapters found");
     }
     if let Some(want) = want {
         let needle = want.to_lowercase();
-        return gpus
+        let matched: Vec<&GpuInfo> = gpus
             .iter()
-            .find(|g| g.name.to_lowercase().contains(&needle))
-            .cloned()
+            .filter(|g| g.name.to_lowercase().contains(&needle))
+            .collect();
+        if matched.is_empty() {
+            bail!("no GPU matches '{want}'; available: {}", names(gpus));
+        }
+        return matched
+            .iter()
+            .find(|g| eligible(g))
+            .map(|g| (*g).clone())
             .with_context(|| {
                 format!(
-                    "no GPU matches '{want}'; available: {}",
-                    gpus.iter()
-                        .map(|g| g.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "--gpu '{want}' matches {}, but Relay encodes only on NVIDIA GPUs (NVENC)",
+                    names(matched.iter().copied())
                 )
             });
     }
-    // Never the integrated half of a hybrid pair; then the most VRAM; then vendor.
-    Ok(gpus
-        .iter()
-        .max_by_key(|g| (!g.kind.hybrid_integrated, g.dedicated_vram, g.vendor.rank()))
+    gpus.iter()
+        .filter(|g| eligible(g))
+        // Never the integrated half of a hybrid pair; then the most VRAM.
+        .max_by_key(|g| {
+            (
+                !g.kind.hybrid_integrated,
+                g.dedicated_vram,
+                std::cmp::Reverse(g.adapter_index),
+            )
+        })
         .cloned()
-        .expect("non-empty"))
+        .with_context(|| {
+            format!(
+                "no NVIDIA GPU found; Relay encodes only with NVIDIA's NVENC. Adapters present: {}",
+                names(gpus)
+            )
+        })
+}
+
+fn names<'a>(gpus: impl IntoIterator<Item = &'a GpuInfo>) -> String {
+    gpus.into_iter()
+        .map(|g| format!("{} ({})", g.name, g.vendor.label()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn describe(gpus: &[GpuInfo], chosen: Option<&GpuInfo>) -> String {
@@ -211,6 +231,7 @@ pub fn describe(gpus: &[GpuInfo], chosen: Option<&GpuInfo>) -> String {
     for g in gpus {
         let mark = match chosen {
             Some(c) if c.luid == g.luid => " <- selected",
+            _ if !eligible(g) => " (not NVIDIA: cannot encode)",
             _ => "",
         };
         let hybrid = if g.kind.hybrid_discrete {
@@ -233,4 +254,121 @@ pub fn describe(gpus: &[GpuInfo], chosen: Option<&GpuInfo>) -> String {
         ));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    fn gpu(index: u32, name: &str, vendor: Vendor, vram_gb: u64) -> GpuInfo {
+        GpuInfo {
+            adapter_index: index,
+            name: name.into(),
+            vendor,
+            dedicated_vram: vram_gb * GB,
+            luid: Luid {
+                low: 0x1000 + index,
+                high: 0,
+            },
+            kind: AdapterKind::default(),
+        }
+    }
+
+    fn rtx() -> GpuInfo {
+        gpu(0, "NVIDIA GeForce RTX 3080 Ti", Vendor::Nvidia, 12)
+    }
+
+    #[test]
+    fn an_amd_card_with_more_vram_does_not_win() {
+        let gpus = [rtx(), gpu(1, "AMD Radeon RX 7900 XTX", Vendor::Amd, 24)];
+        assert_eq!(choose(&gpus, None).unwrap().luid, gpus[0].luid);
+    }
+
+    #[test]
+    fn a_hybrid_laptop_uses_the_nvidia_half() {
+        let mut igpu = gpu(0, "Intel(R) UHD Graphics", Vendor::Intel, 0);
+        igpu.kind.hybrid_integrated = true;
+        let mut dgpu = gpu(1, "NVIDIA GeForce RTX 4070 Laptop GPU", Vendor::Nvidia, 8);
+        dgpu.kind.hybrid_discrete = true;
+        let gpus = [igpu, dgpu];
+        assert_eq!(choose(&gpus, None).unwrap().luid, gpus[1].luid);
+    }
+
+    #[test]
+    fn no_nvidia_gpu_is_an_error_that_names_the_adapters() {
+        let gpus = [
+            gpu(0, "AMD Radeon RX 7900 XTX", Vendor::Amd, 24),
+            gpu(1, "Intel(R) Arc(TM) A770", Vendor::Intel, 16),
+        ];
+        let error = format!("{:#}", choose(&gpus, None).unwrap_err());
+        assert!(error.contains("NVIDIA"), "{error}");
+        assert!(error.contains("AMD Radeon RX 7900 XTX"), "{error}");
+        assert!(error.contains("Intel(R) Arc(TM) A770"), "{error}");
+    }
+
+    #[test]
+    fn an_explicit_non_nvidia_gpu_is_refused() {
+        let gpus = [rtx(), gpu(1, "AMD Radeon RX 7900 XTX", Vendor::Amd, 24)];
+        let error = format!("{:#}", choose(&gpus, Some("radeon")).unwrap_err());
+        assert!(error.contains("AMD Radeon RX 7900 XTX"), "{error}");
+        assert!(error.contains("NVIDIA"), "{error}");
+    }
+
+    #[test]
+    fn an_explicit_name_that_matches_nothing_is_refused() {
+        let gpus = [rtx()];
+        let error = format!("{:#}", choose(&gpus, Some("quadro")).unwrap_err());
+        assert!(error.contains("quadro"), "{error}");
+        assert!(error.contains("NVIDIA GeForce RTX 3080 Ti"), "{error}");
+    }
+
+    #[test]
+    fn an_explicit_name_prefers_its_nvidia_match() {
+        // "Graphics" matches both; only the NVIDIA one may encode.
+        let gpus = [
+            gpu(0, "Intel(R) UHD Graphics", Vendor::Intel, 0),
+            gpu(1, "NVIDIA RTX A2000 Graphics", Vendor::Nvidia, 6),
+        ];
+        assert_eq!(choose(&gpus, Some("graphics")).unwrap().luid, gpus[1].luid);
+    }
+
+    #[test]
+    fn several_nvidia_gpus_pick_the_most_vram_then_the_first() {
+        let gpus = [
+            gpu(0, "NVIDIA GeForce RTX 3060", Vendor::Nvidia, 12),
+            gpu(1, "NVIDIA GeForce RTX 4090", Vendor::Nvidia, 24),
+            gpu(2, "NVIDIA GeForce RTX 4090", Vendor::Nvidia, 24),
+        ];
+        assert_eq!(choose(&gpus, None).unwrap().luid, gpus[1].luid);
+        assert_eq!(choose(&gpus, Some("3060")).unwrap().luid, gpus[0].luid);
+    }
+
+    #[test]
+    fn the_indirect_display_proxy_is_never_chosen() {
+        // The proxy copies the render GPU's name and VRAM; only the kernel
+        // adapter type tells it apart.
+        let mut proxy = rtx();
+        proxy.adapter_index = 1;
+        proxy.luid.low = 0x2000;
+        proxy.kind.indirect_display = true;
+        let gpus = [proxy, rtx()];
+        assert_eq!(choose(&gpus, None).unwrap().luid, gpus[1].luid);
+        assert_eq!(choose(&gpus, Some("3080")).unwrap().luid, gpus[1].luid);
+    }
+
+    #[test]
+    fn describe_lists_every_adapter_and_marks_the_ineligible() {
+        let gpus = [rtx(), gpu(1, "Intel(R) UHD Graphics", Vendor::Intel, 0)];
+        let text = describe(&gpus, Some(&gpus[0]));
+        assert!(
+            text.contains("RTX 3080 Ti") && text.contains("<- selected"),
+            "{text}"
+        );
+        assert!(
+            text.contains("UHD Graphics") && text.contains("not NVIDIA"),
+            "{text}"
+        );
+    }
 }

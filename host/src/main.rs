@@ -129,8 +129,8 @@ struct ServeArgs {
     #[arg(long)]
     intra_refresh: bool,
 
-    /// GPU to render and encode on (case-insensitive substring of its name).
-    /// Default: the adapter with the most dedicated VRAM, i.e. the discrete card.
+    /// NVIDIA GPU to render and encode on (case-insensitive substring of its
+    /// name). Default: the NVIDIA adapter with the most dedicated VRAM.
     #[arg(long)]
     gpu: Option<String>,
 
@@ -434,7 +434,7 @@ fn select_gpu(want: Option<&str>) -> Result<GpuInfo> {
         if want.is_some() {
             "requested with --gpu"
         } else {
-            "most dedicated VRAM"
+            "the NVIDIA adapter with the most dedicated VRAM"
         }
     );
     for g in gpus.iter().filter(|g| g.luid != chosen.luid) {
