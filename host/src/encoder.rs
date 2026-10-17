@@ -981,6 +981,21 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_desktop_is_recognised_through_its_context() {
+        // How Encoder::spawn marks it: the marker is a context layer, not
+        // the root error, so it is not a chain item of its own type.
+        let refused = anyhow::anyhow!("IDXGIOutput1::DuplicateOutput: Access is denied.")
+            .context(DesktopNotCapturable);
+        assert!(is_desktop_not_capturable(&refused));
+        assert!(is_desktop_not_capturable(
+            &refused.context("restarting capture")
+        ));
+        assert!(!is_desktop_not_capturable(&anyhow::anyhow!(
+            "NvEncInitializeEncoder failed"
+        )));
+    }
+
+    #[test]
     fn cross_adapter_compares_luids_not_indices() {
         // The IDD proxy can shift DXGI indices; the LUID is the identity.
         let mut session = cfg(Vendor::Nvidia, Codec::Hevc, 0, 0);
@@ -1137,11 +1152,11 @@ impl std::fmt::Display for DesktopNotCapturable {
 
 impl std::error::Error for DesktopNotCapturable {}
 
-/// Whether `error` (anywhere in its chain) says the desktop is not capturable.
+/// Whether `error` says the desktop is not capturable. The marker is attached
+/// with `.context()`, so it is not a chain item of its own type; anyhow's own
+/// downcast looks through context layers.
 pub fn is_desktop_not_capturable(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|e| e.downcast_ref::<DesktopNotCapturable>().is_some())
+    error.downcast_ref::<DesktopNotCapturable>().is_some()
 }
 
 fn is_access_denied(error: &anyhow::Error) -> bool {
