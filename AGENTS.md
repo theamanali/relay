@@ -75,7 +75,14 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   E_INVALIDARG (confirmed in-process); a session starting while the previous
   one's capture is still retiring hits it, and only ffmpeg covers it today.
   `RELAY_TEST_FAULT=trial,display-gpu` and `probe --progress` /
-  `--codec-mask` exist for these cases. User-run U1–U6 are pending.
+  `--codec-mask` exist for these cases. User-run U1–U6 all passed on
+  2026-10-17 on the installed `3e320af` (hash `A3E248D3...518F1112`):
+  real-Mac 4:2:0 and 4:4:4 10-bit sessions, lock/unlock, Win+Ctrl+Shift+B
+  (recovered in 1.7 s, LUID unchanged), worker kill (service restored and
+  respawned in 5 s), simulated hybrid mismatch on the VDD (rolled back in
+  1.4 s), oversized mode refused untouched. Gate B passed; phase C (removal)
+  awaits the user's go-ahead. After a killed worker the Mac's picker needed
+  Relay reopened to see the PC (no mDNS goodbye; finding 6, open).
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in

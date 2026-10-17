@@ -199,7 +199,16 @@ virtual display on an iGPU. The monitors go dark for a few seconds.
    …`; the physical monitors come back; the Mac can connect again without a
    PIN.
 
-## Report template
+## Gate result (2026-10-17)
+
+Every case passed on the hardware: 17 agent-run dev-host cases (probe-tested)
+and U1–U6 (real Mac through the installed service, except U5, which is a dev
+host with the virtual display and probe). Two bugs found on the way are fixed
+(the refused-desktop wait, and per-session GPU re-selection). Before the
+ffmpeg fallback can go, phase C must handle finding 2 natively; finding 6 is a
+discovery issue outside this gate.
+
+## Report
 
 | case | date/time | result | notes (HUD fps, PC work, log lines, anything odd) |
 |---|---|---|---|
@@ -207,7 +216,7 @@ virtual display on an iGPU. The monitors go dark for a few seconds.
 | U2 | 2026-10-17 21:50–21:56 UTC | **pass**, via the U1 sessions | CLIENT_HELLO flags 0b11 applied: `capturing … HEVC 4:4:4 10-bit 120 Mbps, preset balanced`; layout restored |
 | U3 | 2026-10-17 21:59–22:01 UTC | **pass** | Session 1: `SessionLock` → access lost → `capture recovered after 1.1s` (twice: lock, then a second desktop transition), `SessionUnlock` from the Mac → recovered 1.1 s, lock again → recovered 1.1 s, disconnect while locked → `physical monitor devices restored`, `display layout restored`. Session 2 connected to the still-locked PC: preflight, exact-mode virtual display, lock-screen capture, unlock from the Mac → recovered 1.1 s, disconnect → restored. No `capture restart refused`, no `cannot be captured`, no ffmpeg fallback (the SYSTEM worker captures the lock screen). The GDI names of the two physical monitors swapped between the sessions (`DISPLAY2 (ACR0692)` in session 2's snapshot); restore follows the saved paths, not the names. Session 2 ended with a 10053 send error after the restore (the Mac closed first). Still 4:4:4 10-bit Balanced |
 | U4 | 2026-10-17 22:13–22:16 UTC | **pass** | LUID before/after: 0:122e1 / 0:122e1 (unchanged, so `session_gpu`'s re-query was not exercised; it is unit-tested). Win+Ctrl+Shift+B at 22:13:57: `Desktop Duplication access lost`, then `display topology changed during capture … reasserting virtual-only 3024x1964@120` (the virtual monitor came back extended at x=3640), `exclusive topology`, `capture recovered after 1.7s and 1 encoder restart(s)`, 107–108 fps again; no ffmpeg fallback, no `capture restart refused`. The user saw the picture return after a couple of seconds; the physical monitors lit briefly without a picture during the driver restart and went dark again (no physical display was ever on the desktop: `physical displays active: none`). Disconnect restored the layout; a new session at 22:16:08 streamed normally without a PIN |
-| U5 | | | |
+| U5 | 2026-10-17 23:11–23:12 UTC | **pass** | Elevated dev host with the virtual display and `RELAY_TEST_FAULT=display-gpu`. Probe 3024×1964@120: preflight 186 ms, wake, layout saved, `exclusive topology`, 2 physical monitor devices disabled, `virtual display \\.\DISPLAY45 is the only display`, then `injecting 'display-gpu'`, `physical monitor devices restored` and `display layout restored` within 1.4 s, `the attached display failed revalidation (layout restored): … (LUID 0:fffedd1e instead of 0:122e1)`, STREAM_STOP encoder failed. The user saw the monitors go dark and come back. Probe 9000×9000: `session preflight refused the stream (no display was changed)` with no wake line; the monitors did not flicker. Service restarted, Running |
 | U6 | 2026-10-17 22:05–22:06 UTC | **pass** | Session through the preflight as before. Opening the elevated PowerShell (UAC's secure desktop) cost two access losses at 22:05:42 and :44, each `recovered after 1.1s`. The kill: `worker exited with 0xffffffff after 1468 s; restoring displays`, `MTT VDD: physical monitor devices restored`, `restoring the display layout saved by an earlier session`, `display layout restored`, `next worker in 5 s`, a new worker 5 s later (NVENC queried again, `listening`). The user confirmed the monitors. Afterwards the Mac's picker did not show the PC although the new worker was advertising (the PC's `browse` saw it on Ethernet); quitting and reopening Relay on the Mac brought it back (finding 6), and it then connected without a PIN |
 
 Known UI gap, by design for now: STREAM_STOP carries a reason code, not text,

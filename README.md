@@ -182,9 +182,23 @@ for 20 s. That last case found a lock-screen wait that never engaged for
 non-SYSTEM hosts, fixed. Another case found that a session starting while the
 previous one's capture is still being torn down cannot start native capture;
 ffmpeg covers that today, and native retry must handle it before ffmpeg goes.
-This build is installed as the service. **Not yet run:** the exclusive-display
-cases (real-Mac VDD sessions, GPU reset, lock/unlock, simulated hybrid mismatch,
-worker crash). The ffmpeg, AMF/QSV and Parsec code stays until those pass. See
+
+**Failure/recovery gate, exclusive-display half (2026-10-17): passed.** The
+real Mac ran through the installed service:
+- 3024×1964@120 Balanced sessions in 4:2:0 8-bit (105–108 fps) and in 4:4:4
+  10-bit (about 95 fps), with a quick reconnect;
+- lock and unlock, including connecting to a locked PC;
+- a graphics-driver restart (Win+Ctrl+Shift+B) mid-session, which recovered
+  in 1.7 s;
+- a killed worker, after which the service restored the monitors and started
+  a new worker in 5 s.
+
+A simulated hybrid mismatch on the virtual display rolled back the layout in
+1.4 s, and an oversized mode was refused without touching the monitors. The
+physical layout came back after every case. After the killed worker the Mac
+found the PC again only once Relay was reopened (an mDNS cache issue, recorded
+for later). The ffmpeg, AMF/QSV and Parsec code is still present; removing it
+is the next step. See
 [host/NVIDIA-RECOVERY-RETEST.md](host/NVIDIA-RECOVERY-RETEST.md).
 
 **Working and verified on the real hardware:** the virtual monitor at the
