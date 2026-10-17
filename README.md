@@ -229,9 +229,13 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 - [ ] Confirm the real Mac's pair-only name persists after a service restart;
       immediate tray naming passed on 2026-10-10. See the
       [Mac handoff](host/PAIR-NAME-HANDOFF.md).
-- [ ] Wake the PC's displays when a session starts; connecting hangs while
-      Windows has them off. The Mac now gives up with a message; the host
-      fix is in [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
+- [x] Wake the PC's displays when a session starts (2026-10-17): with the
+      displays off after inactivity, Observe-mode connects from the desktop
+      and from the lock screen showed a picture in about 2 s, and disconnect
+      restored the monitors. See [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
+- [ ] A session that sends no input (Observe) freezes once Windows'
+      display-off timeout passes mid-stream: capture gets no new frames.
+      Not fixed yet, and never with `ES_DISPLAY_REQUIRED`; see the same handoff
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app

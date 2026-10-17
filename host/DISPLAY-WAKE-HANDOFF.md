@@ -1,8 +1,9 @@
 # Windows handoff: wake the displays before a session starts
 
-Written by the Mac session on 2026-10-17. **Status: not started on Windows.**
-The Mac side shipped on its own (see "Mac side, done" below); this file is the
-PC session's to implement, verify and update.
+Written by the Mac session on 2026-10-17. **Status: done on Windows
+2026-10-17** (host commit `7b38109`, installed and verified on the real Mac;
+see "Windows verification record" below). The mid-session freeze in the open
+question is confirmed and **not fixed**.
 
 ## Symptom
 
@@ -73,6 +74,52 @@ whether that lights the device-locked physical monitors.
 5. The open question: Observe mode, no input, past the display-off timeout.
    Record whether the stream keeps updating.
 6. Put the timeout back to the user's setting.
+
+## Windows verification record — 2026-10-17
+
+Implemented as described: `input::wake_displays()` in `input.rs`, called from
+`handle_session` right before `acquire_display` inside
+`desktop::with_input_desktop("wake displays", …)`. Success logs `woke displays
+before session setup`; a failure logs a warning and the session goes on.
+`KeepAwake` is unchanged.
+
+1. `cargo fmt --check`, 161 unit tests plus the probe integration test (the
+   opt-in desktop test ignored), `cargo clippy --all-targets -- -D warnings` on
+   1.98 and 1.99, `cargo build --release`: all pass.
+2. Elevated `install-host.ps1 -SkipDriver`: service Running, installed
+   `C:\Program Files\Relay\relay-host.exe` SHA-256 =
+   `6335D2745E4408CA79C3AABCA7A3E78961E94FDEDC8C43983A241427252D5941`, the
+   same as the release build.
+3. The "turn off display after" timeout (Ultimate Performance plan) was
+   15 min on AC and 3 min on DC; AC was set to 1 min. With the PC idle and the
+   monitors dark (confirmed by the user), the real Mac connected in Observe
+   mode (`input=false`) at 11:46:07.727 UTC: the wake line followed at
+   .732, the virtual display was the only display at 11:46:09.47 and capture
+   started at 09.80 with fresh frames at once (343 of 600 in the first 5 s),
+   3024×1964 @ 120, HEVC 4:4:4 10-bit. Disconnect restored the physical
+   monitors and layout (log and user).
+4. Lock screen: SessionLock at 11:50:33, displays dark, Observe connect at
+   11:51:58.390, wake line at .394, capture at 11:52:00.4 (about 2.0 s). The
+   input desktop was reported as `Default` throughout. Desktop Duplication
+   lost access twice (11:52:05, and 11:52:16 at SessionUnlock) and was
+   recreated within about 1 s each time, the existing lock/unlock recovery.
+   The user reported the stream worked; disconnect restored monitors and
+   layout, matching that session's snapshot. (Windows had swapped the GDI
+   names `\\.\DISPLAY1`/`2` of the two ACR monitors between the step 3
+   session and this one; the restore follows the snapshot, not the names.)
+5. **Open question answered: yes, it freezes.** In an earlier Observe session
+   (connected 11:34:29, before the monitors had actually gone dark), the PC's
+   last input was at 11:34:51. From 11:35:51, 60 s later, every 5-second
+   capture report showed 0 fresh of 600 frames; the host kept sending 120 fps
+   of the last picture. A topmost window with a clock redrawing 10 times a
+   second, opened at 11:37:11 without any input, never appeared in capture or
+   on the Mac. Disconnecting restored monitors and layout. Not fixed; the
+   user decides how. The nudge idea above is untested, including whether it
+   lights the device-disabled physical monitors.
+6. The AC timeout is back to 15 min (`0x384`); DC was never changed.
+
+Not exercised: the Mac's "The PC sent no picture" message against the old
+host, and a wake failure path (the wake never failed).
 
 ## Mac side, done (2026-10-17)
 

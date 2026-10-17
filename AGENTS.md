@@ -73,10 +73,20 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   ("Connecting…"/"Starting…" for ever). Mac side done: `HostConnection` ends
   the attempt 20 s after CLIENT_HELLO without STREAM_START ("the PC didn't
   start the stream") and 10 s after STREAM_START without a FRAME ("the PC sent
-  no picture"); `Tools/test-pair-name.sh` covers both. Host side not started:
-  wake the displays with a zero-distance `SendInput` move before
-  `acquire_display`, never `ES_DISPLAY_REQUIRED` (see `KeepAwake`). Steps and
-  Windows checks: `host/DISPLAY-WAKE-HANDOFF.md`.
+  no picture"); `Tools/test-pair-name.sh` covers both. Host side done
+  (`7b38109`): `handle_session` sends one zero-distance relative `SendInput`
+  move (`input::wake_displays`, inside `with_input_desktop("wake displays")`)
+  after the display claim and before `acquire_display`, logs `woke displays
+  before session setup`, and only warns if it fails. Never `ES_DISPLAY_REQUIRED`
+  (see `KeepAwake`). Verified on Windows 2026-10-17: fmt, 161 unit tests plus
+  the probe integration test, clippy `-D warnings` on 1.98 and 1.99, release
+  build, installed hash `6335D274...52D5941`. With the display-off timeout at
+  1 min and the monitors dark, real-Mac Observe connects from the desktop and
+  from the lock screen captured in about 2 s; monitors and layout restored on
+  each disconnect. **Open:** an Observe session freezes once the timeout
+  passes mid-stream (0 fresh frames from 60 s after the last input, with a
+  ticking window on screen); not fixed, ask the user first. Evidence:
+  `host/DISPLAY-WAKE-HANDOFF.md`.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over
