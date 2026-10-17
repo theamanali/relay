@@ -284,13 +284,9 @@ impl VirtualDisplay for MttVdd {
     fn detach(&self, attachment: Attachment) -> Result<()> {
         let mut state = self.state();
         self.unlock_physical_outputs_locked(&mut state)?;
-        match attachment {
-            Attachment::Mtt { device_name } => {
-                log::debug!("MTT VDD: releasing {device_name}");
-                self.disable(&mut state)
-            }
-            other => bail!("MTT VDD cannot detach {other:?}"),
-        }
+        let Attachment::Mtt { device_name } = attachment;
+        log::debug!("MTT VDD: releasing {device_name}");
+        self.disable(&mut state)
     }
 
     fn cleanup(&self) -> Result<()> {

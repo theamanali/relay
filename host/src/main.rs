@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 
 use display::Mode;
-use driver::{DriverKind, VirtualDisplay};
+use driver::VirtualDisplay;
 use encoder::Quality;
 use gpu::GpuInfo;
 use protocol::Codec;
@@ -139,10 +139,6 @@ struct ServeArgs {
     /// name). Default: the NVIDIA adapter with the most dedicated VRAM.
     #[arg(long)]
     gpu: Option<String>,
-
-    /// Which virtual display driver to use
-    #[arg(long, value_enum, default_value_t = DriverKind::Auto)]
-    driver: DriverKind,
 
     /// Dev mode: stream the primary monitor, don't touch the virtual display driver
     #[arg(long)]
@@ -384,7 +380,7 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
         Some(Command::EncoderCaps { width, height, hz }) => {
             encoder_caps_report(&cli.serve, Mode { width, height, hz })
         }
-        Some(Command::Restore) => restore_displays(cli.serve.driver),
+        Some(Command::Restore) => restore_displays(),
         Some(Command::Pin { new }) => show_pin(new),
         Some(Command::Paired { forget }) => paired_clients(forget),
         Some(Command::Service { action }) => match action {
@@ -575,8 +571,8 @@ fn encoder_caps_report(args: &ServeArgs, mode: Mode) -> Result<()> {
 
 /// Open the driver and undo whatever an earlier session left behind (physical
 /// displays off, virtual device enabled).
-fn open_driver(kind: DriverKind) -> Result<Arc<dyn VirtualDisplay>> {
-    let drv = driver::open(kind)?;
+fn open_driver() -> Result<Arc<dyn VirtualDisplay>> {
+    let drv = driver::open()?;
     log::info!("virtual display driver: {}", drv.name());
     put_displays_back(&drv);
     Ok(drv)
@@ -616,8 +612,8 @@ fn put_displays_back(drv: &Arc<dyn VirtualDisplay>) {
 }
 
 /// `restore` subcommand: the manual way out if the physical displays stayed off.
-fn restore_displays(kind: DriverKind) -> Result<()> {
-    match driver::open(kind) {
+fn restore_displays() -> Result<()> {
+    match driver::open() {
         Ok(drv) => drv.cleanup()?,
         Err(e) => log::warn!("virtual display driver not available: {e:#}"),
     }
@@ -646,7 +642,7 @@ fn restore_displays(kind: DriverKind) -> Result<()> {
 /// restore, disable — and reports on every step.
 fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
     let gpu = select_gpu(args.gpu.as_deref())?;
-    let drv = open_driver(args.driver)?;
+    let drv = open_driver()?;
 
     let started = std::time::Instant::now();
     let source = server::acquire_display(Some(&drv), &gpu, want, true)?;
@@ -739,7 +735,7 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         log::warn!("--no-vdd: streaming the primary display instead of a virtual one");
         None
     } else {
-        Some(open_driver(args.driver)?)
+        Some(open_driver()?)
     };
     let advertisement: discovery::AdSlot = Arc::new(Mutex::new(None));
     {

@@ -3,8 +3,8 @@
   One-time, elevated setup for the Relay host on this PC.
 
 .DESCRIPTION
-  Default (-Driver mtt): installs MikeTheTech's Virtual Display Driver, the open-source
-  signed IddCx driver whose render GPU and modes the host controls at runtime:
+  Installs MikeTheTech's Virtual Display Driver, the open-source signed IddCx
+  driver whose render GPU and modes the host controls at runtime:
     1. Creates C:\VirtualDisplayDriver\vdd_settings.xml from tools\vdd_settings.template.xml,
        points the driver at it (HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver\VDDPATH) and
        grants your user write access so the unelevated host can rewrite it per session.
@@ -16,20 +16,14 @@
        headless. State lives in %ProgramData%\Relay (migrated from your
        %LOCALAPPDATA%\Relay on first install).
 
-  -Driver parsec installs parsec-vdd instead (fallback: no GPU choice, at most five
-  fixed modes given with -Resolutions).
+  The host needs an NVIDIA GPU with NVENC; it refuses to start without one.
 
   Run from an elevated PowerShell:
     Set-ExecutionPolicy -Scope Process Bypass
     .\tools\install-host.ps1
     .\tools\install-host.ps1 -SkipDriver      # driver already there: refresh service + exe
     .\tools\install-host.ps1 -Uninstall
-    .\tools\install-host.ps1 -Driver parsec -Resolutions "3024x1964@120","1512x982@120"
 
-.PARAMETER Driver
-  mtt (default) or parsec.
-.PARAMETER Resolutions
-  parsec only: up to five "WxH@Hz" modes to register. MTT modes are created on demand.
 .PARAMETER Uninstall
   Stop and remove the service, the old tasks and %ProgramFiles%\Relay. Keeps the
   driver and %ProgramData%\Relay (identity and pairings).
@@ -38,9 +32,6 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet("mtt", "parsec")]
-    [string]$Driver = "mtt",
-    [string[]]$Resolutions = @("3024x1964@120", "2268x1473@120", "1512x982@120"),
     [switch]$Uninstall,
     [switch]$SkipDriver,
     [int]$Port = 8468
@@ -114,126 +105,89 @@ function Remove-LockedHelper([string]$Path, [string]$InstallingUser) {
 # The user that will run the host (not the elevated admin identity, if they differ).
 $hostUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
 
-# =============================================================================
-if ($Driver -eq "mtt") {
-    $vddDir = "C:\VirtualDisplayDriver"
-    $settings = Join-Path $vddDir "vdd_settings.xml"
-    $regKey = "HKLM:\SOFTWARE\MikeTheTech\VirtualDisplayDriver"
-    $template = Join-Path $root "tools\vdd_settings.template.xml"
+$vddDir = "C:\VirtualDisplayDriver"
+$settings = Join-Path $vddDir "vdd_settings.xml"
+$regKey = "HKLM:\SOFTWARE\MikeTheTech\VirtualDisplayDriver"
+$template = Join-Path $root "tools\vdd_settings.template.xml"
 
-    # --- 1. settings file + registry pointer, before the driver first starts ---
-    New-Item -ItemType Directory -Force $vddDir | Out-Null
-    if (Test-Path $settings) {
-        Copy-Item $settings "$settings.previous" -Force
-        Write-Host "Replaced $settings (previous copy kept as vdd_settings.xml.previous)"
-    } else {
-        Write-Host "Created $settings"
+# --- 1. settings file + registry pointer, before the driver first starts ---
+New-Item -ItemType Directory -Force $vddDir | Out-Null
+if (Test-Path $settings) {
+    Copy-Item $settings "$settings.previous" -Force
+    Write-Host "Replaced $settings (previous copy kept as vdd_settings.xml.previous)"
+} else {
+    Write-Host "Created $settings"
+}
+Copy-Item $template $settings -Force
+New-Item -Path $regKey -Force | Out-Null
+New-ItemProperty -Path $regKey -Name VDDPATH -PropertyType String -Value $vddDir -Force | Out-Null
+# The host runs unelevated and merges each Mac's panel size into the file.
+& icacls $vddDir /grant "${hostUser}:(OI)(CI)M" /T | Out-Null
+Write-Host "Granted $hostUser modify rights on $vddDir"
+
+# --- 2. leftovers from the elevated-helper era -----------------------------
+# Device changes are done by the Relay service itself now (section 6);
+# the helper task, its script and the registry pointers are removed.
+foreach ($old in "Relay display driver", "Relay host",
+                 "TravelDisplay display driver", "TravelDisplay display driver restart", "TravelDisplay host") {
+    Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
+}
+Remove-ItemProperty -Path $regKey -Name HelperStatePath -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path $regKey -Name HelperPrivateStatePath -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:ProgramFiles "Relay\vdd-device.ps1") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:ProgramData "Relay\Requests") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:ProgramData "Relay\State") -Recurse -Force -ErrorAction SilentlyContinue
+
+# --- 3. driver ------------------------------------------------------------
+$device = Get-DeviceByHardwareId "Root\MttVDD"
+if ($SkipDriver) {
+    Write-Host "Skipping driver install."
+} elseif ($device) {
+    Write-Host "MTT Virtual Display Driver already present ($($device.Status))."
+} else {
+    $release = "25.7.23"
+    $driverZip = Get-Download "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/$release/VirtualDisplayDriver-x86.Driver.Only.zip" "VirtualDisplayDriver-$release-x64.zip"
+    $nefconZip = Get-Download "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip" "nefcon_v1.14.0.zip"
+
+    $work = Join-Path $downloads "mtt-$release"
+    if (Test-Path $work) { Remove-Item -Recurse -Force $work }
+    Expand-Archive -Path $driverZip -DestinationPath (Join-Path $work "driver") -Force
+    Expand-Archive -Path $nefconZip -DestinationPath (Join-Path $work "nefcon") -Force
+
+    $inf = Get-ChildItem -Path (Join-Path $work "driver") -Recurse -Filter "MttVDD.inf" | Select-Object -First 1
+    $cat = Get-ChildItem -Path (Join-Path $work "driver") -Recurse -Filter "*.cat" | Select-Object -First 1
+    $nefcon = Get-ChildItem -Path (Join-Path $work "nefcon") -Recurse -Filter "nefconc.exe" | Where-Object { $_.FullName -match "x64" } | Select-Object -First 1
+    if (-not $inf -or -not $cat -or -not $nefcon) { throw "unexpected archive layout under $work" }
+
+    # Trust the signer so the (signed) driver installs without a prompt.
+    $signer = (Get-AuthenticodeSignature $cat.FullName).SignerCertificate
+    if ($signer) {
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPublisher", "LocalMachine")
+        $store.Open("ReadWrite"); $store.Add($signer); $store.Close()
+        Write-Host "Trusted publisher: $($signer.Subject)"
     }
-    Copy-Item $template $settings -Force
-    New-Item -Path $regKey -Force | Out-Null
-    New-ItemProperty -Path $regKey -Name VDDPATH -PropertyType String -Value $vddDir -Force | Out-Null
-    # The host runs unelevated and merges each Mac's panel size into the file.
-    & icacls $vddDir /grant "${hostUser}:(OI)(CI)M" /T | Out-Null
-    Write-Host "Granted $hostUser modify rights on $vddDir"
 
-    # --- 2. leftovers from the elevated-helper era -----------------------------
-    # Device changes are done by the Relay service itself now (section 4);
-    # the helper task, its script and the registry pointers are removed.
-    foreach ($old in "Relay display driver", "Relay host",
-                     "TravelDisplay display driver", "TravelDisplay display driver restart", "TravelDisplay host") {
-        Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
-    }
-    Remove-ItemProperty -Path $regKey -Name HelperStatePath -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $regKey -Name HelperPrivateStatePath -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $vddDir "vdd-device.ps1") -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $env:ProgramFiles "Relay\vdd-device.ps1") -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $env:ProgramData "Relay\Requests") -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $env:ProgramData "Relay\State") -Recurse -Force -ErrorAction SilentlyContinue
-
-    # --- 3. driver ------------------------------------------------------------
+    Write-Host "Installing driver from $($inf.FullName) ..."
+    & $nefcon.FullName install $inf.FullName "Root\MttVDD"
+    if ($LASTEXITCODE -ne 0) { throw "nefcon exited with $LASTEXITCODE" }
+    Start-Sleep -Seconds 3
     $device = Get-DeviceByHardwareId "Root\MttVDD"
-    if ($SkipDriver) {
-        Write-Host "Skipping driver install."
-    } elseif ($device) {
-        Write-Host "MTT Virtual Display Driver already present ($($device.Status))."
-    } else {
-        $release = "25.7.23"
-        $driverZip = Get-Download "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/$release/VirtualDisplayDriver-x86.Driver.Only.zip" "VirtualDisplayDriver-$release-x64.zip"
-        $nefconZip = Get-Download "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip" "nefcon_v1.14.0.zip"
-
-        $work = Join-Path $downloads "mtt-$release"
-        if (Test-Path $work) { Remove-Item -Recurse -Force $work }
-        Expand-Archive -Path $driverZip -DestinationPath (Join-Path $work "driver") -Force
-        Expand-Archive -Path $nefconZip -DestinationPath (Join-Path $work "nefcon") -Force
-
-        $inf = Get-ChildItem -Path (Join-Path $work "driver") -Recurse -Filter "MttVDD.inf" | Select-Object -First 1
-        $cat = Get-ChildItem -Path (Join-Path $work "driver") -Recurse -Filter "*.cat" | Select-Object -First 1
-        $nefcon = Get-ChildItem -Path (Join-Path $work "nefcon") -Recurse -Filter "nefconc.exe" | Where-Object { $_.FullName -match "x64" } | Select-Object -First 1
-        if (-not $inf -or -not $cat -or -not $nefcon) { throw "unexpected archive layout under $work" }
-
-        # Trust the signer so the (signed) driver installs without a prompt.
-        $signer = (Get-AuthenticodeSignature $cat.FullName).SignerCertificate
-        if ($signer) {
-            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPublisher", "LocalMachine")
-            $store.Open("ReadWrite"); $store.Add($signer); $store.Close()
-            Write-Host "Trusted publisher: $($signer.Subject)"
-        }
-
-        Write-Host "Installing driver from $($inf.FullName) ..."
-        & $nefcon.FullName install $inf.FullName "Root\MttVDD"
-        if ($LASTEXITCODE -ne 0) { throw "nefcon exited with $LASTEXITCODE" }
-        Start-Sleep -Seconds 3
-        $device = Get-DeviceByHardwareId "Root\MttVDD"
-        if (-not $device) { throw "driver installed but the Root\MttVDD device did not appear" }
-        Write-Host "Driver installed: $($device.FriendlyName) ($($device.Status))"
-    }
-
-    # --- 4. leave the device disabled: the monitor exists only while a Mac is connected
-    if ($device) {
-        if ($device.Status -eq "OK" -or $device.Problem -ne 22) {
-            $device | Disable-PnpDevice -Confirm:$false -ErrorAction Stop
-            Start-Sleep -Seconds 2
-        }
-        $device = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains "Root\MttVDD" } | Select-Object -First 1
-        Write-Host "Device status: $($device.Status) (disabled until the host needs it)"
-    }
+    if (-not $device) { throw "driver installed but the Root\MttVDD device did not appear" }
+    Write-Host "Driver installed: $($device.FriendlyName) ($($device.Status))"
 }
-# =============================================================================
-else {
-    $driverUrl = "https://builds.parsec.app/vdd/parsec-vdd-0.45.0.0.exe"   # Windows 10 21H2+ / 11
-    $device = Get-DeviceByHardwareId "Root\Parsec\VDA"
-    if ($SkipDriver) {
-        Write-Host "Skipping driver install."
-    } elseif ($device) {
-        Write-Host "Parsec Virtual Display Driver already present ($($device.Status))."
-    } else {
-        $installer = Get-Download $driverUrl "parsec-vdd-0.45.0.0.exe"
-        Write-Host "Installing parsec-vdd (silent)..."
-        $p = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
-        if ($p.ExitCode -ne 0) { throw "driver installer exited with $($p.ExitCode)" }
+
+# --- 4. leave the device disabled: the monitor exists only while a Mac is connected
+if ($device) {
+    if ($device.Status -eq "OK" -or $device.Problem -ne 22) {
+        $device | Disable-PnpDevice -Confirm:$false -ErrorAction Stop
         Start-Sleep -Seconds 2
-        $device = Get-DeviceByHardwareId "Root\Parsec\VDA"
-        if (-not $device) { throw "driver installed but the Root\Parsec\VDA device did not appear" }
-        Write-Host "Driver installed: $($device.FriendlyName) ($($device.Status))"
     }
-
-    # parsec-vdd only offers what is registered here (five slots).
-    $key = "HKLM:\SOFTWARE\Parsec\vdd"
-    New-Item -Path $key -Force | Out-Null
-    Get-ChildItem $key -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-    $slot = 0
-    foreach ($r in $Resolutions | Select-Object -First 5) {
-        if ($r -notmatch '^(\d+)x(\d+)@(\d+)$') { throw "bad resolution '$r' (want WxH@Hz)" }
-        $sub = New-Item -Path (Join-Path $key $slot) -Force
-        New-ItemProperty -Path $sub.PSPath -Name width  -PropertyType DWord -Value ([int]$Matches[1]) -Force | Out-Null
-        New-ItemProperty -Path $sub.PSPath -Name height -PropertyType DWord -Value ([int]$Matches[2]) -Force | Out-Null
-        New-ItemProperty -Path $sub.PSPath -Name hz     -PropertyType DWord -Value ([int]$Matches[3]) -Force | Out-Null
-        Write-Host "Resolution slot $slot = $r"
-        $slot++
-    }
+    $device = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains "Root\MttVDD" } | Select-Object -First 1
+    Write-Host "Device status: $($device.Status) (disabled until the host needs it)"
 }
 
-# --- 3. firewall ------------------------------------------------------------
+# --- 5. firewall ------------------------------------------------------------
 foreach ($rule in @(
     @{ Name = "Relay host (TCP $Port)"; Proto = "TCP"; Port = $Port },
     @{ Name = "Relay mDNS (UDP 5353)";  Proto = "UDP"; Port = 5353 }
@@ -247,7 +201,7 @@ foreach ($rule in @(
     }
 }
 
-# --- 4. the Relay service ---------------------------------------------------
+# --- 6. the Relay service ---------------------------------------------------
 # Runs as LocalSystem and keeps the host alive inside the signed-in session
 # (as SYSTEM too), which is what lets it stream the lock and login screens
 # and flip device nodes without any helper. It runs a copy of the exe from

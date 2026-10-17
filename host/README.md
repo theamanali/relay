@@ -70,8 +70,6 @@ The installer:
 |---|---|
 | `-SkipDriver` | Don't touch the driver; refresh the settings, firewall, exe and service. **Use this after every rebuild.** |
 | `-Uninstall` | Remove the service and `%ProgramFiles%\Relay`. Keeps the driver and `%ProgramData%\Relay` (identity and pairings). |
-| `-Driver parsec` | Install [parsec-vdd](https://github.com/nomi-san/parsec-vdd) instead (untested; no GPU choice, fixed modes). |
-| `-Resolutions "WxH@Hz",…` | parsec only: up to five modes to register. |
 | `-Port <n>` | Port for the firewall rule. The service itself always listens on 8468. |
 
 ## Running
@@ -158,7 +156,6 @@ Starting a second host shows a "Relay is already running" box.
 | flag | default | meaning |
 |---|---|---|
 | `--gpu <name>` | the NVIDIA GPU with the most dedicated VRAM | NVIDIA GPU to render and encode on (case-insensitive substring of its name); a name that matches only other vendors is refused. |
-| `--driver auto\|mtt\|parsec` | `auto` | Virtual display driver; `auto` means MTT if installed, else parsec-vdd. |
 | `--codec hevc\|h264` | `hevc` | Preferred codec; the Mac must support it too. |
 | `--bitrate <Mbps>` | the Mac's request | Override the bitrate (1–1000, constant bitrate). |
 | `--fps <n>` | display refresh | Force a frame rate. |
@@ -326,7 +323,7 @@ learns within seconds that the tray forgot it.
 | [`cpace.rs`](src/cpace.rs), [`field25519.rs`](src/field25519.rs) | CPace (draft-21) and the field arithmetic and Elligator 2 map under it |
 | [`protocol.rs`](src/protocol.rs) | Message types and encoding |
 | [`discovery.rs`](src/discovery.rs), [`sysinfo.rs`](src/sysinfo.rs) | mDNS advertisement and the PC facts in it |
-| [`driver/`](src/driver/) | Virtual display backends: [MTT](src/driver/mtt.rs) (default) and [parsec-vdd](src/driver/parsec.rs) |
+| [`driver/`](src/driver/) | The virtual display driver: [MTT](src/driver/mtt.rs) behind a small trait that tests stand in for |
 | [`devnode.rs`](src/devnode.rs) | Enabling and disabling devices (CfgMgr32), physical monitor lock |
 | [`topology.rs`](src/topology.rs) | Display layout snapshot, exclusive mode and restore (CCD API) |
 | [`display.rs`](src/display.rs) | Monitors, modes, and mapping a display to its DXGI adapter and output |
@@ -387,8 +384,6 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
   whether a mode sustains its rate is measured per session.
 - STREAM_STOP carries a reason code, not text, so the Mac cannot show why the
   PC refused a session.
-- parsec-vdd is untested, can't pin the render GPU and offers at most five fixed
-  modes (to be removed).
 - The service can't pass options to its worker; it always runs with defaults.
 - The exe has no file icon of its own yet (only the tray icon is drawn).
 - The BIOS and anything before Windows starts are not visible.

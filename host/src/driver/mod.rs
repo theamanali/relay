@@ -1,35 +1,21 @@
-//! Virtual display driver backends. The host needs one thing from a driver:
-//! "plug in a monitor of this size on this GPU, unplug it later".
-//!
-//! * [`mtt::MttVdd`] — MikeTheTech's Virtual Display Driver (default): render
-//!   GPU is selectable, modes are whatever we write into its settings file.
-//! * [`parsec::ParsecVdd`] — parsec-vdd (fallback): instant IOCTL add/remove,
-//!   but no GPU choice and only the ≤5 modes pre-registered in the registry.
+//! The virtual display driver: "plug in a monitor of this size on this GPU,
+//! unplug it later". [`mtt::MttVdd`] (MikeTheTech's Virtual Display Driver) is
+//! the one backend: its render GPU is selectable and its modes are whatever we
+//! write into its settings file. The trait stays so tests can stand in for it.
 
 pub mod mtt;
-pub mod parsec;
 
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
-use clap::ValueEnum;
+use anyhow::{Context, Result};
 
 use crate::display::{Mode, Monitor};
 use crate::gpu::GpuInfo;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum DriverKind {
-    /// MTT VDD if installed, else parsec-vdd
-    Auto,
-    Mtt,
-    Parsec,
-}
 
 /// Handle to a plugged-in virtual monitor, returned by `attach` and consumed by `detach`.
 #[derive(Debug)]
 pub enum Attachment {
     Mtt { device_name: String },
-    Parsec { index: u32, device_name: String },
 }
 
 pub trait VirtualDisplay: Send + Sync {
@@ -72,32 +58,11 @@ pub trait VirtualDisplay: Send + Sync {
     fn cleanup(&self) -> Result<()>;
 }
 
-/// Open the requested backend, or the first one that is installed.
-pub fn open(kind: DriverKind) -> Result<Arc<dyn VirtualDisplay>> {
-    match kind {
-        DriverKind::Mtt => Ok(Arc::new(mtt::MttVdd::detect()?)),
-        DriverKind::Parsec => Ok(Arc::new(parsec::ParsecVdd::open()?)),
-        DriverKind::Auto => {
-            match mtt::MttVdd::detect() {
-                Ok(d) => return Ok(Arc::new(d)),
-                Err(e) => log::debug!("MTT VDD not available: {e:#}"),
-            }
-            match parsec::ParsecVdd::open() {
-                Ok(d) => {
-                    log::warn!(
-                        "using parsec-vdd: it cannot pin the render GPU and only offers the modes \
-                         registered in HKLM\\SOFTWARE\\Parsec\\vdd"
-                    );
-                    Ok(Arc::new(d))
-                }
-                Err(e) => {
-                    log::debug!("parsec-vdd not available: {e:#}");
-                    bail!(
-                        "no virtual display driver found. Run tools/install-host.ps1 from an \
-                         elevated PowerShell (installs MikeTheTech's Virtual Display Driver)"
-                    )
-                }
-            }
-        }
-    }
+/// Open the MTT Virtual Display Driver.
+pub fn open() -> Result<Arc<dyn VirtualDisplay>> {
+    let driver = mtt::MttVdd::detect().context(
+        "no virtual display driver found. Run tools/install-host.ps1 from an \
+         elevated PowerShell (installs MikeTheTech's Virtual Display Driver)",
+    )?;
+    Ok(Arc::new(driver))
 }
