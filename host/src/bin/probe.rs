@@ -72,6 +72,9 @@ struct Args {
     /// Wiggle the mouse across the display while connected (tests input injection)
     #[arg(long)]
     wiggle: bool,
+    /// Print the frames received in each second, to see capture stop and resume
+    #[arg(long)]
+    progress: bool,
     /// PIN to pair with if this probe identity is not paired yet
     #[arg(long)]
     pin: Option<String>,
@@ -97,6 +100,10 @@ struct Args {
     /// Offer only this codec (default: H.264 and HEVC, like the Mac)
     #[arg(long, value_enum)]
     codec: Option<CodecArg>,
+    /// Send this raw CLIENT_HELLO codec mask instead (e.g. 4: a codec the
+    /// host cannot encode), to test the "no codec in common" refusal
+    #[arg(long, conflicts_with = "codec", hide = true)]
+    codec_mask: Option<u8>,
     /// Ask for an encoder quality (CLIENT_HELLO extension; sent only when the
     /// host advertises it, and only with this, --444 or --10bit)
     #[arg(long, value_enum)]
@@ -200,10 +207,11 @@ fn main() -> Result<()> {
     hello.extend_from_slice(&args.hz.to_be_bytes());
     hello.extend_from_slice(&args.bitrate.to_be_bytes());
     hello.push(0x01); // wants input
-    hello.push(match args.codec {
-        None => Codec::H264.bit() | Codec::Hevc.bit(),
-        Some(CodecArg::H264) => Codec::H264.bit(),
-        Some(CodecArg::Hevc) => Codec::Hevc.bit(),
+    hello.push(match (args.codec_mask, args.codec) {
+        (Some(mask), _) => mask,
+        (None, None) => Codec::H264.bit() | Codec::Hevc.bit(),
+        (None, Some(CodecArg::H264)) => Codec::H264.bit(),
+        (None, Some(CodecArg::Hevc)) => Codec::Hevc.bit(),
     });
     hello.extend_from_slice(&protocol::pair_name_ad(&args.name));
     if args.quality.is_some() || args.full_color || args.ten_bit {
@@ -255,9 +263,19 @@ fn main() -> Result<()> {
     let mut first_frame_at: Option<Duration> = None;
     let mut last_wiggle = Instant::now();
     let mut phase = 0u32;
+    let (mut next_report, mut reported_frames) = (start + Duration::from_secs(1), 0u64);
     rx.set_read_timeout(Some(Duration::from_secs(3)))?;
 
     while Instant::now() < deadline {
+        if args.progress && Instant::now() >= next_report {
+            println!(
+                "t={:>3}s {:>4} frames",
+                (next_report - start).as_secs(),
+                frames - reported_frames
+            );
+            reported_frames = frames;
+            next_report += Duration::from_secs(1);
+        }
         let (ty, flags, p) = match rx.recv() {
             Ok(m) => m,
             Err(e)

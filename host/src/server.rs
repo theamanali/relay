@@ -903,7 +903,13 @@ fn handle_session(
         height: placement.height,
         hz: placement.hz,
     };
-    let plan = match revalidate_plan(plan, actual, source.location.adapter_luid, &host_video)
+    let mut display_luid = source.location.adapter_luid;
+    if crate::test_fault("display-gpu") {
+        // What a hybrid laptop does when Windows renders the virtual display
+        // on the iGPU.
+        display_luid.low ^= 0xffff_ffff;
+    }
+    let plan = match revalidate_plan(plan, actual, display_luid, &host_video)
         .with_context(|| {
             format!(
                 "the display came up at {}x{}@{} on '{}'",

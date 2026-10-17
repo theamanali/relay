@@ -269,6 +269,12 @@ impl Drop for CapsSession {
 /// found before any display is touched. No Desktop Duplication and no input
 /// resources.
 pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
+    if crate::test_fault("trial") {
+        bail!(
+            "NvEncInitializeEncoder failed (forced by {})",
+            crate::TEST_FAULT_VAR
+        );
+    }
     let device = create_device_for(gpu.luid)?;
     let mut trial = TrialSession(Some(EncoderSession {
         api: NvApi::load()?,

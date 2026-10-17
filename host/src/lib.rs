@@ -72,6 +72,28 @@ pub fn migrate_user_state() {
     }
 }
 
+/// Test hook for failure cases this hardware cannot produce on its own:
+/// `RELAY_TEST_FAULT=trial,display-gpu` (comma-separated names). Never set
+/// for the service; a dev host started with it logs every fault it injects.
+pub const TEST_FAULT_VAR: &str = "RELAY_TEST_FAULT";
+
+/// Whether `RELAY_TEST_FAULT` names `fault`.
+pub fn test_fault(fault: &str) -> bool {
+    let requested = std::env::var(TEST_FAULT_VAR)
+        .map(|value| fault_listed(&value, fault))
+        .unwrap_or(false);
+    if requested {
+        log::warn!("{TEST_FAULT_VAR}: injecting '{fault}'");
+    }
+    requested
+}
+
+fn fault_listed(value: &str, fault: &str) -> bool {
+    value
+        .split(',')
+        .any(|name| name.trim().eq_ignore_ascii_case(fault))
+}
+
 /// Make `path` readable by SYSTEM and administrators only (the identity key
 /// lives in a directory everyone may read). Needs administrator rights;
 /// silently a no-op without them, since then the file was not ours to lock.
@@ -98,5 +120,20 @@ pub fn restrict_to_admins(path: &std::path::Path) {
             String::from_utf8_lossy(&o.stderr).trim()
         ),
         Err(e) => log::warn!("could not run icacls for {}: {e}", path.display()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_faults_are_named_in_a_comma_list() {
+        assert!(fault_listed("trial", "trial"));
+        assert!(fault_listed("display-gpu, trial", "trial"));
+        assert!(fault_listed(" Trial ", "trial"));
+        assert!(!fault_listed("trial", "display-gpu"));
+        assert!(!fault_listed("trials", "trial"));
+        assert!(!fault_listed("", "trial"));
     }
 }
