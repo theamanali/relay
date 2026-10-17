@@ -819,6 +819,7 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         prefer_ffmpeg: args.no_native,
         lock_physical: !args.no_lock_physical,
         gpu,
+        gpu_want: args.gpu.clone(),
         driver: driver.clone(),
         allow_input: !args.no_input,
         identity,

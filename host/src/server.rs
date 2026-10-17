@@ -87,8 +87,11 @@ pub struct ServerConfig {
     /// Disable the physical monitor device nodes for the session (keeps games
     /// from reactivating them). Off = only remove them from the desktop.
     pub lock_physical: bool,
-    /// GPU that renders the virtual display and encodes the stream.
+    /// GPU that renders the virtual display and encodes the stream, as
+    /// selected at startup; each session selects it again (`session_gpu`).
     pub gpu: GpuInfo,
+    /// The `--gpu` the startup selection used, for those re-selections.
+    pub gpu_want: Option<String>,
     /// Dev mode (`None`): stream the primary monitor instead of adding a virtual one.
     pub driver: Option<Arc<dyn VirtualDisplay>>,
     pub allow_input: bool,
@@ -858,10 +861,27 @@ fn handle_session(
     }
 
     // --- preflight: everything that can fail without touching a display ---
-    let host_video = HostVideo::from_config(cfg);
+    let selected = crate::gpu::enumerate().and_then(|gpus| {
+        session_gpu(
+            &cfg.gpu,
+            &cfg.encoder_caps,
+            &gpus,
+            cfg.gpu_want.as_deref(),
+            cfg.intra_refresh,
+            crate::nvenc_caps::query,
+        )
+    });
+    let (gpu, encoder_caps) = match selected {
+        Ok(selected) => selected,
+        Err(e) => {
+            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
+            return Err(e.context("session preflight could not find the selected GPU"));
+        }
+    };
+    let host_video = HostVideo::new(cfg, &encoder_caps);
     let bitrate_mbps = selected_bitrate(hello.bitrate_mbps, cfg.bitrate_override_mbps);
     let plan = match plan_session(&hello, &host_video)
-        .and_then(|plan| trial_encoder(cfg, &plan, bitrate_mbps).map(|()| plan))
+        .and_then(|plan| trial_encoder(cfg, &gpu, &plan, bitrate_mbps).map(|()| plan))
     {
         Ok(plan) => plan,
         Err(e) => {
@@ -871,8 +891,7 @@ fn handle_session(
             return Err(e.context("session preflight refused the stream (no display was changed)"));
         }
     };
-    if !cfg.encoder_caps.video_caps(cfg.intra_refresh).hevc && hello.codecs & Codec::Hevc.bit() != 0
-    {
+    if !encoder_caps.video_caps(cfg.intra_refresh).hevc && hello.codecs & Codec::Hevc.bit() != 0 {
         log::info!("client offers HEVC, but this GPU's HEVC encoder is not usable: using H.264");
     }
 
@@ -896,7 +915,7 @@ fn handle_session(
         Ok(()) => log::info!("woke displays before session setup"),
         Err(e) => log::warn!("could not wake displays before session setup: {e:#}"),
     }
-    let mut source = acquire_display(cfg.driver.as_ref(), &cfg.gpu, want, cfg.lock_physical)?;
+    let mut source = acquire_display(cfg.driver.as_ref(), &gpu, want, cfg.lock_physical)?;
     let placement = source.placement;
     let actual = Mode {
         width: placement.width,
@@ -929,7 +948,7 @@ fn handle_session(
                     plan.height,
                     plan.fps
                 );
-                trial_encoder(cfg, &checked, bitrate_mbps).map(|()| checked)
+                trial_encoder(cfg, &gpu, &checked, bitrate_mbps).map(|()| checked)
             }
         }) {
         Ok(plan) => plan,
@@ -978,7 +997,7 @@ fn handle_session(
         } else {
             ""
         },
-        crate::encoder::encoder_name(cfg.gpu.vendor, codec, cfg.prefer_ffmpeg),
+        crate::encoder::encoder_name(gpu.vendor, codec, cfg.prefer_ffmpeg),
     );
 
     tx.send(
@@ -1008,7 +1027,7 @@ fn handle_session(
         end_request: Arc::clone(&end_request),
     });
 
-    let mut encoder_config = encoder_config(cfg, &plan, bitrate_mbps, Some(&source.location));
+    let mut encoder_config = encoder_config(cfg, &gpu, &plan, bitrate_mbps, Some(&source.location));
     let mut encoder = match Encoder::spawn(&encoder_config) {
         Ok(e) => e,
         Err(e) if crate::encoder::is_desktop_not_capturable(&e) => {
@@ -1056,7 +1075,7 @@ fn handle_session(
         encoder_config: &mut encoder_config,
         source: &mut source,
         driver: cfg.driver.as_ref(),
-        gpu: &cfg.gpu,
+        gpu: &gpu,
         want,
     };
     let ending = SessionEnding {
@@ -1461,17 +1480,18 @@ fn refuse_stream(tx: &mut SecureWriter, rx: &mut SecureReader, reason: u8) {
 /// `None` and the selected GPU stands in for the capture adapter.
 fn encoder_config(
     cfg: &ServerConfig,
+    gpu: &GpuInfo,
     plan: &SessionPlan,
     bitrate_mbps: u32,
     location: Option<&OutputLocation>,
 ) -> EncoderConfig {
     EncoderConfig {
         ffmpeg: cfg.ffmpeg.clone(),
-        vendor: cfg.gpu.vendor,
-        capture_adapter_idx: location.map_or(cfg.gpu.adapter_index, |l| l.adapter_index),
-        encode_adapter_idx: cfg.gpu.adapter_index,
-        capture_luid: location.map_or(cfg.gpu.luid, |l| l.adapter_luid),
-        encode_luid: cfg.gpu.luid,
+        vendor: gpu.vendor,
+        capture_adapter_idx: location.map_or(gpu.adapter_index, |l| l.adapter_index),
+        encode_adapter_idx: gpu.adapter_index,
+        capture_luid: location.map_or(gpu.luid, |l| l.adapter_luid),
+        encode_luid: gpu.luid,
         output_idx: location.map_or(0, |l| l.output_index),
         width: plan.width,
         height: plan.height,
@@ -1490,13 +1510,18 @@ fn encoder_config(
 /// Initialize Relay's real encoder configuration on the selected GPU at the
 /// plan's size and tear it down again, so a driver that refuses it is found
 /// before any display changes.
-fn trial_encoder(cfg: &ServerConfig, plan: &SessionPlan, bitrate_mbps: u32) -> Result<()> {
+fn trial_encoder(
+    cfg: &ServerConfig,
+    gpu: &GpuInfo,
+    plan: &SessionPlan,
+    bitrate_mbps: u32,
+) -> Result<()> {
     let started = Instant::now();
-    crate::nvenc_caps::trial_initialize(&cfg.gpu, &encoder_config(cfg, plan, bitrate_mbps, None))
+    crate::nvenc_caps::trial_initialize(gpu, &encoder_config(cfg, gpu, plan, bitrate_mbps, None))
         .with_context(|| {
         format!(
             "NVENC on {} refused {} {}x{}@{}",
-            cfg.gpu.name,
+            gpu.name,
             codec_label(plan.codec),
             plan.width,
             plan.height,
@@ -1523,6 +1548,35 @@ fn choose_codec(offered: u8, preferred: Codec, host_mask: u8) -> Option<Codec> {
         .find(|&codec| offered & host_mask & codec.bit() != 0)
 }
 
+/// The selected GPU as it is now, and its NVENC record. A driver restart or
+/// update gives the adapter a new LUID, and the startup record would then
+/// refuse every session (no adapter has its LUID): select again by the same
+/// policy, and query NVENC again when the LUID moved.
+fn session_gpu(
+    startup: &GpuInfo,
+    startup_caps: &EncoderCaps,
+    gpus: &[GpuInfo],
+    want: Option<&str>,
+    intra_refresh: bool,
+    query: impl FnOnce(&GpuInfo) -> Result<EncoderCaps>,
+) -> Result<(GpuInfo, EncoderCaps)> {
+    let current = crate::gpu::choose(gpus, want)?;
+    if current.luid == startup.luid {
+        return Ok((current, startup_caps.clone()));
+    }
+    log::warn!(
+        "{} has LUID {:x}:{:x}, not {:x}:{:x} as at startup (the driver restarted or was updated); querying NVENC again",
+        current.name,
+        current.luid.high,
+        current.luid.low,
+        startup.luid.high,
+        startup.luid.low
+    );
+    let caps = query(&current).with_context(|| format!("querying NVENC on {}", current.name))?;
+    caps.ensure_usable(intra_refresh)?;
+    Ok((current, caps))
+}
+
 /// What a session will encode, decided before any display is touched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionPlan {
@@ -1543,15 +1597,15 @@ struct HostVideo<'a> {
     caps: &'a EncoderCaps,
 }
 
-impl HostVideo<'_> {
-    fn from_config(cfg: &ServerConfig) -> HostVideo<'_> {
+impl<'a> HostVideo<'a> {
+    fn new(cfg: &ServerConfig, caps: &'a EncoderCaps) -> Self {
         HostVideo {
             preferred: cfg.codec,
             quality_override: cfg.quality_override,
             fps_override: cfg.fps,
             intra_refresh: cfg.intra_refresh,
             prefer_ffmpeg: cfg.prefer_ffmpeg,
-            caps: &cfg.encoder_caps,
+            caps,
         }
     }
 
@@ -1898,6 +1952,7 @@ mod pairing_wait_tests {
                 luid: crate::gpu::Luid { low: 0, high: 0 },
                 kind: crate::gpu::AdapterKind::default(),
             },
+            gpu_want: None,
             driver: Some(Arc::new(NoDisplay)),
             allow_input: false,
             identity: Arc::new(Identity::generate()),
@@ -2135,6 +2190,93 @@ mod display_claim_tests {
             120
         ));
         assert!(!is_congested(elapsed, 500, Duration::from_secs(2), 120));
+    }
+}
+
+#[cfg(test)]
+mod session_gpu_tests {
+    use super::*;
+    use crate::gpu::{AdapterKind, Vendor};
+    use crate::nvenc_caps::fixture;
+
+    fn rtx(low: u32) -> GpuInfo {
+        GpuInfo {
+            adapter_index: 0,
+            name: "NVIDIA GeForce RTX 3080 Ti".into(),
+            vendor: Vendor::Nvidia,
+            dedicated_vram: 12 << 30,
+            luid: Luid { low, high: 0 },
+            kind: AdapterKind::default(),
+        }
+    }
+
+    fn caps_for(gpu: &GpuInfo) -> EncoderCaps {
+        EncoderCaps {
+            luid: gpu.luid,
+            ..fixture::rtx()
+        }
+    }
+
+    #[test]
+    fn an_unchanged_gpu_keeps_the_startup_record() {
+        let startup = rtx(0x122e1);
+        let (gpu, caps) = session_gpu(
+            &startup,
+            &caps_for(&startup),
+            &[rtx(0x122e1)],
+            None,
+            false,
+            |_| panic!("must not query NVENC again"),
+        )
+        .unwrap();
+        assert_eq!(gpu.luid, startup.luid);
+        assert_eq!(caps, caps_for(&startup));
+    }
+
+    #[test]
+    fn a_driver_restart_requeries_the_gpu_under_its_new_luid() {
+        let startup = rtx(0x122e1);
+        let restarted = rtx(0x5a5a5);
+        let (gpu, caps) = session_gpu(
+            &startup,
+            &caps_for(&startup),
+            std::slice::from_ref(&restarted),
+            None,
+            false,
+            |gpu| Ok(caps_for(gpu)),
+        )
+        .unwrap();
+        assert_eq!(gpu.luid, restarted.luid);
+        assert_eq!(caps.luid, restarted.luid);
+    }
+
+    #[test]
+    fn a_vanished_or_unusable_gpu_refuses_the_session() {
+        let startup = rtx(0x122e1);
+        let startup_caps = caps_for(&startup);
+        assert!(session_gpu(&startup, &startup_caps, &[], None, false, |_| {
+            panic!("nothing to query")
+        })
+        .is_err());
+
+        let restarted = rtx(0x5a5a5);
+        let failed = session_gpu(
+            &startup,
+            &startup_caps,
+            std::slice::from_ref(&restarted),
+            None,
+            false,
+            |_| bail!("NvEncOpenEncodeSessionEx failed"),
+        );
+        assert!(format!("{:#}", failed.unwrap_err()).contains("NvEncOpenEncodeSessionEx"));
+
+        let unusable = session_gpu(&startup, &startup_caps, &[restarted], None, false, |gpu| {
+            Ok(EncoderCaps {
+                luid: gpu.luid,
+                ..fixture::caps(vec![])
+            })
+        });
+        assert!(unusable.is_err());
     }
 }
 
