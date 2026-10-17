@@ -30,10 +30,41 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   picker restoration below), isolated
   fakehost checks, local release/signature and picker/PIN/Forget smoke tests
   pass on macOS 27.0. Real-PC latency/input/display regressions and minimum /
-  latest stable OS qualification remain pending. Windows NVIDIA enforcement
-  and backend cleanup are **not implemented** in the Mac session; execute
-  `docs/WINDOWS-PLATFORM-HANDOFF.md` on the PC. Details and acceptance gates:
-  `docs/PLATFORM-REVIEW.md#implementation-status`.
+  latest stable OS qualification remain pending. Windows NVIDIA enforcement is
+  done (phase A, below); backend cleanup (phase C) waits on the failure/recovery
+  gate (phase B) of `docs/WINDOWS-PLATFORM-HANDOFF.md`. Details and acceptance
+  gates: `docs/PLATFORM-REVIEW.md#implementation-status`.
+
+- NVIDIA enforcement, phase A (2026-10-17, handoff steps 1–4; `9334c1e`,
+  `2f91bb4`, `421c177`, `4a8c5d6`): `gpu::choose` considers only `gpu::eligible`
+  adapters (NVIDIA, not software, not the IDD proxy), most VRAM then lowest
+  DXGI index; an explicit `--gpu` must match one; `describe` still lists all.
+  `NvApi::load` calls `NvEncodeAPIGetMaxSupportedVersion` first and refuses
+  below `REQUIRED_DRIVER_API` = `(12 << 4) | 1` (not `NVENCAPI_VERSION`); the
+  DLL is an RAII `Library`, and a test shows it unloaded after a refusal.
+  `RELAY_TEST_NVENC_DRIVER_API=0xb1` forces that refusal (test hook).
+  `native_nvenc::query_caps` fills the pure `nvenc_caps::EncoderCaps` from a
+  `CapsSession` (D3D11 device for the LUID, no duplication, RAII destroy):
+  lists, caps and which of P1/P4/P6 return a ULL preset config. Startup
+  refuses to serve without a usable codec (the service's backoff retries).
+  `server::plan_session` (pure) intersects client mask × `codec_mask` ×
+  preference, negotiates flags, checks size/rate/preset; `trial_encoder`
+  runs the real `EncoderSession::configure` at that size (~180 ms on this PC,
+  driver-bound) — all before the displays are woken. A refusal is
+  STREAM_STOP 1 + drain (`refuse_stream`). `revalidate_plan` after attach
+  requires the display on `caps.luid` and re-checks/re-trials a changed mode;
+  failure drops the lease first. `NativeNvenc::spawn` runs
+  `encoder::check_capture` (adapter LUID + size) on every start/restart;
+  `CaptureMismatch` never falls back to ffmpeg. `cross_adapter` compares
+  LUIDs. `relay-host encoder-caps` prints it all. Verified on Windows: fmt,
+  204 unit tests + the probe integration test, clippy `-D warnings` on 1.98
+  and 1.99, release build; `encoder-caps` on the RTX 3080 Ti (driver 616.56,
+  NVENC API 13.1, Windows 11 26200.9711) initializes every HEVC/H.264 preset
+  and picture option at 3024×1964@120; 9000×9000, `--gpu radeon` and the
+  driver hook fail as intended. NVIDIA's rated `MB_PER_SEC_MAX` (983,040,
+  ≈42 fps at 3024×1964) is shown as a rating only: this GPU measured
+  102–118 fps there. **Not run yet:** any session through the new preflight
+  (probe or real Mac), the installed service, phase B's recovery cases.
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in

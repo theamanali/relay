@@ -51,7 +51,7 @@ mDNS / Bonjour · Windows services · GitHub Actions
 flowchart LR
   subgraph PC["Windows PC: relay-host (Rust)"]
     VDD["Virtual display driver<br/>monitor at the Mac's size"] --> DDA["DXGI Desktop Duplication"]
-    DDA --> ENC["NVENC HEVC encode<br/>(AMF / Quick Sync via ffmpeg)"]
+    DDA --> ENC["NVENC HEVC encode"]
     IN["SendInput"]
   end
   subgraph MAC["MacBook: Relay.app (Swift)"]
@@ -70,7 +70,8 @@ flowchart LR
    Mac's exact pixel size and refresh rate.
 2. **Capture and encode.** The virtual monitor is captured with DXGI Desktop
    Duplication and encoded by NVENC inside the same process, so frames never
-   leave the GPU. AMD and Intel GPUs go through an `ffmpeg` fallback.
+   leave the GPU. Only NVIDIA GPUs are used, and each session is checked
+   against the GPU's NVENC capabilities before any display changes.
 3. **Transport.** One TCP connection with length-prefixed, encrypted frames
    ([spec](docs/PROTOCOL.md)).
 4. **Pairing.** Each side has a long-lived identity key. The first connection
@@ -151,11 +152,28 @@ were measured and rejected; both are written up in
 settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
 bundle with a macOS 14 minimum (Observation). Metal and hardware decoding are
 required. All 107 Mac unit tests, isolated fakehost checks and the signed local
-release bundle pass on macOS 27.0. Windows NVIDIA enforcement and backend
-removal remain assigned to the PC session; see the
+release bundle pass on macOS 27.0. Windows NVIDIA enforcement is implemented
+(below); backend removal waits on its failure/recovery gate; see the
 [Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md). Real-PC regression/latency,
 minimum/latest-stable OS qualification and Developer ID notarization are still
 pending. Older hardware streaming results below predate this UI migration.
+
+**NVIDIA enforcement, host phase A (2026-10-17):** the host only selects NVIDIA
+adapters (an explicit `--gpu` must name one; other adapters stay listed),
+refuses a driver below NVENC API 12.1 with an update message, reads a
+capability record from a short NVENC session (no capture, no display change),
+and preflights every session against it, including a trial initialization of
+Relay's real encoder configuration, before any display is touched. After
+attach it requires the display on the selected GPU and rechecks a changed
+mode; capture start and restart check the adapter and size; a mismatch
+restores the layout. `relay-host encoder-caps` prints the record. Unit-tested
+(204 tests plus the probe integration test), strict clippy on Rust 1.98 and
+1.99, release build; `encoder-caps` on this RTX 3080 Ti (driver 616.56, NVENC
+API 13.1, Windows 11 26200) initializes every HEVC/H.264 preset and picture
+option at 3024×1964@120. **Not yet run:** sessions through the new preflight
+(probe or real Mac), the installed service, and the failure/recovery gate. The
+ffmpeg, AMF/QSV and Parsec code is still present and is not removed until that
+gate passes.
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
@@ -282,7 +300,7 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
-real handshake and pairing. Unit tests (145 Rust plus one opt-in Windows desktop
+real handshake and pairing. Unit tests (204 Rust plus one opt-in Windows desktop
 test and a probe integration test, 112 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
@@ -291,11 +309,15 @@ on every push that touches that side.
 
 ## Known limitations
 
-- NVIDIA is the supported Windows target. Pending the Windows migration, legacy
-  AMD (AMF) and Intel (Quick Sync) paths still go through
-  `ffmpeg` and are implemented but unverified, as is
-  [parsec-vdd](https://github.com/nomi-san/parsec-vdd) as an alternative
-  display driver.
+- NVIDIA only on Windows: the host refuses to run on a PC without an NVIDIA GPU
+  whose NVENC can run a session. Capture and encode must be on the same GPU, so
+  on a hybrid laptop the virtual display has to be on the NVIDIA half. The
+  `ffmpeg` path (`--no-native`) and the unverified
+  [parsec-vdd](https://github.com/nomi-san/parsec-vdd) driver are still in the
+  code until the native failure/recovery gate passes.
+- When the PC refuses a session (unsupported mode, encoder failure), the Mac
+  only shows that the host stopped the stream; the reason is in the PC's
+  `host.log` (`STREAM_STOP` carries a code, not text).
 - Built for a cable or a LAN: there is no congestion control, so it is not meant
   for streaming over the internet.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys; everything else is forwarded.

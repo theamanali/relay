@@ -19,14 +19,17 @@ input back from the Mac.
 ## Requirements
 
 - **Windows 11, x64.** Pinning the virtual monitor to a specific GPU needs
-  IddCx 1.10 (Windows 11 22H2 or later); without it Windows picks the GPU and
-  the host copies frames to the encoder through system memory.
-- **An NVIDIA GPU** for the in-process capture → NVENC path, which is the tested
-  one. AMD (AMF), Intel (Quick Sync) and GPUs with no encoder go through
-  `ffmpeg` and are untested.
+  IddCx 1.10 (Windows 11 22H2 or later); without it Windows picks the GPU, and a
+  session whose virtual monitor lands on another GPU than the encoding one is
+  refused (capture and encode must share one adapter).
+- **An NVIDIA GPU with NVENC** and a driver that supports NVENC API 12.1 or
+  later. The host refuses to start without one: other adapters are listed but
+  never selected, a NVIDIA model without NVENC fails the capability check, and
+  an older driver gets an "update the NVIDIA driver" error.
+  `relay-host encoder-caps` shows what the GPU can do.
 - **Rust** with the MSVC toolchain, and the Visual Studio Build Tools with the
   Windows 11 SDK.
-- **ffmpeg** on `PATH`, only for the fallback paths.
+- **ffmpeg** on `PATH`, only for `--no-native` (being removed).
 - An administrator account for the one-time install.
 
 ## Build and install
@@ -142,7 +145,8 @@ Starting a second host shows a "Relay is already running" box.
 | `pin [--new]` | Show the pairing PIN and this PC's fingerprint; `--new` makes a new PIN (elevated). |
 | `paired [--forget <fingerprint>]` | List paired Macs, or forget one (elevated). A running host picks up the change within a second. |
 | `service install` / `uninstall` / `start` | Manage the Relay service (elevated). `service run` is the service manager's entry point. |
-| `gpus` | List GPUs and show which one would be used. |
+| `gpus` | List GPUs and show which one would be used; non-NVIDIA adapters are marked. |
+| `encoder-caps [--width 3024 --height 1964 --hz 120]` | The selected GPU's name, LUID, driver version and NVENC API version, its NVENC capability record (codecs, profiles, presets, input formats, limits), and Relay's real encoder configuration initialized for each codec, preset and picture option at that mode. Read-only: no capture and no display change, safe while the service runs. A pass is a capability, not a measured frame rate. |
 | `displays` | List adapters, monitors, modes and the DXGI indices capture uses. |
 | `layout [--reapply]` | Show the current display layout; `--reapply` re-applies it to test the restore path. |
 | `restore` | Put the physical displays back after a crash left them off. |
@@ -152,7 +156,7 @@ Starting a second host shows a "Relay is already running" box.
 
 | flag | default | meaning |
 |---|---|---|
-| `--gpu <name>` | most dedicated VRAM | GPU to render and encode on (case-insensitive substring of its name). |
+| `--gpu <name>` | the NVIDIA GPU with the most dedicated VRAM | NVIDIA GPU to render and encode on (case-insensitive substring of its name); a name that matches only other vendors is refused. |
 | `--driver auto\|mtt\|parsec` | `auto` | Virtual display driver; `auto` means MTT if installed, else parsec-vdd. |
 | `--codec hevc\|h264` | `hevc` | Preferred codec; the Mac must support it too. |
 | `--bitrate <Mbps>` | the Mac's request | Override the bitrate (1–1000, constant bitrate). |
@@ -160,7 +164,7 @@ Starting a second host shows a "Relay is already running" box.
 | `--gop <seconds>` | `2` | Keyframe interval. |
 | `--quality speed\|balanced\|quality` | the Mac's choice, else `speed` | Override the Mac's encoder preset (NVENC P1 / P4 / P6); `speed` is the low-latency one. |
 | `--intra-refresh` | off | NVIDIA: spread refresh over the GOP instead of keyframes. Measured slower, so off. |
-| `--no-native` | | Use the ffmpeg path instead of in-process NVENC. |
+| `--no-native` | | Use the ffmpeg path instead of in-process NVENC (no picture options). Kept until the native failure/recovery gate passes, then removed. |
 | `--no-vdd` | | Stream the primary monitor; don't touch the driver or the layout. |
 | `--no-lock-physical` | | Take physical monitors off the desktop but don't disable their devices. |
 | `--no-input` | | Ignore keyboard and mouse input from the Mac. |
@@ -201,8 +205,12 @@ draft-21 vectors and the field arithmetic reference values), records and
 pairing end to end, the pairing rate limit and digest, the display lease,
 bitrate choice and congestion detection, the ffmpeg command lines and stream
 splitting, the MTT settings-file rewriting, the layout snapshot format, input
-coordinate mapping and the tray text. Anything that actually changes the
-displays needs the real machine.
+coordinate mapping and the tray text, NVIDIA-only GPU selection, the NVENC
+driver-version check (including that a refused driver leaves the DLL
+unloaded), the capability record's checks, the session preflight and
+post-attach revalidation, and the capture adapter/size check. Anything that
+actually changes the displays needs the real machine; `encoder-caps` exercises
+the NVENC calls on it without changing any.
 
 ### `probe`: a fake Mac
 
@@ -275,16 +283,27 @@ second line.
 3. **Claim the display.** On `CLIENT_HELLO` the connection tries to claim the
    single display lease. If another Mac holds it, the answer is
    `STREAM_STOP(BUSY)`. A running session is never taken over.
-4. **Set up the display.** Snapshot the layout to disk, enable the driver's
+4. **Preflight.** Before any display changes: pick the codec (what the Mac
+   offers, what this GPU's NVENC record can run, the host's preference), apply
+   the picture options the GPU supports, check the requested size, rate and
+   preset against the record, and initialize Relay's real encoder
+   configuration at that size on the selected GPU and tear it down (about
+   0.2 s). A refusal is `STREAM_STOP(ENCODER_FAILED)`; the reason is only in
+   `host.log`.
+5. **Set up the display.** Snapshot the layout to disk, enable the driver's
    device, make the virtual monitor the only active display at the Mac's exact
    mode, and disable the physical monitors' devices so a fullscreen game can't
-   bring them back.
-5. **Stream.** Capture and encode run on their own threads; a reader thread
+   bring them back. Then revalidate: the display must be on the selected GPU,
+   and a mode other than the requested one is checked (and initialized) again.
+   On failure the layout is restored before the Mac is told. Every capture
+   start and restart also checks that Desktop Duplication opened the selected
+   GPU's output at the session's size.
+6. **Stream.** Capture and encode run on their own threads; a reader thread
    injects input with `SendInput`. The host pings every second, sends timing
    telemetry, and restarts capture for up to 15 s when a fullscreen switch
    invalidates it, without dropping the Mac. If the link can't sustain the
    chosen bitrate, the session ends with a reason that says so.
-6. **Tear down.** Send `STREAM_STOP`, half-close and drain (so Windows doesn't
+7. **Tear down.** Send `STREAM_STOP`, half-close and drain (so Windows doesn't
    reset the connection and lose the stop), then restore the layout, re-enable
    the physical monitors and disable the virtual one.
 
@@ -312,8 +331,9 @@ learns within seconds that the tray forgot it.
 | [`devnode.rs`](src/devnode.rs) | Enabling and disabling devices (CfgMgr32), physical monitor lock |
 | [`topology.rs`](src/topology.rs) | Display layout snapshot, exclusive mode and restore (CCD API) |
 | [`display.rs`](src/display.rs) | Monitors, modes, and mapping a display to its DXGI adapter and output |
-| [`gpu.rs`](src/gpu.rs) | GPU enumeration; telling the real GPU from the driver's look-alike adapter |
-| [`native_nvenc.rs`](src/native_nvenc.rs) | In-process Desktop Duplication → D3D11 → NVENC, phase-locked capture timer |
+| [`gpu.rs`](src/gpu.rs) | GPU enumeration; telling the real GPU from the driver's look-alike adapter; NVIDIA-only selection |
+| [`nvenc_caps.rs`](src/nvenc_caps.rs) | The NVENC capability record and its checks (pure; filled by `native_nvenc::query_caps`) |
+| [`native_nvenc.rs`](src/native_nvenc.rs) | In-process Desktop Duplication → D3D11 → NVENC, phase-locked capture timer; capability query and trial initialization |
 | [`cursor_overlay.rs`](src/cursor_overlay.rs) | Drawing the Windows cursor into the frame on the GPU |
 | [`encoder.rs`](src/encoder.rs) | One interface over the native path and the ffmpeg fallback |
 | [`nvenc_bindings/`](src/nvenc_bindings/) | NVENC API bindings, loaded at runtime (derived from `nvidia-video-codec-sdk`, MIT) |
@@ -341,7 +361,14 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
   from starting while a Mac is connected. Other tools, such as `attach-test`,
   don't do this: move the mouse or press a key on the PC first.
 - **The Mac doesn't see the PC.** Check that both firewall rules exist, then run
-  `browse --seconds 5` to see what the PC is advertising.
+  `browse --seconds 5` to see what the PC is advertising. A host whose GPU
+  check fails does not start at all: look for the reason at the end of
+  `host.log`, or run `relay-host encoder-caps`.
+- **"update the NVIDIA driver".** The driver supports an NVENC API older than
+  12.1, which these bindings need. Any current NVIDIA driver does.
+- **The Mac says the host stopped the stream (reason 1).** The PC refused or
+  lost the encoder; `host.log` says which check failed. Preflight refusals
+  happen before any display changes.
 - **Windows calls the cable "Unidentified network".** That's expected: there is
   no DHCP on a direct cable, and Bonjour works over link-local addresses anyway.
 - **Text is tiny on the Mac.** Windows remembers scaling per monitor. Set the
@@ -351,13 +378,19 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
 
 ## Limitations
 
-- AMD and Intel encoding through ffmpeg is implemented but untested. A GPU with
-  no hardware encoder falls back to software x264/x265, which can't keep up at
-  large sizes.
+- NVIDIA only. AMD and Intel adapters are never selected; the ffmpeg AMF, Quick
+  Sync and software command lines are still in the code until the cleanup that
+  follows the failure/recovery gate, but no session reaches them.
+- Capture and encode must be on the same adapter; there is no cross-adapter
+  copy path any more.
+- The encoder capability check is a capability, not a frame-rate promise:
+  whether a mode sustains its rate is measured per session.
+- STREAM_STOP carries a reason code, not text, so the Mac cannot show why the
+  PC refused a session.
 - parsec-vdd is untested, can't pin the render GPU and offers at most five fixed
-  modes.
-- The ffmpeg path streams a completely static screen at about 100 fps rather than
-  120. That is duplicated frames, not lost ones.
+  modes (to be removed).
+- The ffmpeg path (`--no-native`) streams a completely static screen at about
+  100 fps rather than 120. That is duplicated frames, not lost ones.
 - The service can't pass options to its worker; it always runs with defaults.
 - The exe has no file icon of its own yet (only the tray icon is drawn).
 - The BIOS and anything before Windows starts are not visible.

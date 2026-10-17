@@ -351,10 +351,20 @@ against fakehost with no PCs, one paired, paired plus available, eight PCs
 (scrolling), connecting/Cancel, light mode, direct launch, `open` launch and
 `--host`.
 
-Not complete: NVIDIA enforcement/capability preflight and host backend/driver
-cleanup. `AGENTS.md` assigns these modules and Windows validation to the PC
-session. Execute [the Windows handoff](WINDOWS-PLATFORM-HANDOFF.md); fallback
-removal remains gated on native failure/recovery and display restoration.
+Windows phase A, 2026-10-17 (handoff steps 1–4): NVIDIA-only selection with
+explicit `--gpu` validation, the NVENC driver-version check, a capability
+record from a short NVENC session (`relay-host encoder-caps`), a pure session
+preflight plus a trial initialization of Relay's real configuration before any
+display change, post-attach revalidation of the adapter LUID and mode with
+rollback, and an adapter/size check on every capture start and restart.
+Unit-tested (204 tests plus the probe integration test), strict clippy on
+Rust 1.98 and 1.99, release build; the diagnostic passed on the RTX 3080 Ti
+(driver 616.56, NVENC API 13.1, Windows 11 26200). No session has run through
+the preflight yet, and the service is not redeployed.
+
+Not complete: the failure/recovery gate (handoff step 5) and host
+backend/driver cleanup (steps 6–7). Fallback removal remains gated on native
+failure/recovery and display restoration on the hardware.
 
 Release qualification is still pending: macOS 14 hardware and latest stable
 27.0.1, 60 Hz Air/120 Hz Pro/external screen, real-PC pairing/Forget/reconnect,
