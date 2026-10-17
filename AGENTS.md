@@ -74,6 +74,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   `DuplicateOutput` on an output this process still duplicates fails with
   E_INVALIDARG (confirmed in-process); a session starting while the previous
   one's capture is still retiring hits it (fixed in phase C, below).
+  B03's bt470bg/sRGB colour tags came from the ffmpeg fallback it caused, not
+  from native H.264 (finding 5, resolved; no code change).
   `RELAY_TEST_FAULT=trial,display-gpu` and `probe --progress` /
   `--codec-mask` exist for these cases. User-run U1–U6 all passed on
   2026-10-17 on the installed `3e320af` (hash `A3E248D3...518F1112`):
@@ -670,6 +672,11 @@ documented there. What follows is only the mechanics that are easy to break:
   the 4:4:4 chroma is full resolution (checked against a 2×2-averaged copy). The probe's persisted identity
   is paired with it again since the v4 checks (2026-10-08; the list had been empty since
   2026-09-19); `probe --unpair` removes it.
+- **Every stream's VUI is primaries 1, transfer 1, matrix 6, limited range**
+  (smpte170m / bt709 / bt709), HEVC and H.264 alike: `signal_colour`,
+  unit-tested. A dump tagged bt470bg / iec61966-2-1 came from the ffmpeg
+  encoders that phase C removed (2026-10-17), not from NVENC. ffprobe reports
+  the SPS as is; `ffmpeg -bsf:v trace_headers` shows the raw fields.
 - **v4 records and the receive loop.** Senders fill every record but a message's last
   (65,519 plaintext bytes), so once a message's first record is decrypted its header says
   exactly how many wire bytes remain; `HostConnection.receiveMore` asks for all of them in one

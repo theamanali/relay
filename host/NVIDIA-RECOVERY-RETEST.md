@@ -45,7 +45,7 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
 |---|---|---|
 | B01 | baseline | **pass**: STREAM_START 2560×1440@144 HEVC Fastest; 144 frames/s after the first second (133.6 fps over 8 s); PC work p50/p95 5.64/6.44 ms |
 | B02 | Balanced + 4:4:4 + 10-bit | **pass**: format byte 0x0e; 124.0 fps; PC work 13.88/14.14 ms; ffprobe Rext yuv444p10le, bt709/bt709/smpte170m, decodes clean |
-| B03 | H.264 only | **pass with a finding**: codec 1, ffprobe High yuv420p, decodes clean; but native start failed and ffmpeg h264_nvenc took over (finding 2); colour description reads bt470bg/sRGB (finding 5) |
+| B03 | H.264 only | **pass with a finding**: codec 1, ffprobe High yuv420p, decodes clean; but native start failed and ffmpeg h264_nvenc took over (finding 2); its colour description reads bt470bg/sRGB, ffmpeg's tags (finding 5) |
 | B04 | Fastest | **pass**: 0x01; 119.2 fps over 3 s; PC work 3.03/3.17 ms |
 | B05 | Best | **pass**: 0x03; 114.7 fps; PC work 14.38/14.71 ms |
 | B06 | codec mask 4 | **pass**: STREAM_STOP encoder failed; "no codec in common: the Mac offers nothing Relay knows, this GPU encodes HEVC and H.264"; no display changed |
@@ -89,10 +89,25 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    desktop waits, pings go out about every 3 s (under the 5 s pong timeout);
    `probe --progress` attributes the first frames after a silence to the
    catch-up lines.
-5. Separate task, not introduced here: the native H.264 stream's colour
-   description reads bt470bg/sRGB where HEVC reads smpte170m/bt709 from the
-   same `signal_colour`. (The background task traced B03's tags to the ffmpeg
-   fallback that encoded it; see its branch.)
+5. **Resolved: not a native H.264 defect; no code change.** B03's bt470bg /
+   iec61966-2-1 / bt709 came from the ffmpeg fallback of finding 2, not from
+   `signal_colour`: ffmpeg's NVENC wrapper wrote matrix 5 (BT.470BG) for RGB
+   input and copied ddagrab's frame tags (BT.709 primaries, sRGB transfer).
+   Rerun on the pre-phase-C source (`8d89fac` build, `--no-vdd` dev host,
+   probe; SPS VUI read with `ffmpeg -bsf:v trace_headers`, which matches
+   ffprobe):
+
+   | session | path | VUI primaries / transfer / matrix, range |
+   |---|---|---|
+   | H.264 on a fresh host; again 1.5 s after a 4:4:4 10-bit session; again 4 s later | native | 1 / 1 / 6, limited (smpte170m / bt709 / bt709) |
+   | HEVC Main; Rext 4:4:4 10-bit | native | 1 / 1 / 6, limited |
+   | H.264; HEVC Main, host `--no-native` | ffmpeg | 1 / 13 / 5, limited (bt470bg / iec61966-2-1 / bt709) |
+
+   All seven dumps decode with no decoder message; the H.264 session after
+   4:4:4 10-bit stayed native that time (finding 2's race depends on timing).
+   Phase C removed ffmpeg and left `signal_colour` and its callers unchanged,
+   so every session now signals 1 / 1 / 6. Matrices 5 and 6 are both BT.601,
+   and the Mac presenter uses only the matrix and range.
 6. Open, not introduced here (U6): after a killed worker the Mac's picker
    lost the PC and did not find the new worker's announcements until Relay
    was reopened. A worker that dies sends no mDNS goodbye; a dial during the

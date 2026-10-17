@@ -1943,6 +1943,21 @@ mod tests {
         );
     }
 
+    /// The VUI code points ffprobe reads as smpte170m / bt709 / bt709, tv
+    /// range. H.264 and HEVC share this type and this function; a dump that
+    /// reads bt470bg / iec61966-2-1 came from the ffmpeg encoders phase C removed.
+    #[test]
+    fn colour_description_is_bt601_matrix_with_bt709_primaries_and_transfer() {
+        let mut vui: NV_ENC_CONFIG_H264_VUI_PARAMETERS = unsafe { zeroed() };
+        signal_colour(&mut vui);
+        assert_eq!(vui.videoSignalTypePresentFlag, 1);
+        assert_eq!(vui.videoFullRangeFlag, 0);
+        assert_eq!(vui.colourDescriptionPresentFlag, 1);
+        assert_eq!(vui.colourPrimaries as i32, 1);
+        assert_eq!(vui.transferCharacteristics as i32, 1);
+        assert_eq!(vui.colourMatrix as i32, 6);
+    }
+
     #[test]
     fn relays_profiles_map_to_their_guids() {
         assert_eq!(
