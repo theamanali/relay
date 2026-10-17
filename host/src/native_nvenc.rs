@@ -47,6 +47,7 @@ use crate::protocol::Codec;
 pub fn query_caps(gpu: &GpuInfo) -> Result<VideoCaps> {
     let device = create_device_for(gpu.luid)?;
     let api = NvApi::load()?;
+    log::info!("NVIDIA driver supports NVENC API {}", api.driver_api);
     let mut open: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = unsafe { zeroed() };
     open.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
     open.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
