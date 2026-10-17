@@ -48,7 +48,7 @@
 // `swift run Relay --host 127.0.0.1:8470` dials it directly.
 //
 // `--clip <file.hevc>` streams an Annex B HEVC clip after CLIENT_HELLO, looped
-// at 60 fps (STREAM_START, CODEC_CONFIG, FRAMEs, a PING a second), so the
+// at 60 fps or `--fps <n>` (STREAM_START, CODEC_CONFIG, FRAMEs, a PING a second), so the
 // Mac's decode and presentation can be checked without a PC. `--size WxH`
 // sets STREAM_START's size (1280x720) and `--format <n>` its video_format
 // byte. `--enc <list>` (e.g. q,444,10) adds TXT `enc` to the printed dns-sd
@@ -108,6 +108,7 @@ func argument(_ flag: String) -> String? {
 let enc = argument("--enc")
 let videoFormat = argument("--format").flatMap { UInt8($0) } ?? 0
 let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { UInt16($0) } } ?? [1280, 720]
+let streamFPS = argument("--fps").flatMap { UInt16($0) }.map { min(max($0, 1), 240) } ?? 60
 print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
 print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)\(enc.map { " enc=\($0)" } ?? "")")
 
@@ -280,17 +281,20 @@ func serve(_ fd: Int32) {
         return true
     }
 
-    /// The clip, looped at 60 fps until the client goes away.
+    /// The clip, looped at `streamFPS` until the client goes away.
     func stream(_ clip: Clip) {
         var start = Data()
         start.appendBE16(streamSize.first ?? 1280); start.appendBE16(streamSize.last ?? 720)
-        start.appendBE16(60); start.appendBE16(120); start.append(2); start.append(videoFormat)
+        start.appendBE16(streamFPS); start.appendBE16(120); start.append(2); start.append(videoFormat)
         var config = Data()
         for set in clip.parameterSets { config.appendBE32(UInt32(set.count)); config.append(set) }
         guard writeAll(fd, tx.seal(type: 0x02, payload: start)), writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
         let closed = Flag()
         Thread.detachNewThread { while readFrame(fd) != nil {}; closed.set() } // PONGs and input
         var sent = 0, lastPing = Date.distantPast
+        let interval = 1_000_000_000 / UInt64(streamFPS)
+        let began = DispatchTime.now().uptimeNanoseconds
+        var next = began
         while !closed.isSet {
             let unit = clip.units[sent % clip.units.count]
             var body = Data()
@@ -302,9 +306,15 @@ func serve(_ fd: Int32) {
                 var ping = Data(); ping.appendBE32(0); ping.appendBE32(UInt32(truncatingIfNeeded: Int(Date().timeIntervalSince1970 * 1e6)))
                 writeAll(fd, tx.seal(type: 0x07, payload: ping))
             }
-            usleep(16_667)
+            // On a fixed schedule: sleeping a whole interval after each send
+            // delivered ~50 of 60 fps. A sender that falls behind resumes from
+            // now rather than bursting.
+            next += interval
+            let now = DispatchTime.now().uptimeNanoseconds
+            if next > now { usleep(UInt32((next - now) / 1_000)) } else { next = now }
         }
-        print("-- streamed \(sent) frames; client gone")
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e9
+        print("-- streamed \(sent) frames in \(String(format: "%.1f s (%.1f fps)", seconds, Double(sent) / seconds)); client gone")
     }
 
     guard let body = readFrame(fd), let (type, payload) = rx.open(body) else { print("-- no first message (a pairing check ends here)"); return }
