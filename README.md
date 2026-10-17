@@ -210,7 +210,10 @@ strict clippy and a release build pass; an opt-in test on this PC starts a
 second duplication of a real output through the retry. A rerun of the dev-host
 cases passed on this build, including an H.264 session 1.5 s after a 4:4:4
 10-bit one, now native at 125 fps; the build is installed as the service.
-**Not yet run:** the real-Mac latency comparison.
+On the real Mac at the `docs/LATENCY.md` baseline's settings (3024×1964@120
+Balanced, static desktop) it matches the baseline: PC work 18.5 ms p50 against
+18.7, decode 2.2 against 2.2, time to screen 3.5–3.8 against 3.5 ms, 107 fps shown
+against 102 ([details](docs/LATENCY.md#the-nvidia-only-host-against-that-baseline-2026-10-17)).
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture

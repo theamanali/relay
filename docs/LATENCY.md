@@ -258,8 +258,11 @@ filled), so they are not the codec's.
 
 RTX 3080 Ti → M3 Pro over the cable (USB 2.5G adapter, `en11`), 3024×1964 @
 120 Hz, 120 Mbps (automatic), VSync off, observe mode (no input sent), the
-installed service. The PC's screen had moving content (113–115 fps shown at
-Fastest), the same for every run; no Netflix or other video tab open on the
+installed service. The PC's desktop was mostly static, the same for every run
+(corrected later the same day from `host.log`: most runs had 1–4% fresh
+desktop frames at 0.7–4.9 Mbps, two had 15% and 31%, the first two Fastest
+runs 31–32 Mbps; 113–115 fps shown at Fastest is the host re-encoding the
+last frame each tick, not moving content); no Netflix or other video tab open on the
 Mac. Seven conditions, each differing from the baseline in one setting, 45 s
 per session, run twice: forward order, then reverse, so drift over the
 13 minutes affects every condition equally. Each value is the two runs'
@@ -299,6 +302,42 @@ comparison (not input-to-photon): baseline 8.8 ms, 10-bit 8.7 ms, 4:4:4
   milliseconds between runs are noise.
 - Not measured: image quality, other bitrates, glass-to-glass latency, a
   static desktop, or Wi-Fi.
+
+## The NVIDIA-only host against that baseline (2026-10-17)
+
+The same settings as the Balanced row above (3024×1964 @ 120 Hz, 120 Mbps
+automatic, VSync off, observe mode, HUD on, the cable, the installed
+service, a mostly static PC desktop), on the phase C build: one native NVENC
+backend, session preflight, no ffmpeg fallback (installed SHA-256
+`C5EA77A8…3A754A7442`). Two runs of 68 and 74 s, not interleaved with other
+settings. The host logged 3% fresh desktop frames at 5.8–6.2 Mbps (the
+baseline's Balanced runs: 1% at 0.8–4.6 Mbps), native capture throughout,
+and no start failure or retry.
+
+| Balanced, 4:2:0 8-bit | shown | replaced per run | PC work p50 / p95 | RTT/2 p50 | receive → decode p50 | receive → screen p50 / p95 |
+|---|---|---|---|---|---|---|
+| baseline (above; two-run mean) | 102.1 fps | 189, 173 | 18.7 / 19.4 ms | 0.8 ms | 2.2 ms | 3.5 / 6.7 ms |
+| phase C, run 1 | 106.8 fps | 60 | 18.5 / 18.9 ms | 0.9 ms | 2.2 ms | 3.5 / 4.6 ms |
+| phase C, run 2 | 107.0 fps | 73 | 18.5 / 18.6 ms | 0.8 ms | 2.2 ms | 3.8 / 4.9 ms |
+
+- **No regression.** PC work and decode are the same; the median time to
+  screen is within 0.3 ms (3.5 and 3.8 against 3.5); p95 is lower, but the
+  baseline's own p95 ranged 5.9–10.0 ms within one setting, so that is noise.
+  Removing the fallback and adding the preflight changed nothing per frame:
+  the encoder configuration is the one the baseline ran.
+- Shown rose from 102 to 107 fps (host: 107.4 and 107.9 fps). Balanced is
+  encode-bound at this size (about 18.4 ms per frame, over the 8.3 ms
+  interval), so small differences in content move it; nothing in the change
+  explains it, and the runs differed in length and order.
+- The preflight costs about 0.19 s per connect (`encoder preflight: … (187–
+  202 ms)` in every session), before the displays change.
+
+Balanced with 4:4:4 + 10-bit (two earlier runs the same day, same settings
+otherwise; not in the baseline): 94.7 and 95.0 fps shown, PC work 20.8 / 21.2
+and 20.9 / 21.0 ms, RTT/2 1.3 ms, receive → decode 4.1 and 4.2 ms, receive →
+screen 6.1 / 8.2 and 6.0 / 7.5 ms. Against Balanced 4:2:0 that is about 2.3 ms
+more PC work (the same as 4:4:4 + 10-bit at Fastest above), 2.0 ms more decode
+(1.4 ms at Fastest) and 12% fewer frames shown.
 
 ## Encoder quality, 4:4:4 and 10-bit on the PC (2026-10-10)
 

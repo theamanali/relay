@@ -233,7 +233,8 @@ this build as the service (Running, hashes equal):
   (`cannot be captured (PC locked …)`), then `desktop capturable again` and
   frames resumed.
 
-Still to do: the real-Mac latency comparison at `docs/LATENCY.md`'s settings.
+Real-Mac latency comparison at `docs/LATENCY.md`'s Balanced settings: no
+regression (see its section `The NVIDIA-only host against that baseline`).
 ## Report
 
 | case | date/time | result | notes (HUD fps, PC work, log lines, anything odd) |

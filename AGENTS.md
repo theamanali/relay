@@ -100,7 +100,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   clippy, release build; `a_second_duplication_starts_once_the_first_is_released`
   (opt-in, `--ignored`) passes on this PC. The dev-host regression (16 checks,
   `host/NVIDIA-RECOVERY-RETEST.md` Phase C) passed and installed the build:
-  hash `C5EA77A8...3A754A7442`. The real-Mac latency A/B is pending.
+  hash `C5EA77A8...3A754A7442`. Real-Mac A/B at the LATENCY.md Balanced
+  settings: PC work 18.5 / 18.6–18.9 ms (baseline 18.7 / 19.4), decode 2.2 (2.2),
+  screen p50 3.5–3.8 (3.5), 107 fps shown (102): no regression. The baseline's
+  desktop was mostly static (1–4% fresh frames in host.log), not moving as that
+  section had said; corrected there.
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in

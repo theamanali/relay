@@ -369,8 +369,9 @@ same day (steps 6–7): the ffmpeg, AMF, Quick Sync and software encoders and
 the Parsec driver are removed. Native start now waits for the previous
 capture's retirement, retries a busy output, and leaves any other failure to
 the session's recovery loop with a classified log line. Unit tests, strict
-clippy and a release build pass. Pending: the redeploy of the phase C build
-and a same-settings real-Mac latency comparison against `docs/LATENCY.md`.
+clippy and a release build pass; a rerun of the dev-host cases passed and the
+build is installed as the service. A same-settings real-Mac comparison against
+`docs/LATENCY.md` (3024×1964@120 Balanced) showed no regression.
 
 Release qualification is still pending: macOS 14 hardware and latest stable
 27.0.1, 60 Hz Air/120 Hz Pro/external screen, real-PC pairing/Forget/reconnect,
