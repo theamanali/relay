@@ -28,6 +28,13 @@
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Relay looks for your PC on the local network and streams its display to this Mac.</string>
+    <!-- Game Mode while the stream is full screen: macOS lowers background
+         work's CPU/GPU priority and doubles Bluetooth controller and AirPods
+         polling. Needs the games category; see docs/LATENCY.md. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <key>GCSupportsGameMode</key>
+    <true/>
     <key>NSBonjourServices</key>
     <array>
         <string>_relay._tcp</string>

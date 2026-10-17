@@ -47,16 +47,37 @@ see (see [The hidden 0–8 ms](#the-hidden-08-ms)).
   panel's own response time. Summing the stages does not give an end-to-end
   number. Measuring from screen to screen with a camera is still to do.
 
-There are also two traps in reading the Mac's numbers:
+There are also three traps in reading the Mac's numbers:
 
 - **The old overlay inflated what it showed.** It was a view on top of the
   Metal layer, so while it was visible macOS couldn't present the video
   directly to the display: 7.92 ms mean with it up, 5.47 ms after hiding it
   for a full 600-frame window. Since 2026-10-17 the HUD is drawn into the
   video frame itself (one blended quad in the same render pass), so the layer
-  stays opaque and alone. That it no longer costs anything still needs
-  confirming against the real PC: compare a session report with the HUD on
-  to one with it off.
+  stays opaque and alone. Against `fakehost` at 3024×1964 / 120 fps the
+  detailed HUD was on and Metal's own HUD (`MTL_HUD_ENABLED=1`) still said
+  Direct, at 3.8 ms p50 (2026-10-17). Not yet repeated against the real PC.
+- **Video playing anywhere on the Mac throttles presentation.** With Netflix
+  playing on another display, every build tested (today's, the commit before
+  the in-frame HUD, the commit before the SwiftUI migration) showed the same
+  pattern: decode kept up, but frames reached the screen only every ~22 ms.
+  Stopping playback brought it back at once, with no code change. Metal still
+  reported Direct and the built-in panel stayed at 120 Hz, so it is neither
+  compositing nor a refresh-rate drop; the contention itself is not
+  identified (an Instruments Metal System Trace would show it). Close video
+  playback before measuring. fakehost, 3024×1964 at ~95 fps, 2026-10-17:
+
+  | run | Netflix | to screen p50 | p95 | shown |
+  |---|---|---|---|---|
+  | current build | paused | 3.8 ms | 8.2 ms | 90 fps (all sent) |
+  | current build | playing | 28.1 ms | 36.1 ms | 50 fps |
+  | same, Game Mode on | playing | 20.0 ms | 35.7 ms | 57.5 fps |
+
+  Game Mode (macOS lowers background work's priority while a game is full
+  screen) only halves the time spent throttled: the sparkline alternated
+  between ~4 ms and ~30 ms stretches. Relay opts into it anyway
+  (`LSApplicationCategoryType` games + `GCSupportsGameMode` in Info.plist);
+  the kiosk window counts as full screen.
 - **The link matters.** Two runs with identical settings over a LAN switch
   had RTT/2 values 1 ms apart. Treat sub-millisecond differences measured over
   a LAN as noise.
