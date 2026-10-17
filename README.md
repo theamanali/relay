@@ -218,9 +218,10 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 
 **Next:**
 
-- [ ] Picture options on the real Mac: Fastest / Balanced / Best and 4:2:0 vs
-      4:4:4 at the same bitrate with `--latency-stats` (copy each session
-      report); also confirm the in-frame HUD costs nothing (HUD on vs off)
+- [x] Picture options on the real Mac (2026-10-17): Fastest is the only
+      preset that keeps 120 fps at 3024×1964 (Balanced 102 fps, Best 86 fps);
+      4:4:4 adds about 3.5 ms, 10-bit nothing measurable; the in-frame HUD
+      costs nothing measurable. See [LATENCY.md](docs/LATENCY.md#picture-options-and-the-hud-on-the-real-mac-2026-10-17)
 
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and

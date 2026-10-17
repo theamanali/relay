@@ -65,9 +65,9 @@ client. Never change `docs/PROTOCOL.md` and only one side.
     SHA-256 matches the release (`1DF94C59...2320D2E7`). The SYSTEM worker
     logged the same caps, and `browse` shows `enc=q,444,10`.
 
-  Not verified: the real-Mac A/B at 3024×1964 (the user's to run;
-  `docs/LATENCY.md` extrapolates Balanced/Best past the 8.3 ms budget there),
-  the host `--quality` override end to end (unit-tested only), ffmpeg/AMD/Intel
+  Real-Mac A/B at 3024×1964 done 2026-10-17 (`docs/LATENCY.md`): Balanced
+  102 fps / 18.7 ms PC work, Best 86 fps / 22.7 ms, 4:4:4 +3.5 ms, 10-bit
+  free. Not verified: the host `--quality` override end to end (unit-tested only), ffmpeg/AMD/Intel
   paths, and a GPU without HEVC or 4:4:4.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
@@ -407,7 +407,8 @@ documented there. What follows is only the mechanics that are easy to break:
   writes it back on focus loss, which turned Automatic off. Verified end to
   end with `fakehost --clip` (420v/x420/444v/x444 outputs, 4:4:4 text sharp
   where 4:2:0 smears); the real PC streams all four since 2026-10-10 (probe +
-  ffprobe), and the real Mac against it is untested.
+  ffprobe), and the real Mac streamed all of them on 2026-10-17
+  (`docs/LATENCY.md`).
   A disabled segmented control still draws its selection in the accent
   color, so the refresh-rate picker has no selection (an optional binding
   returning nil) while it is disabled; a gray tint looked odd. Its background
@@ -431,8 +432,8 @@ documented there. What follows is only the mechanics that are easy to break:
   (stats, HUD bitmap, overlay pixels) and checked live against
   `fakehost --clip` with an isolated `CFFIXED_USER_HOME`: HUD in the frame,
   ⌃⌥⌘L cycling, its 50 fps matching fakehost's 49.8 sent, and the report
-  opening over the picker after ⌃⌥⌘Q. The real-PC HUD-on vs HUD-off
-  comparison is still pending.
+  opening over the picker after ⌃⌥⌘Q. Real PC, 2026-10-17: median time to
+  screen 3.5 ms with the HUD on, 3.4 ms off.
 - Every Connect (footer button, Return, double-click, PC menu, context menu)
   goes through `PickerModel.requestConnect()`: a paired PC whose
   `DiscoveredHost.connectsOverWiFi` gets the Wi-Fi alert first, unless

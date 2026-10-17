@@ -56,7 +56,8 @@ There are also three traps in reading the Mac's numbers:
   video frame itself (one blended quad in the same render pass), so the layer
   stays opaque and alone. Against `fakehost` at 3024×1964 / 120 fps the
   detailed HUD was on and Metal's own HUD (`MTL_HUD_ENABLED=1`) still said
-  Direct, at 3.8 ms p50 (2026-10-17). Not yet repeated against the real PC.
+  Direct, at 3.8 ms p50, and against the real PC the median was the same
+  with it on and off (3.5 vs 3.4 ms; [below](#picture-options-and-the-hud-on-the-real-mac-2026-10-17)).
 - **An open Netflix tab in Chrome throttles presentation, even paused.**
   Decode keeps up, but frames reach the screen only every 20–25 ms, so most
   are replaced before they are shown. It looked like a regression: every build
@@ -227,9 +228,6 @@ matrix from the decoded buffer, so the client needed no change.
   the remaining wait for the next refresh. It needs a protocol change.
 - **`--scale 0.75`.** Not measured yet; it encodes and decodes about half
   the pixels.
-- **Encoder quality, 4:4:4 and 10-bit on the real Mac** at 3024×1964: the
-  host supports them now, but only the PC side has been measured, and only at
-  1440p ([below](#encoder-quality-444-and-10-bit-on-the-pc-2026-10-10)).
 
 ## HEVC vs H.264 (2026-10-10)
 
@@ -252,6 +250,52 @@ encoder. The Mac decoded H.264 at a steady 120 fps despite the mode being
 beyond H.264's common levels. Both runs showed occasional on-screen p95
 spikes (16–19 ms, one or two per run, and ~30 ms while the first window
 filled), so they are not the codec's.
+
+## Picture options and the HUD on the real Mac (2026-10-17)
+
+RTX 3080 Ti → M3 Pro over the cable (USB 2.5G adapter, `en11`), 3024×1964 @
+120 Hz, 120 Mbps (automatic), VSync off, observe mode (no input sent), the
+installed service. The PC's screen had moving content (113–115 fps shown at
+Fastest), the same for every run; no Netflix or other video tab open on the
+Mac. Seven conditions, each differing from the baseline in one setting, 45 s
+per session, run twice: forward order, then reverse, so drift over the
+13 minutes affects every condition equally. Each value is the two runs'
+mean, from the session reports.
+
+| setting | PC work p50 / p95 | RTT/2 p50 | receive → decode p50 | receive → screen p50 / p95 | shown | replaced per run |
+|---|---|---|---|---|---|---|
+| Fastest, 4:2:0, 8-bit, HUD on (baseline) | 4.5 / 5.0 ms | 0.9 ms | 2.3 ms | 3.5 / 8.3 ms | 114.0 fps | 258, 239 |
+| Balanced | 18.7 / 19.4 ms | 0.8 ms | 2.2 ms | 3.5 / 6.7 ms | 102.1 fps | 189, 173 |
+| Best quality | 22.7 / 23.6 ms | 0.9 ms | 2.3 ms | 3.9 / 6.9 ms | 85.5 fps | 91, 72 |
+| 4:4:4 | 6.8 / 7.7 ms | 0.8 ms | 3.4 ms | 4.7 / 8.3 ms | 114.9 fps | 214, 186 |
+| 10-bit | 4.5 / 5.1 ms | 0.8 ms | 2.2 ms | 3.5 / 7.3 ms | 114.4 fps | 250, 199 |
+| 4:4:4 + 10-bit | 7.0 / 7.6 ms | 1.0 ms | 3.7 ms | 5.1 / 9.2 ms | 113.1 fps | 300, 253 |
+| HUD off (baseline otherwise) | 4.5 / 5.0 ms | 0.7 ms | 2.1 ms | 3.4 / 17.0 ms | 110.9 fps | 437, 329 |
+
+Adding PC work, RTT/2 and receive → screen (p50) as a rough per-frame
+comparison (not input-to-photon): baseline 8.8 ms, 10-bit 8.7 ms, 4:4:4
+12.3 ms, 4:4:4 + 10-bit 13.1 ms, Balanced 23.0 ms, Best 27.4 ms.
+
+- **Balanced and Best can't keep up at this size.** They delivered 102 and
+  86 fps, and PC work rose to 18.7 and 22.7 ms, far past the 9.6 and 11.6 ms
+  extrapolated from 1440p (below). Once encoding takes longer than the 8.3 ms
+  frame interval, frames presumably wait for the single NVENC engine, so PC
+  work includes that queueing; the frame rate is the cleaner measure. Fastest
+  stays the default.
+- **4:4:4 costs about 3.5 ms**: 2.3 ms more on the PC and 1.1 ms more decode
+  on the Mac, at full frame rate. With 10-bit added it is 4.3 ms.
+- **10-bit on its own costs nothing measurable** at either end (4.5 ms PC
+  work, 2.2 ms decode, 3.5 ms to screen, as the baseline). The 10-bit
+  presenter path (`bgr10a2Unorm` layer) is not slower.
+- **The in-frame HUD costs nothing measurable.** Median time to screen was
+  3.5 ms with it on and 3.4 ms off. The two HUD-off runs had the worst p95
+  and the most replaced frames of the whole set, the opposite of what a HUD
+  cost would cause. They ran back to back in the middle of the sequence, so
+  that is presumably variation in the PC's content; across all runs p95 varied
+  from 5.9 to 10.0 ms within a single setting, so p95 differences of a few
+  milliseconds between runs are noise.
+- Not measured: image quality, other bitrates, glass-to-glass latency, a
+  static desktop, or Wi-Fi.
 
 ## Encoder quality, 4:4:4 and 10-bit on the PC (2026-10-10)
 
