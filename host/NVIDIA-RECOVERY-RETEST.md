@@ -199,7 +199,7 @@ virtual display on an iGPU. The monitors go dark for a few seconds.
 | U3 | 2026-10-17 21:59–22:01 UTC | **pass** | Session 1: `SessionLock` → access lost → `capture recovered after 1.1s` (twice: lock, then a second desktop transition), `SessionUnlock` from the Mac → recovered 1.1 s, lock again → recovered 1.1 s, disconnect while locked → `physical monitor devices restored`, `display layout restored`. Session 2 connected to the still-locked PC: preflight, exact-mode virtual display, lock-screen capture, unlock from the Mac → recovered 1.1 s, disconnect → restored. No `capture restart refused`, no `cannot be captured`, no ffmpeg fallback (the SYSTEM worker captures the lock screen). The GDI names of the two physical monitors swapped between the sessions (`DISPLAY2 (ACR0692)` in session 2's snapshot); restore follows the saved paths, not the names. Session 2 ended with a 10053 send error after the restore (the Mac closed first). Still 4:4:4 10-bit Balanced |
 | U4 | | | LUID before/after: |
 | U5 | | | |
-| U6 | | | |
+| U6 | 2026-10-17 22:05–22:06 UTC | **pass** (reconnect not yet in the log) | Session through the preflight as before. Opening the elevated PowerShell (UAC's secure desktop) cost two access losses at 22:05:42 and :44, each `recovered after 1.1s`. The kill: `worker exited with 0xffffffff after 1468 s; restoring displays`, `MTT VDD: physical monitor devices restored`, `restoring the display layout saved by an earlier session`, `display layout restored`, `next worker in 5 s`, a new worker 5 s later (NVENC queried again, `listening`). The user confirmed the monitors |
 
 Known UI gap, by design for now: STREAM_STOP carries a reason code, not text,
 so the Mac shows only "host stopped the stream (reason 1)" for every preflight
