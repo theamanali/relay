@@ -432,6 +432,8 @@ documented there. What follows is only the mechanics that are easy to break:
   while on); `MetalPresenter.setOverlay` uploads it as a new texture and
   `encode` blends it as a second quad in the same pass (premultiplied, nearest
   sampling, pixel margin). It refreshes only when a video frame arrives.
+  The first 3 s after STREAM_START (`LatencyStats.warmUp`) are not recorded
+  and the HUD stays hidden until they pass.
   `LatencyStats` records into fixed 0.1 ms histograms (per-second ring for the
   5 s HUD window, plus whole-session); `takeSessionReport` runs once per
   STREAM_START on the first end path, logs `Session report:` and opens the

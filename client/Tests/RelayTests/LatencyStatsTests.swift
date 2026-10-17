@@ -86,7 +86,7 @@ final class LatencyStatsTests: XCTestCase {
     func testHUDSnapshotCoversTheLastFewSeconds() {
         let stats = LatencyStats()
         let t0: UInt64 = 50 * second
-        stats.reset(stream: stream, at: t0)
+        stats.reset(stream: stream, at: t0 - LatencyStats.warmUp)
         for i in 0..<240 {
             let t = t0 + UInt64(i) * second / 120
             stats.recordPresented(milliseconds: i < 120 ? 5 : 7, at: t)
@@ -106,13 +106,49 @@ final class LatencyStatsTests: XCTestCase {
         XCTAssertEqual(s.stream, stream)
     }
 
+    func testTheFirstThreeSecondsAreNotMeasured() throws {
+        let stats = LatencyStats()
+        let t0: UInt64 = 20 * second
+        stats.reset(stream: stream, at: t0)
+        // Start-up: a slow first keyframe and decoder warm-up.
+        stats.recordPresented(milliseconds: 60, at: t0 + second)
+        stats.recordDecoded(milliseconds: 40, at: t0 + second)
+        stats.record(Proto.FrameTiming(sequence: 1, captureMicros: 9_000, encodeMicros: 9_000,
+                                       sendMicros: 9_000, networkRTTMicros: 9_000), at: t0 + second)
+        XCTAssertTrue(stats.hudSnapshot(at: t0 + 2 * second).warmingUp)
+        XCTAssertEqual(LatencyStats.warmUp, 3 * second)
+
+        for i in 0..<120 { stats.recordPresented(milliseconds: 5, at: t0 + 3 * second + UInt64(i) * second / 120) }
+        let s = stats.hudSnapshot(at: t0 + 4 * second)
+        XCTAssertFalse(s.warmingUp)
+        XCTAssertEqual(s.toScreen.p99, 5)
+        XCTAssertNil(s.decode.p50)
+        XCTAssertNil(s.host.p50)
+        XCTAssertNil(s.networkHalfRTT)
+        XCTAssertEqual(s.sparkline.count, 120)
+        XCTAssertEqual(s.presentedFPS, 120, accuracy: 1)
+
+        let report = try XCTUnwrap(stats.sessionReport(at: t0 + 4 * second, counters: .zero))
+        XCTAssertEqual(report.toScreen.count, 120)
+        XCTAssertEqual(report.toScreen.max, 5)
+        XCTAssertEqual(report.duration, 1, accuracy: 1e-9, "measured from the end of the warm-up")
+    }
+
+    func testNoReportForASessionThatEndsDuringWarmUp() {
+        let stats = LatencyStats()
+        stats.reset(stream: stream, at: second)
+        stats.recordPresented(milliseconds: 5, at: 2 * second)
+        XCTAssertNil(stats.sessionReport(at: 3 * second, counters: .zero))
+    }
+
     func testUnknownHostFieldsAreNotRecorded() {
         let stats = LatencyStats()
         stats.reset(stream: stream, at: second)
+        let after = second + LatencyStats.warmUp
         stats.record(Proto.FrameTiming(sequence: 1, captureMicros: Proto.FrameTiming.unknownMicros,
                                        encodeMicros: 1, sendMicros: 1,
-                                       networkRTTMicros: Proto.FrameTiming.unknownMicros), at: second)
-        let s = stats.hudSnapshot(at: second)
+                                       networkRTTMicros: Proto.FrameTiming.unknownMicros), at: after)
+        let s = stats.hudSnapshot(at: after)
         XCTAssertNil(s.host.p50)
         XCTAssertNil(s.networkHalfRTT)
     }
@@ -120,7 +156,7 @@ final class LatencyStatsTests: XCTestCase {
     func testSessionReportKeepsEveryFrameAndTheCounters() throws {
         let stats = LatencyStats()
         let t0: UInt64 = 10 * second
-        stats.reset(stream: stream, at: t0)
+        stats.reset(stream: stream, at: t0 - LatencyStats.warmUp)
         for i in 0..<1_200 { stats.recordPresented(milliseconds: i == 0 ? 30 : 5, at: t0 + UInt64(i) * second / 120) }
         let counters = PresenterCounters(replaced: 7, late: 2, dropped: 1, unavailable: 0, gpuFailures: 0)
         let report = try XCTUnwrap(stats.sessionReport(at: t0 + 10 * second, counters: counters,
@@ -143,10 +179,10 @@ final class LatencyStatsTests: XCTestCase {
     func testResetClearsTheSession() {
         let stats = LatencyStats()
         stats.reset(stream: stream, at: second)
-        stats.recordPresented(milliseconds: 5, at: second)
-        stats.reset(stream: stream, at: 2 * second)
-        XCTAssertNil(stats.hudSnapshot(at: 2 * second).toScreen.p50)
-        XCTAssertTrue(stats.hudSnapshot(at: 2 * second).sparkline.isEmpty)
+        stats.recordPresented(milliseconds: 5, at: 5 * second)
+        stats.reset(stream: stream, at: 6 * second)
+        XCTAssertNil(stats.hudSnapshot(at: 10 * second).toScreen.p50)
+        XCTAssertTrue(stats.hudSnapshot(at: 10 * second).sparkline.isEmpty)
     }
 }
 

@@ -178,14 +178,21 @@ final class LatencyStats: @unchecked Sendable {
         var frameBudget: Double
         var stream: StreamInfo?
         var counters = PresenterCounters.zero
+        /// Still inside `warmUp`: nothing measured yet, the HUD stays hidden.
+        var warmingUp = false
     }
 
+    /// The first seconds after STREAM_START are not measured: the first
+    /// keyframe, decoder start-up and the encoder settling would skew the
+    /// HUD and the session report.
+    static let warmUp: UInt64 = 3_000_000_000
     static let windowSeconds = 5
     static let sparklineFrames = 480
 
     private let lock = NSLock()
     private var stream: StreamInfo?
-    private var startedAt: UInt64 = 0
+    /// STREAM_START + `warmUp`: samples before this are dropped.
+    private var measuringFrom: UInt64 = 0
     private var toScreen = LatencyWindow(seconds: windowSeconds)
     private var decode = LatencyWindow(seconds: windowSeconds)
     private var host = LatencyWindow(seconds: windowSeconds)
@@ -202,7 +209,7 @@ final class LatencyStats: @unchecked Sendable {
     func reset(stream: StreamInfo? = nil, at nanos: UInt64 = LatencyStats.now()) {
         lock.withLock {
             self.stream = stream
-            startedAt = nanos
+            measuringFrom = nanos + Self.warmUp
             toScreen = LatencyWindow(seconds: Self.windowSeconds)
             decode = LatencyWindow(seconds: Self.windowSeconds)
             host = LatencyWindow(seconds: Self.windowSeconds)
@@ -221,6 +228,7 @@ final class LatencyStats: @unchecked Sendable {
     func recordPresented(milliseconds ms: Double, at nanos: UInt64 = LatencyStats.now()) {
         guard ms.isFinite, ms >= 0 else { return }
         lock.withLock {
+            guard nanos >= measuringFrom else { return }
             toScreen.record(ms, at: nanos)
             sessionToScreen.record(ms)
             sparkline.append(ms)
@@ -230,6 +238,7 @@ final class LatencyStats: @unchecked Sendable {
     func recordDecoded(milliseconds ms: Double, at nanos: UInt64 = LatencyStats.now()) {
         guard ms.isFinite, ms >= 0 else { return }
         lock.withLock {
+            guard nanos >= measuringFrom else { return }
             decode.record(ms, at: nanos)
             sessionDecode.record(ms)
         }
@@ -239,6 +248,7 @@ final class LatencyStats: @unchecked Sendable {
         let unknown = Proto.FrameTiming.unknownMicros
         let fields = [timing.captureMicros, timing.encodeMicros, timing.sendMicros]
         lock.withLock {
+            guard nanos >= measuringFrom else { return }
             if !fields.contains(unknown) {
                 let ms = fields.reduce(0) { $0 + Double($1) } / 1_000
                 host.record(ms, at: nanos)
@@ -259,7 +269,7 @@ final class LatencyStats: @unchecked Sendable {
             let decoded = decode.merged(at: nanos)
             // The window holds the current second and the four before it.
             let windowStart = (nanos / 1_000_000_000).saturatingSubtract(UInt64(Self.windowSeconds - 1)) * 1_000_000_000
-            let elapsed = Double(nanos - min(nanos, max(startedAt, windowStart))) / 1_000_000_000
+            let elapsed = Double(nanos - min(nanos, max(measuringFrom, windowStart))) / 1_000_000_000
             func rate(_ h: LatencyHistogram) -> Double { elapsed > 0.05 ? Double(h.count) / elapsed : 0 }
             return HUDSnapshot(
                 presentedFPS: rate(shown), decodedFPS: rate(decoded),
@@ -267,7 +277,8 @@ final class LatencyStats: @unchecked Sendable {
                 networkHalfRTT: network.merged(at: nanos).percentile(0.5),
                 sparkline: sparkline.ordered,
                 frameBudget: 1_000 / Double(max(stream?.fps ?? 60, 1)),
-                stream: stream)
+                stream: stream,
+                warmingUp: nanos < measuringFrom)
         }
     }
 
@@ -275,8 +286,8 @@ final class LatencyStats: @unchecked Sendable {
     func sessionReport(at nanos: UInt64 = LatencyStats.now(), counters: PresenterCounters,
                        endedAt: Date = Date()) -> SessionReport? {
         lock.withLock {
-            guard let stream, sessionToScreen.count > 0, nanos > startedAt else { return nil }
-            let duration = Double(nanos - startedAt) / 1_000_000_000
+            guard let stream, sessionToScreen.count > 0, nanos > measuringFrom else { return nil }
+            let duration = Double(nanos - measuringFrom) / 1_000_000_000
             return SessionReport(stream: stream, endedAt: endedAt, duration: duration,
                                  presentedFPS: Double(sessionToScreen.count) / duration,
                                  toScreen: sessionToScreen, decode: sessionDecode, host: sessionHost,

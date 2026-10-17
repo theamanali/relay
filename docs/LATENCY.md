@@ -41,7 +41,10 @@ see (see [The hidden 0–8 ms](#the-hidden-08-ms)).
   Metal reports for each drawable through `addPresentedHandler`. Every
   session also keeps whole-session histograms (0.1 ms bins), logged as
   `Session report:` when it ends and shown in View ▸ Last Session Report,
-  whose Copy button gives a Markdown table for this file.
+  whose Copy button gives a Markdown table for this file. The first 3 s after
+  STREAM_START are not measured (first keyframe, decoder start-up); the
+  report's length and frame rate start after them. Reports before
+  2026-10-17's change include those seconds.
 - **Not measured.** Network transit (the protocol's RTT/2 is only an
   estimate), the decryption before the Mac's timestamp, and the display
   panel's own response time. Summing the stages does not give an end-to-end

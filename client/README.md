@@ -127,6 +127,8 @@ The **Settings** gear in the footer opens:
   ⌃⌥⌘L cycles Off → Compact → Detailed (PC work, network, decode, dropped
   frames and the stream's settings); also View ▸ Latency Overlay. It does
   not slow the stream: it is part of the video frame, not a window over it.
+  It appears 3 seconds into a session: start-up frames are left out of every
+  number, the session report's included.
   When a session ends with it on, the **session report** opens: whole-session
   percentiles, a histogram and Copy as Markdown (View ▸ Last Session Report
   any time).

@@ -802,6 +802,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     private func refreshHUD() {
         guard kioskActive, prefs.hudMode != .off, !hudDrawing, let window else { return }
         var snapshot = latencyStats.hudSnapshot()
+        // Nothing to show until the start-up seconds have passed.
+        guard !snapshot.warmingUp else { renderer.setOverlay(nil, marginPixels: 0); return }
         snapshot.counters = renderer.presenterCounters
         let taken = snapshot
         let mode = prefs.hudMode
