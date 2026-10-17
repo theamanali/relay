@@ -170,10 +170,22 @@ restores the layout. `relay-host encoder-caps` prints the record. Unit-tested
 (204 tests plus the probe integration test), strict clippy on Rust 1.98 and
 1.99, release build; `encoder-caps` on this RTX 3080 Ti (driver 616.56, NVENC
 API 13.1, Windows 11 26200) initializes every HEVC/H.264 preset and picture
-option at 3024×1964@120. **Not yet run:** sessions through the new preflight
-(probe or real Mac), the installed service, and the failure/recovery gate. The
-ffmpeg, AMF/QSV and Parsec code is still present and is not removed until that
-gate passes.
+option at 3024×1964@120.
+
+**Failure/recovery gate, PC half (2026-10-17):** 17 dev-host cases with `probe`
+(`--no-vdd`, no virtual display) passed: preflight refusals (no common codec,
+oversized mode, a forced driver refusal) before any display change, the
+post-attach GPU check, an old-driver refusal at startup, BUSY, refresh and
+resolution changes mid-session (restarts refused at the wrong size, the session
+ended after 15 s when it stayed wrong), and a desktop the host may not capture
+for 20 s. That last case found a lock-screen wait that never engaged for
+non-SYSTEM hosts, fixed. Another case found that a session starting while the
+previous one's capture is still being torn down cannot start native capture;
+ffmpeg covers that today, and native retry must handle it before ffmpeg goes.
+This build is installed as the service. **Not yet run:** the exclusive-display
+cases (real-Mac VDD sessions, GPU reset, lock/unlock, simulated hybrid mismatch,
+worker crash). The ffmpeg, AMF/QSV and Parsec code stays until those pass. See
+[host/NVIDIA-RECOVERY-RETEST.md](host/NVIDIA-RECOVERY-RETEST.md).
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture

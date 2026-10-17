@@ -63,8 +63,19 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   and picture option at 3024×1964@120; 9000×9000, `--gpu radeon` and the
   driver hook fail as intended. NVIDIA's rated `MB_PER_SEC_MAX` (983,040,
   ≈42 fps at 3024×1964) is shown as a rating only: this GPU measured
-  102–118 fps there. **Not run yet:** any session through the new preflight
-  (probe or real Mac), the installed service, phase B's recovery cases.
+  102–118 fps there.
+- Phase B, PC half (2026-10-17): see `host/NVIDIA-RECOVERY-RETEST.md`. 17
+  `--no-vdd` dev-host + probe cases pass on `062d411` (installed as the
+  service, hash `D7C7F314...004345F9`). Found and fixed: `is_desktop_not_capturable`
+  walked `chain()` and never matched a `.context()` marker, so a non-SYSTEM
+  host's lock-screen wait never engaged (use `downcast_ref` on the
+  `anyhow::Error`). Also `session_gpu` (`d1546a3`): each session re-selects the
+  GPU, since a driver restart changes its LUID. Open for phase C: a second
+  `DuplicateOutput` on an output this process still duplicates fails with
+  E_INVALIDARG (confirmed in-process); a session starting while the previous
+  one's capture is still retiring hits it, and only ffmpeg covers it today.
+  `RELAY_TEST_FAULT=trial,display-gpu` and `probe --progress` /
+  `--codec-mask` exist for these cases. User-run U1–U6 are pending.
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in

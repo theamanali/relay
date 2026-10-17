@@ -6,10 +6,13 @@ case below has a recorded result on the hardware.
 
 ## Build and machine
 
-- Host source: `d1546a3` (phase A `9334c1e`…`4a8c5d6`, fault hooks `04ae0ff`,
-  per-session GPU re-selection `d1546a3`). Release `relay-host.exe` SHA-256
-  `C6757C14152795496BA766BFCA3882003C7299F2CF940BD83DD7A9A0AB7396D5` (every
-  relink changes it; compare against the installed copy before a run).
+- Host source: `062d411` (phase A `9334c1e`…`4a8c5d6`, fault hooks `04ae0ff`,
+  per-session GPU re-selection `d1546a3`, refused-desktop fix `062d411`).
+  Release `relay-host.exe` SHA-256
+  `D7C7F3147E423DB9FD95FB25254D7611AB1273C623D35E5D900DDAAC004345F9`,
+  **installed as the Relay service on 2026-10-17 07:27 PDT** with
+  `install-host.ps1 -SkipDriver` (installed hash checked equal; service
+  Running). Every relink changes the hash; compare before a run.
 - NVIDIA GeForce RTX 3080 Ti, LUID 0:122e1, driver 616.56 (32.0.16.1656),
   NVENC API 13.1; Windows 11 Pro 26200.9711. Displays: DISPLAY1 2560×1440@144
   (primary), DISPLAY2 1080×1920@120.
@@ -27,36 +30,73 @@ Keep three kinds apart when reporting:
 - **probe-tested**: a dev host and `probe` on this PC, no Mac;
 - **real-Mac**: the installed service and the Mac app over the cable.
 
-## Agent-run cases (dev host, `--no-vdd`, probe) — pending
+## Agent-run cases (dev host, `--no-vdd`, probe): probe-tested, 2026-10-17
 
 Service stopped, an elevated dev host on port 18468 streaming the primary
-display, `probe` over loopback. None of these touch the virtual display driver
-or the topology code. Results are recorded here after the run.
+display (DISPLAY1, 2560×1440@144), `probe` over loopback at 120 Mbps, the
+build above (B12 rerun on it after the fix below). None of these touch the
+virtual display driver or the topology code. "No display was changed" means
+the connection's log has no `woke displays` / `dev mode: streaming` line.
+Every preflight logged two trials (requested 1920×1080@60, then the display's
+2560×1440@144), about 180 ms each for HEVC and 65 ms for H.264.
 
-| case | what | expected |
+| case | what | result |
 |---|---|---|
-| B01 | baseline, probe asks 1920×1080@60 | preflight trial at 1920×1080@60, "display runs at 2560x1440@144 … checked the encoder again", frames at about the display rate |
-| B02 | Balanced + 4:4:4 + 10-bit | flags applied; ffprobe Rext yuv444p10le |
-| B03 | H.264 only | ffprobe High |
-| B04/B05 | Fastest / Best | STREAM_START quality byte 1 / 3 |
-| B06 | codec mask 4 (nothing in common) | STREAM_STOP encoder failed, "no codec in common", no "woke displays" |
-| B07 | 9000×9000 | STREAM_STOP encoder failed, size outside limits, no "woke displays" |
-| B08 | second client while streaming | BUSY; the first stream continues |
-| B09 | primary refresh 144 → 120 mid-session, then back | capture interrupted, restarts at the same size, recovers |
-| B10 | primary resized to 1920×1080 for 6 s | restarts refused ("captured output is 1920x1080, the session is 2560x1440"), recovers once the size is back |
-| B11 | primary resized for 21 s | session ends after the 15 s recovery limit with STREAM_STOP encoder failed |
-| B12 | a desktop only SYSTEM may open, 12 s | "cannot be captured … waiting", then "desktop capturable again" and frames resume |
-| B13 | `RELAY_TEST_FAULT=trial` | refused before any display change ("forced by RELAY_TEST_FAULT") |
-| B14 | `RELAY_TEST_FAULT=display-gpu` | refused after attach: "the attached display failed revalidation (layout restored)" |
-| B15 | `RELAY_TEST_NVENC_DRIVER_API=0xb1` | host refuses to start: "update the NVIDIA driver", exit code 1 |
-| B16 | `--no-native` | ffmpeg session through the preflight; picture flags not applied |
+| B01 | baseline | **pass**: STREAM_START 2560×1440@144 HEVC Fastest; 144 frames/s after the first second (133.6 fps over 8 s); PC work p50/p95 5.64/6.44 ms |
+| B02 | Balanced + 4:4:4 + 10-bit | **pass**: format byte 0x0e; 124.0 fps; PC work 13.88/14.14 ms; ffprobe Rext yuv444p10le, bt709/bt709/smpte170m, decodes clean |
+| B03 | H.264 only | **pass with a finding**: codec 1, ffprobe High yuv420p, decodes clean; but native start failed and ffmpeg h264_nvenc took over (finding 2); colour description reads bt470bg/sRGB (finding 5) |
+| B04 | Fastest | **pass**: 0x01; 119.2 fps over 3 s; PC work 3.03/3.17 ms |
+| B05 | Best | **pass**: 0x03; 114.7 fps; PC work 14.38/14.71 ms |
+| B06 | codec mask 4 | **pass**: STREAM_STOP encoder failed; "no codec in common: the Mac offers nothing Relay knows, this GPU encodes HEVC and H.264"; no display changed |
+| B07 | 9000×9000 | **pass**: STREAM_STOP encoder failed; "HEVC cannot encode 9000x9000@60: 9000x9000 is outside 129x33 to 8192x8192"; no display changed |
+| B08 | second client while streaming | **pass**: BUSY; the owner kept 144 frames/s |
+| B09 | refresh 144 → 120 → 144 mid-session | **pass**: two access losses, each "capture recovered after 1.1s and 1 encoder restart(s)" |
+| B10 | resized to 1920×1080 for 6 s | **pass**: every restart refused ("captured output is 1920x1080, the session is 2560x1440"); recovered 6.8 s after the loss, once the size was back |
+| B11 | resized for 21 s | **pass**: restarts refused, then "capture did not recover within 15s", STREAM_STOP encoder failed |
+| B12 | a desktop only SYSTEM may open, 20 s | **pass after a fix** (finding 1): "the ? desktop cannot be captured (PC locked, or not running as the Relay service); waiting", no timeout across 20 s, "desktop capturable again (Default)", 144 frames/s again |
+| B13 | `RELAY_TEST_FAULT=trial` | **pass**: "session preflight refused the stream (no display was changed): NVENC on NVIDIA GeForce RTX 3080 Ti refused HEVC 1920x1080@60: NvEncInitializeEncoder failed (forced …)" |
+| B14 | `RELAY_TEST_FAULT=display-gpu` | **pass**: refused after attach, "the display is not on the selected GPU … (LUID 0:fffedd1e instead of 0:122e1)"; dev mode has no layout to restore, see U5 for the VDD rollback |
+| host D | `RELAY_TEST_NVENC_DRIVER_API=0xb1` | **pass**: the host refused to start, exit code 1: "the NVIDIA driver supports NVENC API 11.1, Relay needs 12.1: update the NVIDIA driver" |
+| B15 | `--no-native` | **pass**: ffmpeg hevc_nvenc session through the preflight, 92.5 fps (the known ~100 fps static-screen pacing) |
+| B16 | `--no-native` + 4:4:4 | **pass**: "not applying the client's 4:4:4 request: the ffmpeg path (--no-native) encodes 8-bit 4:2:0" |
+
+### Findings
+
+1. **Fixed (`062d411`), predates phase A.** `is_desktop_not_capturable` never
+   matched: `Encoder::spawn` attaches the marker with `.context()`, which is
+   not a chain item of its own type. On a desktop the process may not capture
+   (the lock screen, for a non-SYSTEM host) restarts fell into the generic
+   branch, the desktop wait never started and the 15 s recovery limit ended the
+   session. The first B12 run (12 s) survived only because 12 < 15; after the
+   fix the 20 s run waited and recovered. The SYSTEM worker can capture the lock
+   screen, which is why the service never showed it.
+2. **Open, a phase C requirement.** B03's native start failed with
+   `IDXGIOutput1::DuplicateOutput: The parameter is incorrect (0x80070057)`. It
+   began 1.5 s after the 4:4:4 10-bit session ended, whose capture is retired
+   on a detached thread. A throwaway in-process test confirmed the cause: a
+   second `DuplicateOutput` on an output the same process already duplicates
+   fails with exactly this error, and succeeds once the first is gone. Today
+   ffmpeg masks it. Without ffmpeg it would be a failed session, so phase C's
+   native retry must wait (bounded) for the previous capture's retirement and
+   retry this error before giving up. The same race exists for in-session
+   restarts, where the recovery loop already retries.
+3. A session ends about 0.1 s after its client closes; a client that
+   reconnects within that window gets BUSY. Harmless for the Mac; the first
+   run's script reconnected after 40 ms and had to be redone with a pause.
+4. Cosmetic: the waiting line names an inaccessible desktop `?`; while the
+   desktop waits, pings go out about every 3 s (under the 5 s pong timeout);
+   `probe --progress` attributes the first frames after a silence to the
+   catch-up lines.
+5. Separate task, not introduced here: the native H.264 stream's colour
+   description reads bt470bg/sRGB where HEVC reads smpte170m/bt709 from the
+   same `signal_colour`.
 
 ## User-run exclusive-display cases
 
 These black out the PC's monitors (and anything running on them) while a
-session holds the virtual display. Run them with the build above installed:
-from an elevated PowerShell at the repo root,
-`./tools/install-host.ps1 -SkipDriver`, then check
+session holds the virtual display. The build above is already installed; if
+anything was rebuilt since, reinstall from an elevated PowerShell at the repo
+root with `./tools/install-host.ps1 -SkipDriver`, then check
 `(Get-FileHash "$env:ProgramFiles\Relay\relay-host.exe").Hash` against the
 release hash. Note the start time; `%ProgramData%\Relay\host.log` holds every
 line quoted below. After **every** case check that both physical monitors come
@@ -75,7 +115,12 @@ Mac settings unless a case says otherwise: 3024×1964 @ 120 Hz, Balanced,
    `checked the encoder again`, `capturing … HEVC 120 Mbps … preset balanced`,
    `native capture: … 3024x1964@120`, per-5 s `fps` lines, then on disconnect
    `display layout restored`.
-3. Record: time from Connect to picture (the preflight adds about 0.2 s), the
+3. Reconnect within a second or two of the disconnect, stream 10 s, disconnect.
+   Record whether host.log shows `native NVENC startup failed
+   (IDXGIOutput1::DuplicateOutput: The parameter is incorrect …); falling back
+   to ffmpeg` for that session (finding 2). If it does, the HUD shows no PC
+   work for that session.
+4. Record: time from Connect to picture (the preflight adds about 0.2 s), the
    HUD's fps and PC work, and the session report. For comparison the
    2026-10-17 Balanced run delivered 102.1 fps with PC work 18.7 / 19.4 ms
    (`docs/LATENCY.md`); the full A/B is phase C's job, so one session is enough
