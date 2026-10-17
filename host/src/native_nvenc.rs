@@ -1606,7 +1606,7 @@ fn create_capture(
         let output1: IDXGIOutput1 = output.cast().context("IDXGIOutput1")?;
         let duplication = output1
             .DuplicateOutput(&device)
-            .context("IDXGIOutput1::DuplicateOutput")?;
+            .map_err(duplicate_output_error)?;
         let dupe_desc = duplication.GetDesc();
         let width = dupe_desc.ModeDesc.Width;
         let height = dupe_desc.ModeDesc.Height;
@@ -1614,6 +1614,23 @@ fn create_capture(
             bail!("Desktop Duplication reported a zero-sized output");
         }
         Ok((device, context, duplication, adapter_luid, width, height))
+    }
+}
+
+/// `DuplicateOutput` refuses a second duplication of an output this process
+/// still duplicates with E_INVALIDARG (checked on this PC: it succeeds again
+/// once the first is gone), and too many duplicating processes with
+/// NOT_CURRENTLY_AVAILABLE. Both are marked `OutputBusy`, so the start is
+/// retried; E_ACCESSDENIED stays recognisable as a refused desktop.
+fn duplicate_output_error(error: windows::core::Error) -> anyhow::Error {
+    use windows::Win32::Foundation::E_INVALIDARG;
+    use windows::Win32::Graphics::Dxgi::DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+    let busy = error.code() == E_INVALIDARG || error.code() == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+    let error = anyhow::Error::new(error).context("IDXGIOutput1::DuplicateOutput");
+    if busy {
+        error.context(crate::encoder::OutputBusy)
+    } else {
+        error
     }
 }
 
@@ -1858,6 +1875,46 @@ fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop; duplicates the primary output, no display changes"]
+    fn a_second_duplication_starts_once_the_first_is_released() {
+        let first = create_capture(0, 0).expect("first duplication of the primary output");
+        let busy = create_capture(0, 0).map(|_| ()).unwrap_err();
+        assert!(crate::encoder::is_output_busy(&busy), "{busy:#}");
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            drop(first);
+        });
+        let started = Instant::now();
+        let second = crate::encoder::retry_output_busy(
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+            || create_capture(0, 0),
+        );
+        release.join().unwrap();
+        assert!(second.is_ok(), "{:#}", second.err().unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
+    #[test]
+    fn duplicate_output_errors_are_classified() {
+        use windows::Win32::Foundation::{E_ACCESSDENIED, E_INVALIDARG};
+        use windows::Win32::Graphics::Dxgi::{
+            DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_ERROR_UNSUPPORTED,
+        };
+        let classify = |code| duplicate_output_error(windows::core::Error::from(code));
+        assert!(crate::encoder::is_output_busy(&classify(E_INVALIDARG)));
+        assert!(crate::encoder::is_output_busy(&classify(
+            DXGI_ERROR_NOT_CURRENTLY_AVAILABLE
+        )));
+        let refused = classify(E_ACCESSDENIED);
+        assert!(!crate::encoder::is_output_busy(&refused));
+        assert!(crate::encoder::is_access_denied(&refused));
+        let unsupported = classify(DXGI_ERROR_UNSUPPORTED);
+        assert!(!crate::encoder::is_output_busy(&unsupported));
+        assert!(format!("{unsupported:#}").contains("IDXGIOutput1::DuplicateOutput"));
+    }
 
     #[test]
     fn listed_guids_and_formats_have_readable_names() {

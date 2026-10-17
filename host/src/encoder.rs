@@ -6,8 +6,9 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
@@ -183,6 +184,95 @@ pub fn check_capture(cfg: &EncoderConfig, luid: Luid, width: u32, height: u32) -
         )));
     }
     Ok(())
+}
+
+/// Marker in an error chain: Desktop Duplication would not duplicate the
+/// output because this process still duplicates it (E_INVALIDARG; the
+/// previous capture is still being retired) or too many processes do
+/// (DXGI_ERROR_NOT_CURRENTLY_AVAILABLE). Worth a short retry.
+#[derive(Debug)]
+pub struct OutputBusy;
+
+impl std::fmt::Display for OutputBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the output is still being duplicated")
+    }
+}
+
+impl std::error::Error for OutputBusy {}
+
+/// Whether `error` carries the `OutputBusy` marker (a context layer).
+pub fn is_output_busy(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<OutputBusy>().is_some()
+}
+
+/// How long a new capture waits for earlier ones to finish retiring. Teardown
+/// is normally tens of milliseconds; a slot still encoding can take 2 s.
+const RETIRE_WAIT: Duration = Duration::from_secs(3);
+/// How long, and how often, a busy output is retried.
+const OUTPUT_BUSY_BUDGET: Duration = Duration::from_secs(2);
+const OUTPUT_BUSY_DELAY: Duration = Duration::from_millis(100);
+
+/// Run `attempt` again while it fails with `OutputBusy` and another try
+/// still fits in `budget`; any other result is returned as it is.
+pub(crate) fn retry_output_busy<T>(
+    budget: Duration,
+    delay: Duration,
+    mut attempt: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    let deadline = Instant::now() + budget;
+    let mut tries = 1u32;
+    loop {
+        match attempt() {
+            Err(error) if is_output_busy(&error) && Instant::now() + delay <= deadline => {
+                log::info!("{error:#}; retrying (attempt {tries})");
+                thread::sleep(delay);
+                tries += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Native encoders still being torn down on their cleanup threads. A new
+/// Desktop Duplication of an output this process still duplicates fails, so
+/// a new capture waits for these first, for a bounded time.
+struct Retirements {
+    in_flight: Mutex<usize>,
+    idle: Condvar,
+}
+
+static RETIREMENTS: Retirements = Retirements::new();
+
+impl Retirements {
+    const fn new() -> Self {
+        Retirements {
+            in_flight: Mutex::new(0),
+            idle: Condvar::new(),
+        }
+    }
+
+    fn begin(&self) {
+        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+    }
+
+    fn end(&self) {
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        *in_flight = in_flight.saturating_sub(1);
+        if *in_flight == 0 {
+            self.idle.notify_all();
+        }
+    }
+
+    /// True once none are in flight; false if `timeout` passed first.
+    fn wait_idle(&self, timeout: Duration) -> bool {
+        let in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let (in_flight, _) = self
+            .idle
+            .wait_timeout_while(in_flight, timeout, |n| *n > 0)
+            .unwrap_or_else(|e| e.into_inner());
+        *in_flight == 0
+    }
 }
 
 /// Whether `error` (anywhere in its chain) is a `CaptureMismatch`.
@@ -588,14 +678,23 @@ impl Encoder {
                 // on this display-restoration path. Once started, the janitor
                 // is the sole owner and reconstructs the Box exactly once.
                 let native_address = Box::into_raw(native) as usize;
+                // The next capture waits for this one to be gone (bounded):
+                // the same process cannot duplicate an output twice.
+                RETIREMENTS.begin();
                 if let Err(error) = std::thread::Builder::new()
                     .name("nvenc-retire".into())
-                    .spawn(move || unsafe {
-                        drop(Box::from_raw(
-                            native_address as *mut crate::native_nvenc::NativeNvenc,
-                        ));
+                    .spawn(move || {
+                        unsafe {
+                            drop(Box::from_raw(
+                                native_address as *mut crate::native_nvenc::NativeNvenc,
+                            ));
+                        }
+                        RETIREMENTS.end();
                     })
                 {
+                    // Leaked: nothing will ever end it, so do not make the
+                    // next capture wait for it.
+                    RETIREMENTS.end();
                     log::warn!("could not start NVENC cleanup thread: {error}");
                 }
             }
@@ -605,7 +704,14 @@ impl Encoder {
 
     pub fn spawn(cfg: &EncoderConfig) -> Result<Self> {
         if cfg.vendor == Vendor::Nvidia && !cfg.cross_adapter() && !cfg.prefer_ffmpeg {
-            match crate::native_nvenc::NativeNvenc::spawn(cfg) {
+            if !RETIREMENTS.wait_idle(RETIRE_WAIT) {
+                log::warn!(
+                    "an earlier capture is still being torn down after {RETIRE_WAIT:?}; starting anyway"
+                );
+            }
+            match retry_output_busy(OUTPUT_BUSY_BUDGET, OUTPUT_BUSY_DELAY, || {
+                crate::native_nvenc::NativeNvenc::spawn(cfg)
+            }) {
                 Ok(native) => {
                     return Ok(Self {
                         inner: Some(EncoderInner::Native(Box::new(native))),
@@ -981,6 +1087,71 @@ mod tests {
     }
 
     #[test]
+    fn waiting_for_retirements_returns_once_none_are_in_flight() {
+        let retirements = std::sync::Arc::new(Retirements::new());
+        assert!(retirements.wait_idle(Duration::ZERO));
+        retirements.begin();
+        let started = std::time::Instant::now();
+        assert!(!retirements.wait_idle(Duration::from_millis(30)));
+        assert!(started.elapsed() >= Duration::from_millis(30));
+
+        let ending = std::sync::Arc::clone(&retirements);
+        let janitor = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(40));
+            ending.end();
+        });
+        assert!(retirements.wait_idle(Duration::from_secs(5)));
+        janitor.join().unwrap();
+    }
+
+    fn busy() -> anyhow::Error {
+        anyhow::anyhow!("IDXGIOutput1::DuplicateOutput: The parameter is incorrect.")
+            .context(OutputBusy)
+    }
+
+    #[test]
+    fn a_busy_output_is_retried_until_it_frees() {
+        let mut attempts = 0;
+        let result = retry_output_busy(Duration::from_secs(5), Duration::from_millis(1), || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(busy())
+            } else {
+                Ok(attempts)
+            }
+        });
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn a_busy_output_gives_up_at_the_budget() {
+        let started = std::time::Instant::now();
+        let mut attempts = 0;
+        let result: Result<()> =
+            retry_output_busy(Duration::from_millis(50), Duration::from_millis(10), || {
+                attempts += 1;
+                Err(busy())
+            });
+        assert!(is_output_busy(&result.unwrap_err()));
+        assert!(attempts >= 2, "{attempts}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn other_start_errors_are_not_retried() {
+        let mut attempts = 0;
+        let result: Result<()> =
+            retry_output_busy(Duration::from_secs(5), Duration::from_millis(1), || {
+                attempts += 1;
+                Err(anyhow::anyhow!("NvEncInitializeEncoder failed"))
+            });
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+        // Found through further context layers too.
+        assert!(is_output_busy(&busy().context("restarting capture")));
+    }
+
+    #[test]
     fn a_refused_desktop_is_recognised_through_its_context() {
         // How Encoder::spawn marks it: the marker is a context layer, not
         // the root error, so it is not a chain item of its own type.
@@ -1159,7 +1330,7 @@ pub fn is_desktop_not_capturable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<DesktopNotCapturable>().is_some()
 }
 
-fn is_access_denied(error: &anyhow::Error) -> bool {
+pub(crate) fn is_access_denied(error: &anyhow::Error) -> bool {
     use windows::Win32::Foundation::E_ACCESSDENIED;
     error.chain().any(|e| {
         e.downcast_ref::<windows::core::Error>()
