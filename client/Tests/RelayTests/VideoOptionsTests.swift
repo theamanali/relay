@@ -119,7 +119,9 @@ final class VideoOptionsTests: XCTestCase {
         let old = Proto.StreamStart(Data(header + [0]))
         XCTAssertNil(old?.quality)
         XCTAssertEqual(old?.formatNote, "")
-        let rich = Proto.StreamStart(Data(header + [0x04 | 0x08 | 0x02]))
+        // Typed: Xcode 16's compiler infers Int for an OR of literals here.
+        let format: UInt8 = 0x04 | 0x08 | 0x02
+        let rich = Proto.StreamStart(Data(header + [format]))
         XCTAssertEqual(rich?.quality, .balanced)
         XCTAssertEqual(rich?.fullColor, true)
         XCTAssertEqual(rich?.tenBit, true)
