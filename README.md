@@ -181,7 +181,7 @@ ended after 15 s when it stayed wrong), and a desktop the host may not capture
 for 20 s. That last case found a lock-screen wait that never engaged for
 non-SYSTEM hosts, fixed. Another case found that a session starting while the
 previous one's capture is still being torn down cannot start native capture;
-ffmpeg covers that today, and native retry must handle it before ffmpeg goes.
+ffmpeg covered that silently, so the native retry below handles it now.
 
 **Failure/recovery gate, exclusive-display half (2026-10-17): passed.** The
 real Mac ran through the installed service:
@@ -197,9 +197,19 @@ A simulated hybrid mismatch on the virtual display rolled back the layout in
 1.4 s, and an oversized mode was refused without touching the monitors. The
 physical layout came back after every case. After the killed worker the Mac
 found the PC again only once Relay was reopened (an mDNS cache issue, recorded
-for later). The ffmpeg, AMF/QSV and Parsec code is still present; removing it
-is the next step. See
+for later). See
 [host/NVIDIA-RECOVERY-RETEST.md](host/NVIDIA-RECOVERY-RETEST.md).
+
+**One native backend (2026-10-17, phase C):** the ffmpeg, AMF, Quick Sync and
+software encoders, `--ffmpeg`/`--no-native`, and the Parsec driver with its
+installer and `--driver` options are gone. A capture that starts while the
+previous one is still being torn down waits for it (up to 3 s) and retries the
+busy output (up to 2 s); any other failed start or restart goes to the
+session's recovery loop, with each failure classified in the log. Unit tests,
+strict clippy and a release build pass; an opt-in test on this PC starts a
+second duplication of a real output through the retry. **Not yet run on the
+hardware:** this build through the installed service, and the real-Mac latency
+comparison.
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
@@ -326,8 +336,8 @@ troubleshooting, are [host/README.md](host/README.md) and
 
 Each side can be tested without the other machine: `host/src/bin/probe.rs` is a
 fake Mac client and `client/Tools/fakehost/` is a fake PC host. Both run the
-real handshake and pairing. Unit tests (204 Rust plus one opt-in Windows desktop
-test and a probe integration test, 112 Swift),
+real handshake and pairing. Unit tests (209 Rust plus two opt-in Windows desktop
+tests and a probe integration test, 112 Swift),
 including the cross-implementation test vector, the Noise cacophony vectors and
 the CPace draft vectors: `cargo test` on Windows, `swift test` on macOS;
 GitHub Actions runs both (plus `cargo fmt --check` and `cargo clippy -D warnings`)
@@ -337,10 +347,8 @@ on every push that touches that side.
 
 - NVIDIA only on Windows: the host refuses to run on a PC without an NVIDIA GPU
   whose NVENC can run a session. Capture and encode must be on the same GPU, so
-  on a hybrid laptop the virtual display has to be on the NVIDIA half. The
-  `ffmpeg` path (`--no-native`) and the unverified
-  [parsec-vdd](https://github.com/nomi-san/parsec-vdd) driver are still in the
-  code until the native failure/recovery gate passes.
+  on a hybrid laptop the virtual display has to be on the NVIDIA half. There is
+  no other encoder and no other virtual display driver.
 - When the PC refuses a session (unsupported mode, encoder failure), the Mac
   only shows that the host stopped the stream; the reason is in the PC's
   `host.log` (`STREAM_STOP` carries a code, not text).
@@ -354,7 +362,6 @@ on every push that touches that side.
 
 - [MTT Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
   provides the virtual monitor.
-- [parsec-vdd](https://github.com/nomi-san/parsec-vdd) is the alternative driver.
 - The NVENC bindings are derived from `nvidia-video-codec-sdk` 0.4.0
   (© 2023 Viliam Vadocz, MIT; notice in `host/src/nvenc_bindings/`).
 - [snow](https://github.com/mcginty/snow) runs the host's Noise handshake; the

@@ -362,9 +362,15 @@ Rust 1.98 and 1.99, release build; the diagnostic passed on the RTX 3080 Ti
 (driver 616.56, NVENC API 13.1, Windows 11 26200). No session has run through
 the preflight yet, and the service is not redeployed.
 
-Not complete: the failure/recovery gate (handoff step 5) and host
-backend/driver cleanup (steps 6–7). Fallback removal remains gated on native
-failure/recovery and display restoration on the hardware.
+Windows phase B, 2026-10-17 (step 5): the failure/recovery gate passed on the
+hardware, 17 dev-host probe cases and six real-Mac/VDD cases; see
+[the retest record](../host/NVIDIA-RECOVERY-RETEST.md). Windows phase C, the
+same day (steps 6–7): the ffmpeg, AMF, Quick Sync and software encoders and
+the Parsec driver are removed. Native start now waits for the previous
+capture's retirement, retries a busy output, and leaves any other failure to
+the session's recovery loop with a classified log line. Unit tests, strict
+clippy and a release build pass. Pending: the redeploy of the phase C build
+and a same-settings real-Mac latency comparison against `docs/LATENCY.md`.
 
 Release qualification is still pending: macOS 14 hardware and latest stable
 27.0.1, 60 Hz Air/120 Hz Pro/external screen, real-PC pairing/Forget/reconnect,

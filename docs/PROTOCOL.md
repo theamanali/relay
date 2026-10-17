@@ -51,8 +51,7 @@ they are public and purely informational.
 
 The host omits the key when it supports none of them; clients ignore items
 they don't know. It is fixed for the life of the host process: the host
-derives it once at startup (on NVIDIA, from NVENC's HEVC capabilities; its
-ffmpeg fallback lists only `q`). Like the other facts it only tells a client
+derives it once at startup from its NVIDIA GPU's NVENC capabilities. Like the other facts it only tells a client
 which controls to offer; the host still checks every request itself.
 
 ## Framing
@@ -355,9 +354,8 @@ from the last one it saw.
 
 `FRAME_TIMING` is sampled diagnostic data and does not alter the video stream.
 Sequence numbers start at zero for each session and identify the preceding FRAME;
-the host need not send telemetry for every frame. Native NVENC reports capture and encode durations;
-the ffmpeg fallback reports those fields as unavailable because its output pipe
-cannot associate an encoded access unit with the originating capture. The client
+the host need not send telemetry for every frame. The host reports NVENC's capture and encode
+durations; a duration it cannot measure is sent as unavailable. The client
 estimates one-way network latency as half the measured ping round trip. Existing
 clients can ignore this message and continue decoding the preceding FRAME normally.
 
@@ -401,12 +399,12 @@ client may append two bytes after `name`:
   always ignored bytes after `name`, so an older host is unaffected. A missing
   byte counts as 0.
 - `encoder_quality` picks the encoder preset (NVENC P1 / P4 / P6, all with
-  ultra-low-latency tuning; other encoders map it to their own presets). An
+  ultra-low-latency tuning). An
   explicit host `--quality` overrides it, as `--bitrate` overrides
   `bitrate_mbps`. With neither, or with a value the host does not know, the
   host uses fastest.
 - The host applies a flag only to an HEVC session, and only when its encoder can
-  do it (the capability `enc` advertises; its ffmpeg fallback applies none).
+  do it (the capability `enc` advertises).
   H.264 sessions ignore both flags. 4:4:4 is HEVC Range Extensions (profile
   Rext) at 8 or 10 bits; 10-bit 4:2:0 is Main 10. The color description is the
   same in every format: BT.601 matrix, BT.709 primaries and transfer, limited
@@ -422,9 +420,10 @@ translates HID usages to PS/2 scan codes for `SendInput`.
 
 ## Notes
 
-- With the ffmpeg-based encoder (milestone 1) the host learns an access unit is
-  complete only when the next AU's delimiter arrives, which costs one frame
-  interval of latency. The in-process encoder (milestone 5) removes that.
+- The first host encoder (ffmpeg, milestone 1) learned an access unit was
+  complete only when the next AU's delimiter arrived, which cost one frame
+  interval of latency. The in-process NVENC encoder (milestone 5) removed that;
+  the ffmpeg path itself was removed on 2026-10-17.
 - Version negotiation: both sides send `proto_version` (currently 4) inside the
   hellos; the handshake's own version is the `RLY4` in front of msg1 (and the
   Noise prologue). A host that

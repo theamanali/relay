@@ -3,8 +3,9 @@
 The user approved `docs/PLATFORM-REVIEW.md` and asked to implement it. The Mac
 session is implementing Apple-silicon-only packaging, a macOS 14 minimum
 (Observation), Swift 6 ownership, SwiftUI controls and mandatory Metal/hardware
-decoding. Steps 1–4 below were implemented on the PC on 2026-10-17 (see
-`AGENTS.md` Status, "NVIDIA enforcement, phase A"); steps 5–7 are open. Per `AGENTS.md`,
+decoding. All seven steps below were carried out on the PC on 2026-10-17 (see
+`AGENTS.md` Status: phase A, phase B and phase C); the redeploy and the
+real-Mac latency comparison of the final build are pending. Per `AGENTS.md`,
 the PC session owns `host/` and `tools/` and must build/test those changes on
 Windows. Pull main before starting; keep client changes intact.
 

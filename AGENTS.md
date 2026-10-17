@@ -10,7 +10,7 @@ piece of ceremony and it is intentional.
 
 | path | what | builds/tests on |
 |---|---|---|
-| `host/` | Rust host: driver control, GPU selection, ffmpeg capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
+| `host/` | Rust host: driver control, NVIDIA-only GPU selection, native DXGI → NVENC capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift 6 package, Apple silicon/macOS 14+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
@@ -55,7 +55,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   requires the display on `caps.luid` and re-checks/re-trials a changed mode;
   failure drops the lease first. `NativeNvenc::spawn` runs
   `encoder::check_capture` (adapter LUID + size) on every start/restart;
-  `CaptureMismatch` never falls back to ffmpeg. `cross_adapter` compares
+  `CaptureMismatch` goes to the recovery loop. `cross_adapter` compares
   LUIDs. `relay-host encoder-caps` prints it all. Verified on Windows: fmt,
   204 unit tests + the probe integration test, clippy `-D warnings` on 1.98
   and 1.99, release build; `encoder-caps` on the RTX 3080 Ti (driver 616.56,
@@ -73,7 +73,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   GPU, since a driver restart changes its LUID. Open for phase C: a second
   `DuplicateOutput` on an output this process still duplicates fails with
   E_INVALIDARG (confirmed in-process); a session starting while the previous
-  one's capture is still retiring hits it, and only ffmpeg covers it today.
+  one's capture is still retiring hits it (fixed in phase C, below).
   `RELAY_TEST_FAULT=trial,display-gpu` and `probe --progress` /
   `--codec-mask` exist for these cases. User-run U1–U6 all passed on
   2026-10-17 on the installed `3e320af` (hash `A3E248D3...518F1112`):
@@ -83,19 +83,36 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   1.4 s), oversized mode refused untouched. Gate B passed; phase C (removal)
   awaits the user's go-ahead. After a killed worker the Mac's picker needed
   Relay reopened to see the PC (no mDNS goodbye; finding 6, open).
+- Phase C (2026-10-17, handoff steps 6–7; `c2400d9`, `91430f0`, `382bc27`):
+  one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
+  and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`
+  every 100 ms for 2 s while `create_capture` reports `OutputBusy`.
+  `duplicate_output_error` marks DuplicateOutput's E_INVALIDARG and
+  NOT_CURRENTLY_AVAILABLE as busy; E_ACCESSDENIED stays a refused desktop.
+  Any other failed first start puts the session in the recovery loop
+  (`Encoder::waiting`), like a restart; `classify_start_failure` labels
+  each failure in the log. Removed: the ffmpeg child, AMF/QSV/software command
+  lines, `--ffmpeg`, `--no-native`, `VideoCaps::FFMPEG`, `encoder_name`,
+  `driver/parsec.rs`, `DriverKind`/`--driver`, and the installer's
+  `-Driver parsec`/`-Resolutions`. Kept: Annex-B parser, bounded queues,
+  desktop wait, async retirement, capture restart, same-adapter requirement,
+  the `VirtualDisplay` trait, MTT devnode switching. Verified: unit tests,
+  clippy, release build; `a_second_duplication_starts_once_the_first_is_released`
+  (opt-in, `--ignored`) passes on this PC. Redeploy and the real-Mac latency
+  A/B are pending.
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
   `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup
   (`native_nvenc::query_caps`, a short NVENC session: HEVC GUID present,
   `SUPPORT_YUV444_ENCODE`, `SUPPORT_10BIT_ENCODE`; RTX 3080 Ti → `q,444,10`;
-  non-NVIDIA, `--no-native` or a failed query → `q`). SERVER_HELLO's
+  the phase A record replaced this detection). SERVER_HELLO's
   capability byte is now `0x03`. `ClientHello` has optional `encoder_quality` /
   `video_flags`. STREAM_START's last byte is `VideoFormat`. `--quality` is an
   `Option` override (`quality_override`): host flag > client > Speed
   (`negotiate_video`). Flags apply only to HEVC on the in-process path with
-  the display on the encoding GPU (cross-adapter capture means ffmpeg, which
-  ignores them and warns if it takes over after STREAM_START). A GPU without
+  the display on the encoding GPU (there is no other encoder since phase C).
+  A GPU without
   HEVC gets H.264 (`choose_codec`). Native NVENC uses profile Rext / Main10 /
   Main, `chromaFormatIDC` 3 and `pixelBitDepthMinus8` 2. SDK 12.1's HEVC
   config has no input-depth field, so the input depth comes from the ARGB
@@ -116,8 +133,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 
   Real-Mac A/B at 3024×1964 done 2026-10-17 (`docs/LATENCY.md`): Balanced
   102 fps / 18.7 ms PC work, Best 86 fps / 22.7 ms, 4:4:4 +3.5 ms, 10-bit
-  free. Not verified: the host `--quality` override end to end (unit-tested only), ffmpeg/AMD/Intel
-  paths, and a GPU without HEVC or 4:4:4.
+  free. Not verified: the host `--quality` override end to end (unit-tested only),
+  and a GPU without HEVC or 4:4:4.
 - Displays off (2026-10-17): with Windows' displays asleep, connecting hung
   ("Connecting…"/"Starting…" for ever). Mac side done: `HostConnection` ends
   the attempt 20 s after CLIENT_HELLO without STREAM_START ("the PC didn't
@@ -326,8 +343,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   work from a thread bound to the *input* desktop (`OpenInputDesktop` +
   `SetThreadDesktop`, `host/src/desktop.rs`); a user process may not open `Winlogon`,
   which is why a dev run gets `E_ACCESSDENIED` at the lock screen — the session then
-  waits (`DesktopNotCapturable`) instead of falling back to ffmpeg, which fails the
-  same way. Threads that own windows (the tray) can never bind. Worker exit 0 = down
+  waits (`DesktopNotCapturable`, no 15 s limit) until the desktop changes.
+  Threads that own windows (the tray) can never bind. Worker exit 0 = down
   until the next `WTS_SESSION_LOGON`/`CONSOLE_CONNECT`; non-zero = service runs
   `restore` in-session and respawns (5 s / 60 s backoff). `Stop-Service` sets the
   `Global\Relay.quit.<session>` event the worker's tray loop waits on. At the login
@@ -383,7 +400,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
 ## Running it
 
 PC: `host\target\release\relay-host.exe`, installed as the `Relay` service with a tray icon;
-subcommands `pin`, `paired`, `service install/uninstall`, `gpus`, `displays`, `layout`,
+subcommands `pin`, `paired`, `service install/uninstall`, `gpus`, `encoder-caps`, `displays`, `layout`,
 `restore`, `attach-test`. Installer once, elevated: `tools\install-host.ps1`. See
 `host/README.md`.
 
@@ -648,8 +665,6 @@ documented there. What follows is only the mechanics that are easy to break:
   the 4:4:4 chroma is full resolution (checked against a 2×2-averaged copy). The probe's persisted identity
   is paired with it again since the v4 checks (2026-10-08; the list had been empty since
   2026-09-19); `probe --unpair` removes it.
-- ffmpeg-based capture (`ddagrab` → `hevc_nvenc`) paces a static screen at ~100 fps,
-  not 120; that is frame duplication, not loss.
 - **v4 records and the receive loop.** Senders fill every record but a message's last
   (65,519 plaintext bytes), so once a message's first record is decrypted its header says
   exactly how many wire bytes remain; `HostConnection.receiveMore` asks for all of them in one

@@ -71,7 +71,8 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    session. The first B12 run (12 s) survived only because 12 < 15; after the
    fix the 20 s run waited and recovered. The SYSTEM worker can capture the lock
    screen, which is why the service never showed it.
-2. **Open, a phase C requirement.** B03's native start failed with
+2. **Fixed in phase C (`c2400d9`): the next capture waits for retirements and
+   retries a busy output.** B03's native start failed with
    `IDXGIOutput1::DuplicateOutput: The parameter is incorrect (0x80070057)`. It
    began 1.5 s after the 4:4:4 10-bit session ended, whose capture is retired
    on a detached thread. A throwaway in-process test confirmed the cause: a
