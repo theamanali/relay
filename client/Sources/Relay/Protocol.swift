@@ -183,6 +183,14 @@ enum Proto {
         let sendMicros: UInt32
         let networkRTTMicros: UInt32
 
+        init(sequence: UInt64, captureMicros: UInt32, encodeMicros: UInt32, sendMicros: UInt32, networkRTTMicros: UInt32) {
+            self.sequence = sequence
+            self.captureMicros = captureMicros
+            self.encodeMicros = encodeMicros
+            self.sendMicros = sendMicros
+            self.networkRTTMicros = networkRTTMicros
+        }
+
         init?(_ p: Data) {
             guard p.count == 24 else { return nil }
             sequence = p.be64(at: 0)

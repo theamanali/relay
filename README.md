@@ -219,7 +219,8 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 **Next:**
 
 - [ ] Picture options on the real Mac: Fastest / Balanced / Best and 4:2:0 vs
-      4:4:4 at the same bitrate with `--latency-stats`
+      4:4:4 at the same bitrate with `--latency-stats` (copy each session
+      report); also confirm the in-frame HUD costs nothing (HUD on vs off)
 
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one
       user-reported pass each), confirm setup before any user session exists, and

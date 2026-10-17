@@ -98,7 +98,7 @@ struct LaunchOptions {
                   --modifiers mac|physical   mac: ⌘→Ctrl ⌥→Alt ⌃→Win (default); physical: by position
                   --no-input                 view only (toggle control with ⌃⌥⌘K)
                   --pin <digits>             pairing PIN shown by the host (asked for interactively otherwise)
-                  --latency-stats            show live latency telemetry (toggle with ⌃⌥⌘L)
+                  --latency-stats            show the latency HUD (⌃⌥⌘L cycles it)
                   --bitrate <1...1000>       request this video bitrate in Mbps (default 120)
                   --metal-vsync              enable Metal VSync (default off; avoids tearing)
                   --codec h264|hevc          offer only this codec (for latency measurements)

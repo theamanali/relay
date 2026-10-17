@@ -44,9 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     private var cursorHidden = false
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
-    private var latencyTimer: Timer?
-    /// Seconds of overlay shown during a session; every fifth logs a line.
-    private var latencyTicks = 0
+    /// Redraws the latency HUD four times a second; only while it is on.
+    private var hudTimer: Timer?
+    /// The HUD is drawn off the main thread; a tick that finds the last
+    /// drawing still in progress is skipped.
+    private var hudDrawing = false
+    private let hudQueue = DispatchQueue(label: "relay.hud", qos: .userInitiated)
+    /// Set at STREAM_START; the first end path to run takes the report.
+    private var sessionReportPending = false
+    private var reportWindow: NSWindow?
     /// In-flight "forget this host" request from the picker.
     private var unpairTask: UnpairTask?
     /// What Bonjour last showed, for the pairing check below.
@@ -124,11 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             }
         }
         let stats = latencyStats
-        renderer.frameDecodedHandler = { @Sendable sequence, milliseconds in
-            stats.recordFrame(
-                sequence: sequence,
-                decodeMilliseconds: milliseconds
-            )
+        renderer.frameDecodedHandler = { @Sendable _, milliseconds in
+            stats.recordDecoded(milliseconds: milliseconds)
+        }
+        renderer.framePresentedHandler = { @Sendable milliseconds in
+            stats.recordPresented(milliseconds: milliseconds)
         }
 
         window = StreamWindow(
@@ -150,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         exitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if StreamView.isLatencyHotkey(event) {
-                self.prefs.showLatency.toggle()
+                self.prefs.hudMode = self.prefs.hudMode.next
                 self.prefs.save()
                 self.pickerModel.prefs = self.prefs
                 self.applyPrefs()
@@ -164,10 +170,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             self.requestExit()
             return nil
         }
-        latencyTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshLatencyOverlay() }
-        }
-
         if let fixed = options.fixedHost {
             // --host: no picker, dial directly and keep re-dialing on drops.
             let mode = initialMode(for: screen)
@@ -308,8 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         view.scrollDirection = prefs.scrollDirection
         view.keyMap = KeyMap(modifiers: prefs.modifiers)
         view.setForwardInput(prefs.forwardInput)
-        view.latencyVisible = prefs.showLatency
-        refreshLatencyOverlay()
+        updateHUDTimer()
     }
 
     /// ⌃⌥⌘K anywhere: the same setting as the Advanced checkbox and View ▸
@@ -486,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     /// away, the menu bar and cursor come back, and the same host is selected
     /// so Return reconnects.
     private func leaveKiosk(reason: String) {
+        let openReport = takeSessionReport()
         kioskActive = false
         if let connection { dismissPINPrompt(for: connection) }
         connection?.stop()
@@ -507,6 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         if reason.isEmpty { picker?.status = "" } else { picker?.flash(reason) }
         if let h = currentHost { picker?.preselect(key: h.publicKey, name: h.name) }
         checkPairings()
+        if openReport { showSessionReport(nil) }
     }
 
     /// How long a Connect or Pair from the picker waits for the PC to take
@@ -575,8 +578,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             NSEvent.removeMonitor(exitMonitor)
             self.exitMonitor = nil
         }
-        latencyTimer?.invalidate()
-        latencyTimer = nil
+        hudTimer?.invalidate()
+        hudTimer = nil
+        // ⌃⌥⌘Q in --host mode (or ⌘Q mid-stream) quits without an end path.
+        if renderer != nil { _ = takeSessionReport() }
         view?.releaseAllInput()
         connection?.stop()
         browser.stop()
@@ -673,6 +678,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
         }
         self.view.streamSize = CGSize(width: stream.width, height: stream.height)
+        latencyStats.setStream(StreamInfo(
+            host: options.fixedHost == nil ? SessionText.shortName(currentHost?.name ?? "PC") : "\(options.fixedHost!)",
+            codec: stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
+            width: stream.width, height: stream.height, fps: stream.fps, bitrateMbps: stream.bitrateMbps,
+            format: String(stream.formatNote.dropFirst(3)),
+            link: options.fixedHost == nil ? currentHost?.connectLink : nil,
+            vsync: prefs.preventTearing))
+        sessionReportPending = true
     }
 
     private func dismissPINPrompt(for c: HostConnection) {
@@ -696,6 +709,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     func connectionDidEnd(_ c: HostConnection, reason: String, outcome: ConnectionOutcome) {
         guard self.connection === c else { return }
+        // --host mode re-dials without leaving the stream: log it here.
+        if options.fixedHost != nil { _ = takeSessionReport() }
         self.dismissPINPrompt(for: c)
         self.pipeline.reset()
         self.view.releaseAllInput()
@@ -765,20 +780,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         }
     }
 
-    private func refreshLatencyOverlay() {
-        renderer.loadPerformanceSnapshot { [weak self] performance in
-            guard let self else { return }
-            self.latencyStats.recordVideoPerformance(performance)
-            let snapshot = self.latencyStats.snapshot()
-            let text = snapshot.overlayText
+    // MARK: latency HUD and session report
+
+    private func updateHUDTimer() {
+        guard prefs.hudMode != .off else {
+            hudTimer?.invalidate()
+            hudTimer = nil
+            renderer.setOverlay(nil, marginPixels: 0)
+            return
+        }
+        if hudTimer == nil {
+            hudTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshHUD() }
+            }
+        }
+        refreshHUD()
+    }
+
+    /// Snapshot here, draw on `hudQueue`, hand the bitmap to the presenter,
+    /// which blends it into the next frames.
+    private func refreshHUD() {
+        guard kioskActive, prefs.hudMode != .off, !hudDrawing, let window else { return }
+        var snapshot = latencyStats.hudSnapshot()
+        snapshot.counters = renderer.presenterCounters
+        let taken = snapshot
+        let mode = prefs.hudMode
+        let scale = window.backingScaleFactor
+        hudDrawing = true
+        hudQueue.async { [weak self] in
+            let image = StatsHUD.render(taken, mode: mode, scale: scale)
+            let drawn = UncheckedImage(image: image)
             DispatchQueue.main.async {
-                if self.view.latencyVisible {
-                    self.view.latencyText = text
-                    guard self.kioskActive else { return }
-                    self.latencyTicks += 1
-                    if self.latencyTicks % 5 == 0 { NSLog("Latency: %@", snapshot.logLine) }
-                }
+                guard let self else { return }
+                self.hudDrawing = false
+                // Turned off or ended while drawing: leave the frame clean.
+                guard self.kioskActive, self.prefs.hudMode == mode else { return }
+                self.renderer.setOverlay(drawn.image, marginPixels: Int((StatsHUD.margin * scale).rounded()))
             }
         }
     }
+
+    /// Ends the session's measurement once: logs the report and keeps it for
+    /// View ▸ Last Session Report. True when it should open by itself (the
+    /// HUD was on).
+    private func takeSessionReport() -> Bool {
+        guard sessionReportPending else { return false }
+        sessionReportPending = false
+        renderer.setOverlay(nil, marginPixels: 0)
+        guard let report = latencyStats.sessionReport(counters: renderer.presenterCounters) else { return false }
+        NSLog("Session report: %@", report.logLine)
+        pickerModel.sessionReport = report
+        return prefs.hudMode != .off
+    }
+
+    @objc func showSessionReport(_ sender: Any?) {
+        guard let report = pickerModel.sessionReport else { return }
+        let hosting = NSHostingController(rootView: SessionReportView(report: report))
+        if let reportWindow {
+            reportWindow.contentViewController = hosting
+        } else {
+            let w = NSWindow(contentViewController: hosting)
+            w.title = "Session Report"
+            w.styleMask = [.titled, .closable]
+            w.isReleasedWhenClosed = false
+            w.center()
+            reportWindow = w
+        }
+        reportWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// CGImage is immutable; this carries one across the HUD queue hop.
+private struct UncheckedImage: @unchecked Sendable {
+    let image: CGImage?
 }

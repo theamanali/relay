@@ -17,19 +17,6 @@ import CoreMedia
 import Foundation
 import VideoToolbox
 
-struct VideoPerformanceSnapshot {
-    let clientMilliseconds: Double?
-    let droppedFrames: Int
-    var clientP95: Double? = nil
-    var backend = "metal"
-    var replaced = 0
-    var late = 0
-    var unavailable = 0
-    var samples = 0
-    var gpuFailures = 0
-    var invalidTimes = 0
-}
-
 /// Session mutations are serialized by SessionPipeline; decoder output shares
 /// only lock-protected counters/generation. Handlers are installed before start.
 final class VideoRenderer: @unchecked Sendable {
@@ -51,6 +38,11 @@ final class VideoRenderer: @unchecked Sendable {
     /// Receive-to-decode-and-display-enqueue timing for each completed frame.
     /// Final presentation timing comes from Metal drawable callbacks.
     var frameDecodedHandler: (@Sendable (UInt64, Double) -> Void)?
+    /// Receive → on screen for each shown frame (Metal's callback thread).
+    var framePresentedHandler: (@Sendable (Double) -> Void)? {
+        get { metal.presentedHandler }
+        set { metal.presentedHandler = newValue }
+    }
 
     /// Size announced in STREAM_START; the decoded size may differ later.
     private(set) var streamSize = CGSize.zero
@@ -430,7 +422,6 @@ final class VideoRenderer: @unchecked Sendable {
         }
     }
 
-    func loadPerformanceSnapshot(_ completion: (VideoPerformanceSnapshot?) -> Void) {
-        completion(metal.snapshot())
-    }
+    var presenterCounters: PresenterCounters { metal.counters() }
+    func setOverlay(_ image: CGImage?, marginPixels: Int) { metal.setOverlay(image, marginPixels: marginPixels) }
 }

@@ -26,7 +26,8 @@ enum ScrollDirection: String, CaseIterable {
 struct SessionPrefs: Equatable {
     var modifiers: ModifierMapping = .mac
     var forwardInput = true
-    var showLatency = false
+    /// The latency HUD; ⌃⌥⌘L cycles it.
+    var hudMode: HUDMode = .off
     var bitrateMbps = VideoBitrate.defaultValue
     /// Follow the stream mode and link (`VideoBitrate.automatic`) until the
     /// user picks a bitrate.
@@ -60,6 +61,7 @@ struct SessionPrefs: Equatable {
     private static let modifiersKey = "modifierMapping"
     private static let forwardInputKey = "forwardInput"
     private static let showLatencyKey = "showLatency"
+    private static let latencyDetailedKey = "latencyDetailed"
     private static let bitrateKey = "videoBitrateMbps"
     private static let bitrateAutomaticKey = "bitrateAutomatic"
     private static let preventTearingKey = "preventTearing"
@@ -73,7 +75,7 @@ struct SessionPrefs: Equatable {
         var p = SessionPrefs()
         if let raw = d.string(forKey: modifiersKey), let m = ModifierMapping(rawValue: raw) { p.modifiers = m }
         if d.object(forKey: forwardInputKey) != nil { p.forwardInput = d.bool(forKey: forwardInputKey) }
-        if d.object(forKey: showLatencyKey) != nil { p.showLatency = d.bool(forKey: showLatencyKey) }
+        if d.bool(forKey: showLatencyKey) { p.hudMode = d.bool(forKey: latencyDetailedKey) ? .detailed : .compact }
         if d.object(forKey: bitrateKey) != nil {
             p.bitrateMbps = VideoBitrate.clamp(d.integer(forKey: bitrateKey))
         }
@@ -96,7 +98,8 @@ struct SessionPrefs: Equatable {
     func save(to d: UserDefaults = .standard) {
         d.set(modifiers.rawValue, forKey: Self.modifiersKey)
         d.set(forwardInput, forKey: Self.forwardInputKey)
-        d.set(showLatency, forKey: Self.showLatencyKey)
+        d.set(hudMode != .off, forKey: Self.showLatencyKey)
+        d.set(hudMode == .detailed, forKey: Self.latencyDetailedKey)
         d.set(VideoBitrate.clamp(bitrateMbps), forKey: Self.bitrateKey)
         d.set(bitrateAutomatic, forKey: Self.bitrateAutomaticKey)
         d.set(preventTearing, forKey: Self.preventTearingKey)
@@ -112,7 +115,7 @@ struct SessionPrefs: Equatable {
         var p = self
         if o.modifiersGiven { p.modifiers = o.modifiers }
         if o.noInput { p.forwardInput = false }
-        if o.showLatency { p.showLatency = true }
+        if o.showLatency, p.hudMode == .off { p.hudMode = .compact }
         if o.bitrateGiven { p.bitrateMbps = o.bitrateMbps; p.bitrateAutomatic = false }
         if o.metalVSync { p.preventTearing = true }
         return p

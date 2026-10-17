@@ -78,6 +78,29 @@ final class MetalPresenterTests: XCTestCase {
         XCTAssertEqual(pixel(out, width: 64, x: 32, y: 40).r, 98, accuracy: 4, "body of the picture")
     }
 
+    func testOverlayIsBlendedIntoTheFrameAtItsMargin() throws {
+        guard let presenter = MetalPresenter() else { throw XCTSkip("no Metal device") }
+        let image = makeBuffer(width: 64, height: 64, fullRange: false) { _, _ in (235, 128, 128) } // white
+        // An 8×8 overlay: opaque red, with a half-transparent black right column.
+        let ctx = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+        ctx.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: 7, height: 8))
+        ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 0.5)
+        ctx.fill(CGRect(x: 7, y: 0, width: 1, height: 8))
+        presenter.setOverlay(ctx.makeImage(), marginPixels: 4)
+        let out = try XCTUnwrap(presenter.renderOffscreen(image, width: 64, height: 64))
+        let red = pixel(out, width: 64, x: 6, y: 6)
+        XCTAssertGreaterThanOrEqual(red.r, 250); XCTAssertLessThanOrEqual(red.g, 3)
+        XCTAssertEqual(pixel(out, width: 64, x: 11, y: 6).g, 128, accuracy: 6, "premultiplied 50% black over white")
+        XCTAssertGreaterThanOrEqual(pixel(out, width: 64, x: 2, y: 2).g, 252, "margin shows the video")
+        XCTAssertGreaterThanOrEqual(pixel(out, width: 64, x: 30, y: 30).g, 252, "video elsewhere untouched")
+        presenter.setOverlay(nil, marginPixels: 4)
+        let cleared = try XCTUnwrap(presenter.renderOffscreen(image, width: 64, height: 64))
+        XCTAssertGreaterThanOrEqual(pixel(cleared, width: 64, x: 6, y: 6).g, 252, "removed overlay leaves the video")
+    }
+
     func testMatrixSelection() {
         let image = makeBuffer(width: 2, height: 2, fullRange: false) { _, _ in (16, 128, 128) }
         let (offset, m) = MetalPresenter.conversion(for: image)

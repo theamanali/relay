@@ -60,6 +60,8 @@ final class PickerModel {
     /// A paired PC about to be connected over Wi-Fi: the picker asks first.
     var wifiCandidate: Row?
     var pickerActive = true
+    /// The last session's numbers, for View ▸ Last Session Report.
+    var sessionReport: SessionReport?
 
     @ObservationIgnored var connect: (() -> Void)?
     /// Whether the screen has room for the settings popover to the right of

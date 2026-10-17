@@ -523,7 +523,11 @@ struct SessionSettingsView: View {
                               detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))
                 .padding(.top, Style.Space.s)
-            Toggle("Show latency overlay", isOn: preference(\.showLatency))
+            Toggle("Show latency overlay", isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
+                var prefs = model.prefs
+                prefs.hudMode = on ? .compact : .off
+                model.setPrefs(prefs)
+            }))
                 .toggleStyle(.checkbox)
                 .padding(.top, Style.Space.s)
             // Keyboard and pointer: modifier keys, scrolling, and whether the

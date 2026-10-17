@@ -82,4 +82,25 @@ final class SessionPrefsTests: XCTestCase {
         prefs.scrollDirection = .standard
         XCTAssertFalse(prefs.naturalScrolling(macNatural: true))
     }
+
+    @MainActor func testHUDModePersistsAndTheFlagShowsCompact() async {
+        let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(SessionPrefs.load(from: defaults).hudMode, .off)
+        var saved = SessionPrefs()
+        saved.hudMode = .detailed
+        saved.save(to: defaults)
+        XCTAssertEqual(SessionPrefs.load(from: defaults).hudMode, .detailed)
+
+        // Before the detailed view, showLatency alone meant the overlay was on.
+        defaults.removeObject(forKey: "latencyDetailed")
+        XCTAssertEqual(SessionPrefs.load(from: defaults).hudMode, .compact)
+
+        saved.hudMode = .off
+        saved.save(to: defaults)
+        let launch = LaunchOptions.parse(["Relay", "--latency-stats"])
+        XCTAssertEqual(SessionPrefs.load(from: defaults).overridden(by: launch).hudMode, .compact)
+    }
 }

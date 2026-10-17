@@ -417,6 +417,22 @@ documented there. What follows is only the mechanics that are easy to break:
   (user decision); filters cannot match both bezel and text.
   Use `Text(verbatim:)` for numbers: SwiftUI's localized interpolation groups
   digits ("3,024 × 1,964").
+- Latency HUD (2026-10-17): never put a view over the stream's Metal layer;
+  that blocks direct-to-display and cost ~2.5 ms of time to screen. `StatsHUD`
+  draws the HUD with CoreGraphics/CoreText off the main thread (4 Hz, only
+  while on); `MetalPresenter.setOverlay` uploads it as a new texture and
+  `encode` blends it as a second quad in the same pass (premultiplied, nearest
+  sampling, pixel margin). It refreshes only when a video frame arrives.
+  `LatencyStats` records into fixed 0.1 ms histograms (per-second ring for the
+  5 s HUD window, plus whole-session); `takeSessionReport` runs once per
+  STREAM_START on the first end path, logs `Session report:` and opens the
+  report window when the HUD was on. Prefs keep `showLatency` and add
+  `latencyDetailed`; quitting mid-session also logs the report. Unit-tested
+  (stats, HUD bitmap, overlay pixels) and checked live against
+  `fakehost --clip` with an isolated `CFFIXED_USER_HOME`: HUD in the frame,
+  ⌃⌥⌘L cycling, its 50 fps matching fakehost's 49.8 sent, and the report
+  opening over the picker after ⌃⌥⌘Q. The real-PC HUD-on vs HUD-off
+  comparison is still pending.
 - Every Connect (footer button, Return, double-click, PC menu, context menu)
   goes through `PickerModel.requestConnect()`: a paired PC whose
   `DiscoveredHost.connectsOverWiFi` gets the Wi-Fi alert first, unless

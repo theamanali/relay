@@ -150,13 +150,23 @@ struct RelayCommands: Commands {
             }
             .disabled(!paired)
             Divider()
-            Toggle(isOn: Binding(get: { model.prefs.showLatency }, set: {
-                var prefs = model.prefs; prefs.showLatency = $0; model.setPrefs(prefs)
-            })) {
-                Label("Show Latency Overlay", systemImage: "chart.xyaxis.line")
+            // ⌃⌥⌘L sits on the next mode, so the key always cycles.
+            Menu {
+                ForEach(HUDMode.allCases, id: \.self) { mode in
+                    Toggle(isOn: Binding(get: { model.prefs.hudMode == mode }, set: { _ in
+                        var prefs = model.prefs; prefs.hudMode = mode; model.setPrefs(prefs)
+                    })) {
+                        Text(mode.title)
+                    }
+                    .keyboardShortcut(model.prefs.hudMode.next == mode
+                        ? KeyboardShortcut("l", modifiers: [.control, .option, .command]) : nil)
+                }
+            } label: {
+                Label("Latency Overlay", systemImage: "chart.xyaxis.line")
             }
-            .keyboardShortcut("l", modifiers: [.control, .option, .command])
             .disabled(!model.pickerActive)
+            Button("Last Session Report", systemImage: "list.bullet.rectangle") { delegate.showSessionReport(nil) }
+                .disabled(model.sessionReport == nil)
         }
         CommandGroup(replacing: .help) {
             Button("Relay Help") { delegate.openHelp(nil) }

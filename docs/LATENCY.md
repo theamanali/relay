@@ -34,10 +34,14 @@ see (see [The hidden 0–8 ms](#the-hidden-08-ms)).
   and frame age every 600 frames. Each video frame can be followed by an
   optional `FRAME_TIMING` message ([protocol](PROTOCOL.md)) carrying its
   capture, encode and send times.
-- **Mac.** The latency overlay (⌃⌥⌘L or `--latency-stats`) shows the received
-  → decoded p50 and the received → on screen mean and p95, computed over the
-  last 600 frames. "On screen" is the time Metal reports for each drawable
-  through `addPresentedHandler`.
+- **Mac.** The latency HUD (⌃⌥⌘L or `--latency-stats`) shows received → on
+  screen p50 and p95 over the last five seconds, with a per-frame sparkline
+  against one refresh interval; its detailed view adds p99, PC work, RTT/2,
+  received → decoded and the presenter's counters. "On screen" is the time
+  Metal reports for each drawable through `addPresentedHandler`. Every
+  session also keeps whole-session histograms (0.1 ms bins), logged as
+  `Session report:` when it ends and shown in View ▸ Last Session Report,
+  whose Copy button gives a Markdown table for this file.
 - **Not measured.** Network transit (the protocol's RTT/2 is only an
   estimate), the decryption before the Mac's timestamp, and the display
   panel's own response time. Summing the stages does not give an end-to-end
@@ -45,11 +49,14 @@ see (see [The hidden 0–8 ms](#the-hidden-08-ms)).
 
 There are also two traps in reading the Mac's numbers:
 
-- **The overlay inflates what it shows.** It is a view on top of the Metal
-  layer, so while it is visible macOS can't present the video directly to the
-  display. With the overlay up, the mean was 7.92 ms; after hiding it for a
-  full 600-frame window, the mean was 5.47 ms. To get a clean reading, hide the
-  overlay, wait six seconds, then show it and read the first snapshot.
+- **The old overlay inflated what it showed.** It was a view on top of the
+  Metal layer, so while it was visible macOS couldn't present the video
+  directly to the display: 7.92 ms mean with it up, 5.47 ms after hiding it
+  for a full 600-frame window. Since 2026-10-17 the HUD is drawn into the
+  video frame itself (one blended quad in the same render pass), so the layer
+  stays opaque and alone. That it no longer costs anything still needs
+  confirming against the real PC: compare a session report with the HUD on
+  to one with it off.
 - **The link matters.** Two runs with identical settings over a LAN switch
   had RTT/2 values 1 ms apart. Treat sub-millisecond differences measured over
   a LAN as noise.
@@ -273,8 +280,7 @@ Mac, against a real session:
 ```sh
 cd client
 swift run -c release Relay --latency-stats
-swift run -c release Relay --renderer avsbdl --latency-stats   # the old presentation path
 ```
 
-Hide the overlay with ⌃⌥⌘L, wait six seconds, then show it and read the first
-snapshot.
+Stream for at least a minute, leave with ⌃⌥⌘Q and copy the session report
+(it opens by itself when the HUD was on).

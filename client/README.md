@@ -122,7 +122,14 @@ The **Settings** gear in the footer opens:
   why.
 - **Enable VSync**: prevents tearing but adds up to a frame of delay.
   Off by default and switchable mid-session.
-- **Show latency overlay**: timing numbers over the stream (also ⌃⌥⌘L).
+- **Show latency overlay**: a small HUD drawn into the stream's corner: time
+  to screen, frame rate and a sparkline against one refresh interval.
+  ⌃⌥⌘L cycles Off → Compact → Detailed (PC work, network, decode, dropped
+  frames and the stream's settings); also View ▸ Latency Overlay. It does
+  not slow the stream: it is part of the video frame, not a window over it.
+  When a session ends with it on, the **session report** opens: whole-session
+  percentiles, a histogram and Copy as Markdown (View ▸ Last Session Report
+  any time).
 - **Control the PC**: whether your keyboard and pointer go to the PC; off
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
   apply only while it is on.
@@ -141,7 +148,7 @@ overrides it for one launch.
 |---|---|
 | ⌃⌥⌘Q | Leave the session and return to the list (quits in `--host` mode). |
 | ⌃⌥⌘K | Switch between controlling and observing the PC; also in the PC menu. |
-| ⌃⌥⌘L | Show or hide the latency overlay. |
+| ⌃⌥⌘L | Cycle the latency overlay: off, compact, detailed. |
 
 Everything else is sent to the PC, including ⌘ shortcuts, except ⌘Tab, ⌘Space
 and the Fn media keys, which macOS keeps. The modifier mapping:
@@ -183,7 +190,7 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--bitrate <1…1000>` | Video bitrate in Mbps (default 120). |
 | `--modifiers mac\|physical` | Keyboard mapping (above). |
 | `--no-input` | Observe only. |
-| `--latency-stats` | Start with the latency overlay on. |
+| `--latency-stats` | Start with the latency overlay on (compact, unless detailed was chosen). |
 | `--metal-vsync` | Enable VSync for this launch, as the setting does: no tearing, slightly more latency. |
 | `--codec h264\|hevc` | Offer the PC only this codec (it picks HEVC when both are offered). For latency measurements; H.264 has not been measured yet. |
 | `--render-icons <dir>` | Write the PC's tray icons and exit (see [Icons](#icons)). |

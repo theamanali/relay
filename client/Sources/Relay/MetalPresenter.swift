@@ -18,9 +18,15 @@ final class MetalPresenter: @unchecked Sendable {
     /// latency was measured on); 10-bit streams draw into `bgr10a2Unorm` so
     /// their extra precision reaches the screen.
     private let pipelines: [MTLPixelFormat: MTLRenderPipelineState]
+    /// The HUD, alpha-blended over the picture in the same pass.
+    private let overlayPipelines: [MTLPixelFormat: MTLRenderPipelineState]
+    /// The HUD bitmap and its distance from the top-left corner, in drawable
+    /// pixels; replaced whole, never written while the GPU may read it.
+    private var overlay: (texture: MTLTexture, margin: Int)?
     /// The layer format the newest frame wants; applied before the next drawable.
     private var wantedLayerFormat = MTLPixelFormat.bgra8Unorm
     private let sampler: MTLSamplerState
+    private let nearest: MTLSamplerState
     private var textureCache: CVMetalTextureCache?
     private let queue = DispatchQueue(label: "relay.present", qos: .userInteractive)
     private let lock = NSLock()
@@ -39,12 +45,13 @@ final class MetalPresenter: @unchecked Sendable {
     private var mailbox = LatestFrame<Frame>()
     private var running = false
     private var generation = 0
-    private var delays: [Double] = []
     private var dropped = 0
     private var unavailable = 0
     private var gpuFailures = 0
-    private var invalidTimes = 0
     private var unsupportedFormats = 0
+    /// Receive → on screen for each shown frame, in ms, on Metal's callback
+    /// thread. Set before the first frame.
+    var presentedHandler: (@Sendable (Double) -> Void)?
 
     /// Pixel formats the shader accepts: biplanar 4:2:0 or 4:4:4, 8- or
     /// 10-bit, video or full range. 4:4:4's chroma plane is simply full size;
@@ -120,6 +127,25 @@ final class MetalPresenter: @unchecked Sendable {
         float3 ycbcr = float3(luma.sample(s, in.uv).r, chroma.sample(s, in.uv).rg);
         return float4(u.matrix * (ycbcr + u.offset), 1.0);
     }
+
+    struct OverlayRect {
+        float2 origin;   // top-left, clip space
+        float2 size;     // clip space, y down
+    };
+
+    vertex Vertex overlayVertex(uint id [[vertex_id]], constant OverlayRect &r [[buffer(0)]]) {
+        float2 corner = float2(id & 1, id >> 1);
+        Vertex out;
+        out.position = float4(r.origin + corner * float2(r.size.x, -r.size.y), 0.0, 1.0);
+        out.uv = corner;
+        return out;
+    }
+
+    // Premultiplied BGRA from CoreGraphics; blending is one / one-minus-alpha.
+    fragment float4 overlayFragment(Vertex in [[stage_in]], texture2d<float> hud [[texture(0)]],
+                                    sampler s [[sampler(0)]]) {
+        return hud.sample(s, in.uv);
+    }
     """
 
     init?(vsync: Bool = false) {
@@ -131,12 +157,25 @@ final class MetalPresenter: @unchecked Sendable {
             let desc = MTLRenderPipelineDescriptor()
             desc.vertexFunction = library.makeFunction(name: "pictureVertex")
             desc.fragmentFunction = library.makeFunction(name: "ycbcrToRGB")
+            let overlay = MTLRenderPipelineDescriptor()
+            overlay.vertexFunction = library.makeFunction(name: "overlayVertex")
+            overlay.fragmentFunction = library.makeFunction(name: "overlayFragment")
+            let blend = overlay.colorAttachments[0]!
+            blend.isBlendingEnabled = true
+            blend.sourceRGBBlendFactor = .one
+            blend.sourceAlphaBlendFactor = .one
+            blend.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            blend.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+            var overlayPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
             for format in [MTLPixelFormat.bgra8Unorm, .bgr10a2Unorm] {
                 desc.colorAttachments[0].pixelFormat = format
                 pipelines[format] = try device.makeRenderPipelineState(descriptor: desc)
+                overlay.colorAttachments[0].pixelFormat = format
+                overlayPipelines[format] = try device.makeRenderPipelineState(descriptor: overlay)
             }
             self.pipelines = pipelines
+            self.overlayPipelines = overlayPipelines
         } catch {
             NSLog("MetalPresenter: shader build failed: %@", String(describing: error))
             return nil
@@ -148,6 +187,10 @@ final class MetalPresenter: @unchecked Sendable {
         samplerDesc.tAddressMode = .clampToEdge
         guard let sampler = device.makeSamplerState(descriptor: samplerDesc) else { return nil }
         self.sampler = sampler
+        samplerDesc.minFilter = .nearest
+        samplerDesc.magFilter = .nearest
+        guard let nearest = device.makeSamplerState(descriptor: samplerDesc) else { return nil }
+        self.nearest = nearest
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache) == kCVReturnSuccess else {
             NSLog("MetalPresenter: texture cache creation failed")
             return nil
@@ -157,7 +200,7 @@ final class MetalPresenter: @unchecked Sendable {
         layer.framebufferOnly = true
         // Direct-to-display (bypassing the compositor when VSync is off)
         // requires an opaque layer covering the screen with nothing drawn on
-        // top; the latency overlay breaks that while it is visible.
+        // top, which is why the latency HUD is drawn into the frame itself.
         layer.isOpaque = true
         layer.maximumDrawableCount = 2
         layer.presentsWithTransaction = false
@@ -176,12 +219,33 @@ final class MetalPresenter: @unchecked Sendable {
     }
     private var vsyncLogged = false
 
+    /// Show `image` (premultiplied, top-left at `marginPixels` from the
+    /// drawable's corner) on every frame from the next one on; nil removes it.
+    /// A new texture each time, so a frame in flight keeps the old one.
+    func setOverlay(_ image: CGImage?, marginPixels: Int) {
+        guard let image else { lock.withLock { overlay = nil }; return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: image.width,
+                                                            height: image.height, mipmapped: false)
+        desc.usage = .shaderRead
+        desc.storageMode = .shared
+        let bytesPerRow = image.width * 4
+        guard let texture = commands.device.makeTexture(descriptor: desc),
+              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                  bytesPerRow: bytesPerRow, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                      | CGBitmapInfo.byteOrder32Little.rawValue),
+              let data = ctx.data else { return }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        texture.replace(region: MTLRegionMake2D(0, 0, image.width, image.height), mipmapLevel: 0,
+                        withBytes: data, bytesPerRow: bytesPerRow)
+        lock.withLock { overlay = (texture, marginPixels) }
+    }
+
     func reset(generation: Int, clearMetrics: Bool = false) {
         lock.withLock {
             self.generation = generation
             mailbox.reset(generation: generation, clearMetrics: clearMetrics)
-            delays.removeAll()
-            if clearMetrics { dropped = 0; unavailable = 0; gpuFailures = 0; invalidTimes = 0; unsupportedFormats = 0 }
+            if clearMetrics { dropped = 0; unavailable = 0; gpuFailures = 0; unsupportedFormats = 0 }
         }
         queue.async { if let cache = self.textureCache { CVMetalTextureCacheFlush(cache, 0) } }
     }
@@ -255,7 +319,8 @@ final class MetalPresenter: @unchecked Sendable {
         return (y, cbcr)
     }
 
-    /// One render pass: clear to black, draw the aspect-fitted picture.
+    /// One render pass: clear to black, draw the aspect-fitted picture, then
+    /// the HUD if one is set.
     @discardableResult
     private func encode(_ image: CVPixelBuffer, luma: MTLTexture, chroma: MTLTexture,
                         into target: MTLTexture, command: MTLCommandBuffer) -> Bool {
@@ -279,6 +344,18 @@ final class MetalPresenter: @unchecked Sendable {
         encoder.setFragmentTexture(chroma, index: 1)
         encoder.setFragmentSamplerState(sampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        if let overlay = lock.withLock({ overlay }), let overlayPipeline = overlayPipelines[target.pixelFormat] {
+            // Pixel-exact: one texel per drawable pixel, so nearest sampling.
+            var rect = SIMD4<Float>(-1 + 2 * Float(overlay.margin) / bounds.x,
+                                    1 - 2 * Float(overlay.margin) / bounds.y,
+                                    2 * Float(overlay.texture.width) / bounds.x,
+                                    2 * Float(overlay.texture.height) / bounds.y)
+            encoder.setRenderPipelineState(overlayPipeline)
+            encoder.setVertexBytes(&rect, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.setFragmentTexture(overlay.texture, index: 0)
+            encoder.setFragmentSamplerState(nearest, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
         encoder.endEncoding()
         return true
     }
@@ -350,17 +427,13 @@ final class MetalPresenter: @unchecked Sendable {
 
             drawable.addPresentedHandler { [weak self] shown in
                 guard let self else { return }
-                self.lock.withLock {
-                    guard frame.generation == self.generation else { return }
-                    guard shown.presentedTime > 0 else { self.dropped += 1; return }
-                    let delay = (shown.presentedTime - CMTimeGetSeconds(frame.pts)) * 1_000
-                    if delay.isFinite && delay >= 0 {
-                        self.delays.append(delay)
-                        if self.delays.count > 600 { self.delays.removeFirst(self.delays.count - 600) }
-                    } else {
-                        self.invalidTimes += 1
-                    }
+                let current = self.lock.withLock { () -> Bool in
+                    guard frame.generation == self.generation else { return false }
+                    if shown.presentedTime <= 0 { self.dropped += 1; return false }
+                    return true
                 }
+                guard current else { return }
+                self.presentedHandler?((shown.presentedTime - CMTimeGetSeconds(frame.pts)) * 1_000)
             }
             let resources = TextureLifetime(luma: luma, chroma: chroma)
             command.addCompletedHandler { [weak self] buffer in
@@ -395,15 +468,10 @@ final class MetalPresenter: @unchecked Sendable {
         if more { draw() }
     }
 
-    func snapshot() -> VideoPerformanceSnapshot? {
+    func counters() -> PresenterCounters {
         lock.withLock {
-            let sorted = delays.sorted()
-            return VideoPerformanceSnapshot(clientMilliseconds: delays.isEmpty ? nil : delays.reduce(0, +) / Double(delays.count),
-                                            droppedFrames: dropped,
-                                            clientP95: sorted.isEmpty ? nil : sorted[Int((Double(sorted.count - 1) * 0.95).rounded())],
-                                            backend: "metal", replaced: mailbox.replaced, late: mailbox.late,
-                                            unavailable: unavailable + unsupportedFormats, samples: delays.count,
-                                            gpuFailures: gpuFailures, invalidTimes: invalidTimes)
+            PresenterCounters(replaced: mailbox.replaced, late: mailbox.late, dropped: dropped,
+                              unavailable: unavailable + unsupportedFormats, gpuFailures: gpuFailures)
         }
     }
 }

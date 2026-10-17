@@ -29,21 +29,12 @@ final class StreamView: NSView {
     private var wheelRemainderY = 0.0
     private var trackingArea: NSTrackingArea?
     private let statusLabel = NSTextField(labelWithString: "")
-    private let latencyLabel = NSTextField(labelWithString: "")
 
     var status: String = "" {
         didSet {
             statusLabel.stringValue = status
             statusLabel.isHidden = status.isEmpty
         }
-    }
-
-    var latencyVisible = false {
-        didSet { latencyLabel.isHidden = !latencyVisible }
-    }
-
-    var latencyText: String = "" {
-        didSet { latencyLabel.stringValue = latencyText }
     }
 
     override init(frame: NSRect) {
@@ -57,20 +48,9 @@ final class StreamView: NSView {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(statusLabel)
 
-        latencyLabel.textColor = .white
-        latencyLabel.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        latencyLabel.maximumNumberOfLines = 0
-        latencyLabel.lineBreakMode = .byClipping
-        latencyLabel.drawsBackground = true
-        latencyLabel.backgroundColor = NSColor.black.withAlphaComponent(0.72)
-        latencyLabel.translatesAutoresizingMaskIntoConstraints = false
-        latencyLabel.isHidden = true
-        addSubview(latencyLabel)
         NSLayoutConstraint.activate([
             statusLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            latencyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            latencyLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16),
         ])
     }
 
