@@ -108,6 +108,8 @@ func argument(_ flag: String) -> String? {
 let enc = argument("--enc")
 let videoFormat = argument("--format").flatMap { UInt8($0) } ?? 0
 let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { UInt16($0) } } ?? [1280, 720]
+// `--no-frames`: STREAM_START, then nothing (a PC that can't capture).
+let noFrames = args.contains("--no-frames")
 let streamFPS = argument("--fps").flatMap { UInt16($0) }.map { min(max($0, 1), 240) } ?? 60
 print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
 print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)\(enc.map { " enc=\($0)" } ?? "")")
@@ -288,7 +290,9 @@ func serve(_ fd: Int32) {
         start.appendBE16(streamFPS); start.appendBE16(120); start.append(2); start.append(videoFormat)
         var config = Data()
         for set in clip.parameterSets { config.appendBE32(UInt32(set.count)); config.append(set) }
-        guard writeAll(fd, tx.seal(type: 0x02, payload: start)), writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
+        guard writeAll(fd, tx.seal(type: 0x02, payload: start)) else { return }
+        if noFrames { print("-- STREAM_START sent; withholding frames"); _ = readFrame(fd); return }
+        guard writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
         let closed = Flag()
         Thread.detachNewThread { while readFrame(fd) != nil {}; closed.set() } // PONGs and input
         var sent = 0, lastPing = Date.distantPast

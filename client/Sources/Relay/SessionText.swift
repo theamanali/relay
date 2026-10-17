@@ -55,6 +55,8 @@ enum SessionText {
         if has("reason 0") || has("host closed the connection") || has("connection closed") {
             return streamed ? "The PC ended the session" : "The PC closed the connection"
         }
+        if has("didn't start the stream") { return "The PC didn't start the stream — try again" }
+        if has("sent no picture") { return "The PC sent no picture — wake it and try again" }
         if has("no output") || has("waiting") || has("didn't answer") { return "The PC didn't answer" }
         if has("connection failed") || has("couldn't reach") || has("read error") || has("send failed") {
             if streamed, let bitrateMbps {

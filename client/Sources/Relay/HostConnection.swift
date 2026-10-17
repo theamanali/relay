@@ -66,6 +66,13 @@ final class HostConnection: @unchecked Sendable {
         var clientName = ""
         /// PIN to use without asking (e.g. from the command line).
         var pin: String? = nil
+        /// After CLIENT_HELLO: how long the PC has to send STREAM_START.
+        /// Setting up its display normally takes 2–4 s.
+        var streamStartTimeout: TimeInterval = 20
+        /// After STREAM_START: how long until the first FRAME. Desktop
+        /// Duplication hands over the current screen at once, so silence
+        /// means a PC that can't capture, typically with its displays asleep.
+        var firstFrameTimeout: TimeInterval = 10
     }
 
     weak var delegate: HostConnectionDelegate?
@@ -88,6 +95,9 @@ final class HostConnection: @unchecked Sendable {
     private var handshake: NoiseXX?
     /// SERVER_HELLO has arrived (the handshake timeout runs until it does).
     private var greeted = false
+    /// This attempt's STREAM_START and first FRAME, for the stall timeouts.
+    private var streamStarted = false
+    private var receivedFrame = false
     private var supportsPairName = false
     private var supportsVideoOptions = false
     private var pairing = false
@@ -224,6 +234,8 @@ final class HostConnection: @unchecked Sendable {
         receive = nil
         handshakeHash = Data()
         greeted = false
+        streamStarted = false
+        receivedFrame = false
         supportsPairName = false
         supportsVideoOptions = false
         pairing = false
@@ -506,6 +518,12 @@ final class HostConnection: @unchecked Sendable {
         )
         sendRaw(hello)
         ready = true
+        guard let c = connection else { return }
+        let thisAttempt = attempt
+        queue.asyncAfter(deadline: .now() + options.streamStartTimeout) { [weak self] in
+            guard let self, self.isCurrent(c, attempt: thisAttempt), !self.streamStarted else { return }
+            self.finish("the PC didn't start the stream", from: c, attempt: thisAttempt)
+        }
     }
 
     // MARK: receive loop
@@ -624,12 +642,21 @@ final class HostConnection: @unchecked Sendable {
         case .streamStart:
             guard let start = Proto.StreamStart(payload) else { return finish("malformed STREAM_START") }
             activeBitrateMbps = start.bitrateMbps
+            if !streamStarted, let c = connection {
+                streamStarted = true
+                let thisAttempt = attempt
+                queue.asyncAfter(deadline: .now() + options.firstFrameTimeout) { [weak self] in
+                    guard let self, self.isCurrent(c, attempt: thisAttempt), !self.receivedFrame else { return }
+                    self.finish("the PC sent no picture", from: c, attempt: thisAttempt)
+                }
+            }
             delegate?.connection(self, didStart: start)
 
         case .codecConfig:
             delegate?.connection(self, didReceiveCodecConfig: Proto.nalUnits(in: payload))
 
         case .frame:
+            receivedFrame = true
             let sequence = nextFrameSequence
             nextFrameSequence &+= 1
             delegate?.connection(

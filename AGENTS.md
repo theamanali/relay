@@ -14,7 +14,7 @@ piece of ceremony and it is intentional.
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
 | `client/` | Swift 6 package, Apple silicon/macOS 14+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
-| `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host; `--clip <file.hevc> --size WxH --fps <n>` streams a looped clip on a fixed schedule (60 fps by default; 120 for 120 Hz checks) | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
+| `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host; `--clip <file.hevc> --size WxH --fps <n>` streams a looped clip on a fixed schedule (60 fps by default; 120 for 120 Hz checks); `--no-frames` sends STREAM_START and then nothing | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
 
@@ -69,6 +69,14 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   102 fps / 18.7 ms PC work, Best 86 fps / 22.7 ms, 4:4:4 +3.5 ms, 10-bit
   free. Not verified: the host `--quality` override end to end (unit-tested only), ffmpeg/AMD/Intel
   paths, and a GPU without HEVC or 4:4:4.
+- Displays off (2026-10-17): with Windows' displays asleep, connecting hung
+  ("Connecting…"/"Starting…" for ever). Mac side done: `HostConnection` ends
+  the attempt 20 s after CLIENT_HELLO without STREAM_START ("the PC didn't
+  start the stream") and 10 s after STREAM_START without a FRAME ("the PC sent
+  no picture"); `Tools/test-pair-name.sh` covers both. Host side not started:
+  wake the displays with a zero-distance `SendInput` move before
+  `acquire_display`, never `ES_DISPLAY_REQUIRED` (see `KeepAwake`). Steps and
+  Windows checks: `host/DISPLAY-WAKE-HANDOFF.md`.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over

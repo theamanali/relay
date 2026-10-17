@@ -229,6 +229,9 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 - [ ] Confirm the real Mac's pair-only name persists after a service restart;
       immediate tray naming passed on 2026-10-10. See the
       [Mac handoff](host/PAIR-NAME-HANDOFF.md).
+- [ ] Wake the PC's displays when a session starts; connecting hangs while
+      Windows has them off. The Mac now gives up with a message; the host
+      fix is in [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app

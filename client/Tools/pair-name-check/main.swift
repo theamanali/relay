@@ -23,9 +23,11 @@ final class Delegate: HostConnectionDelegate {
         prompted = true
         completion(nil)
     }
-    func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {}
+    var started = false
+    var frames = 0
+    func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) { started = true }
     func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data]) {}
-    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) {}
+    func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) { frames += 1 }
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {}
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         self.reason = reason
@@ -94,7 +96,8 @@ final class FakeHost {
 }
 
 func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: String? = "000000",
-             pairOnly: Bool = true, verifyOnly: Bool = false, unpairOnly: Bool = false) throws -> (HostConnection, Delegate) {
+             pairOnly: Bool = true, verifyOnly: Bool = false, unpairOnly: Bool = false,
+             streamTimeouts: TimeInterval? = nil, expectEnd: Bool = true) throws -> (HostConnection, Delegate) {
     var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
     options.expectedHostKey = try host.key
     options.clientName = name
@@ -103,14 +106,23 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     options.verifyOnly = verifyOnly
     options.unpairOnly = unpairOnly
     options.dialTimeout = 5
+    if let streamTimeouts {
+        options.streamStartTimeout = streamTimeouts
+        options.firstFrameTimeout = streamTimeouts
+    }
     let client = try HostConnection(options: options)
     let delegate = Delegate()
     client.delegate = delegate
     client.start()
-    let completed = delegate.ended.wait(timeout: .now() + 10) == .success
+    // A healthy stream never ends by itself: watch it for a while instead.
+    let completed = delegate.ended.wait(timeout: .now() + (expectEnd ? 10 : 2)) == .success
     client.stop()
     client.queue.sync {} // finish callbacks and cancellation before inspecting state
-    try check(completed, "HostConnection timed out:\n\(host.log)")
+    if expectEnd {
+        try check(completed, "HostConnection timed out:\n\(host.log)")
+    } else {
+        try check(!completed, "a healthy stream ended: \(delegate.reason)\n\(host.log)")
+    }
     return (client, delegate)
 }
 
@@ -157,6 +169,17 @@ func verify(_ host: FakeHost, timeout: Double) throws -> VerifyTask.Outcome {
     let (count, result) = state.snapshot()
     try check(count == 1, "VerifyTask delivered both timeout and response")
     return result!
+}
+
+/// An Annex B "clip" fakehost accepts: VPS, SPS, PPS, then IDR slices with
+/// first_slice_segment_in_pic_flag set. HostConnection never decodes, so
+/// the payload bytes are filler.
+func syntheticClip() -> Data {
+    let start: [UInt8] = [0, 0, 0, 1]
+    var out = [UInt8]()
+    for header: [UInt8] in [[0x40, 0x01], [0x42, 0x01], [0x44, 0x01]] { out += start + header + [0x0c, 0x01] }
+    for _ in 0..<8 { out += start + [0x26, 0x01, 0x80] + [UInt8](repeating: 0x55, count: 64) }
+    return Data(out)
 }
 
 func run(_ root: URL) throws {
@@ -257,6 +280,32 @@ func run(_ root: URL) throws {
         try check(!host.log.contains("confirmed peer name:"), "\(label): stored an unconfirmed name")
         try check(host.log.components(separatedBy: "first message 0xa0").count == 2, "\(label): retried as a different variant")
         print("PASS \(label): no stored peer/name, no fallback retry")
+    }
+
+    if HostConnection.hardwareCodecs != 0 {
+        // A stream that stalls ends with the step that never came. Limits are
+        // shortened to 0.5 s; the app's are 20 s and 10 s.
+        let clipURL = root.appendingPathComponent("tiny.hevc")
+        try syntheticClip().write(to: clipURL)
+        for (label, arguments, reason) in [
+            ("stream-never-starts", ["hang"], "the PC didn't start the stream"),
+            ("stream-no-picture", ["accept", "--clip", clipURL.path, "--no-frames"], "the PC sent no picture"),
+        ] {
+            let host = try FakeHost(root: root, label: label, arguments: arguments)
+            defer { host.stop() }
+            // fakehost streams only to a Mac that is already paired.
+            _ = try connect(host)
+            let (_, delegate) = try connect(host, pin: nil, pairOnly: false, streamTimeouts: 0.5)
+            try check(delegate.reason == reason, "\(label): ended with '\(delegate.reason)'\n\(host.log)")
+            try check(delegate.frames == 0, "\(label): frames arrived")
+            print("PASS \(label): ended with '\(reason)'")
+        }
+        let host = try FakeHost(root: root, label: "stream-healthy", arguments: ["accept", "--clip", clipURL.path])
+        defer { host.stop() }
+        _ = try connect(host)
+        let (_, delegate) = try connect(host, pin: nil, pairOnly: false, streamTimeouts: 0.5, expectEnd: false)
+        try check(delegate.started && delegate.frames > 30, "stream-healthy: \(delegate.frames) frames")
+        print("PASS stream-healthy: \(delegate.frames) frames in 2 s, no timeout")
     }
 
     let host = try FakeHost(root: root, label: "pair-then-stream", arguments: ["busy"])

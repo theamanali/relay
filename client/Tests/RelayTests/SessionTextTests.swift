@@ -2,6 +2,15 @@ import XCTest
 @testable import Relay
 
 final class SessionTextTests: XCTestCase {
+    func testStalledStreamsSayWhichStepNeverCame() {
+        XCTAssertEqual(SessionText.ended("the PC didn't start the stream", streamed: false),
+                       "The PC didn't start the stream — try again")
+        XCTAssertEqual(SessionText.ended("the PC sent no picture", streamed: false),
+                       "The PC sent no picture — wake it and try again")
+        // Distinct from a PC that never answered the handshake.
+        XCTAssertEqual(SessionText.ended("the PC didn't answer", streamed: false), "The PC didn't answer")
+    }
+
     func testEndReasonsReadAsSentences() {
         XCTAssertEqual(SessionText.ended("the host rejected the PIN", streamed: false), "Wrong PIN — try again")
         XCTAssertEqual(SessionText.ended("host stopped the stream (reason 0)", streamed: true), "The PC ended the session")
