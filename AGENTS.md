@@ -98,8 +98,9 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   desktop wait, async retirement, capture restart, same-adapter requirement,
   the `VirtualDisplay` trait, MTT devnode switching. Verified: unit tests,
   clippy, release build; `a_second_duplication_starts_once_the_first_is_released`
-  (opt-in, `--ignored`) passes on this PC. Redeploy and the real-Mac latency
-  A/B are pending.
+  (opt-in, `--ignored`) passes on this PC. The dev-host regression (16 checks,
+  `host/NVIDIA-RECOVERY-RETEST.md` Phase C) passed and installed the build:
+  hash `C5EA77A8...3A754A7442`. The real-Mac latency A/B is pending.
 
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in

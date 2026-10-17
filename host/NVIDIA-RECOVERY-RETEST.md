@@ -209,6 +209,31 @@ host with the virtual display and probe). Two bugs found on the way are fixed
 ffmpeg fallback can go, phase C must handle finding 2 natively; finding 6 is a
 discovery issue outside this gate.
 
+## Phase C regression (2026-10-17, probe-tested)
+
+The native-only build (`b11f2a4` source; release and installed SHA-256
+`C5EA77A8B37F4E1B869C206B1EDF1A8EAF76DA99169ED9F38BB2E43A754A7442`) on
+`--no-vdd` dev hosts with probe, primary display \\.\DISPLAY2 2560×1440@144
+(the GDI names had swapped). All 16 checks passed, then the script installed
+this build as the service (Running, hashes equal):
+
+- Streams: baseline Fastest 131.4 fps; Balanced 4:4:4 10-bit 121.7 fps
+  (format byte 0x0e); **H.264 started 1.5 s after the 4:4:4 10-bit session
+  ran native at 125.4 fps** (the same sequence fell back to ffmpeg at 81.6 fps
+  in phase B, finding 2); Fastest 119.8 fps over 3 s. No `native capture did
+  not start` line and no busy-output retry or retirement-wait warning in the
+  whole run (the wait logs only when it gives up, so a short wait would not
+  show).
+- Refusals: codec mask 4, 9000×9000, `RELAY_TEST_FAULT=trial` and
+  `display-gpu` each got STREAM_STOP encoder failed; a second client got BUSY
+  while the owner kept streaming; the 0xb1 driver hook made the host exit 1.
+- Recovery without a fallback: a 5 s resize was refused at every restart and
+  recovered once the size was back; a 20 s resize ended the session after
+  `did not recover within 15s`; a 20 s SYSTEM-only desktop waited
+  (`cannot be captured (PC locked …)`), then `desktop capturable again` and
+  frames resumed.
+
+Still to do: the real-Mac latency comparison at `docs/LATENCY.md`'s settings.
 ## Report
 
 | case | date/time | result | notes (HUD fps, PC work, log lines, anything odd) |

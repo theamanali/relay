@@ -207,9 +207,10 @@ previous one is still being torn down waits for it (up to 3 s) and retries the
 busy output (up to 2 s); any other failed start or restart goes to the
 session's recovery loop, with each failure classified in the log. Unit tests,
 strict clippy and a release build pass; an opt-in test on this PC starts a
-second duplication of a real output through the retry. **Not yet run on the
-hardware:** this build through the installed service, and the real-Mac latency
-comparison.
+second duplication of a real output through the retry. A rerun of the dev-host
+cases passed on this build, including an H.264 session 1.5 s after a 4:4:4
+10-bit one, now native at 125 fps; the build is installed as the service.
+**Not yet run:** the real-Mac latency comparison.
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
