@@ -85,8 +85,10 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   from the lock screen captured in about 2 s; monitors and layout restored on
   each disconnect. **Open:** an Observe session freezes once the timeout
   passes mid-stream (0 fresh frames from 60 s after the last input, with a
-  ticking window on screen); not fixed, ask the user first. Evidence:
-  `host/DISPLAY-WAKE-HANDOFF.md`.
+  ticking window on screen); not fixed, ask the user first. Tested the same
+  day: the zero-distance nudge sent mid-freeze resumes capture at once and
+  the device-disabled physical monitors stay dark (real keyboard input too).
+  Evidence: `host/DISPLAY-WAKE-HANDOFF.md`.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over

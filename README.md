@@ -235,7 +235,9 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
       restored the monitors. See [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
 - [ ] A session that sends no input (Observe) freezes once Windows'
       display-off timeout passes mid-stream: capture gets no new frames.
-      Not fixed yet, and never with `ES_DISPLAY_REQUIRED`; see the same handoff
+      Not fixed yet, and never with `ES_DISPLAY_REQUIRED`. A zero-distance
+      nudge resumes capture without lighting the physical monitors (tested
+      2026-10-17); see the same handoff
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app

@@ -114,12 +114,35 @@ before session setup`; a failure logs a warning and the session goes on.
    of the last picture. A topmost window with a clock redrawing 10 times a
    second, opened at 11:37:11 without any input, never appeared in capture or
    on the Mac. Disconnecting restored monitors and layout. Not fixed; the
-   user decides how. The nudge idea above is untested, including whether it
-   lights the device-disabled physical monitors.
+   user decides how. The nudge was tested afterwards (next section).
 6. The AC timeout is back to 15 min (`0x384`); DC was never changed.
 
 Not exercised: the Mac's "The PC sent no picture" message against the old
 host, and a wake failure path (the wake never failed).
+
+### Mid-session nudge vs the physical monitors (2026-10-17)
+
+Same installed host, timeout at 1 min, a topmost clock window redrawing 10
+times a second, the real Mac in Observe mode. During the session the two
+physical monitors' device nodes are disabled ("2 physical monitor device(s)
+disabled for the session") and the virtual display is the only one.
+
+- Capture froze at 12:04:17 UTC (0 fresh of 600 per report). After 25 s
+  frozen, a user-mode process in the console session sent exactly what
+  `wake_displays` sends (one 40-byte `INPUT`, `MOUSEEVENTF_MOVE`, dx = dy = 0)
+  at 12:04:42.98. The next report (12:04:47) had 363 fresh frames and the
+  clock moved on the Mac again. **Both physical monitors stayed dark** (the
+  user watched them).
+- In an earlier round the user typed on the PC's real keyboard while frozen
+  (around 12:02:57): capture resumed the same way and the physical monitors
+  also stayed dark.
+
+So a zero-distance nudge restores capture mid-session without lighting the
+device-disabled monitors. Only the injected move was checked from a user
+process; the host would send it from the SYSTEM worker, which reaches the
+same session's input. Not exercised: the lock screen mid-session, a host run
+with `lock_physical` off (monitors not device-disabled), and how often a
+nudge would be needed. Nothing is implemented; the user decides.
 
 ## Mac side, done (2026-10-17)
 
