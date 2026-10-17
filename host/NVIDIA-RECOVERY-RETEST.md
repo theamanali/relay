@@ -6,13 +6,14 @@ case below has a recorded result on the hardware.
 
 ## Build and machine
 
-- Host source: `062d411` (phase A `9334c1e`…`4a8c5d6`, fault hooks `04ae0ff`,
-  per-session GPU re-selection `d1546a3`, refused-desktop fix `062d411`).
-  Release `relay-host.exe` SHA-256
-  `D7C7F3147E423DB9FD95FB25254D7611AB1273C623D35E5D900DDAAC004345F9`,
-  **installed as the Relay service on 2026-10-17 07:27 PDT** with
-  `install-host.ps1 -SkipDriver` (installed hash checked equal; service
-  Running). Every relink changes the hash; compare before a run.
+- Host source: `062d411` for the agent-run cases below (phase A
+  `9334c1e`…`4a8c5d6`, fault hooks `04ae0ff`, per-session GPU re-selection
+  `d1546a3`, refused-desktop fix `062d411`; release SHA-256 `D7C7F314…004345F9`).
+  The user-run cases use `3e320af`, which only repairs em dashes in log
+  strings and comments that a PowerShell rewrite had double-encoded: release
+  SHA-256 `A3E248D313F6ED871C46B404B691034E6254574DFA2FF0F91A46E2A1518F1112`,
+  installed with `install-host.ps1 -SkipDriver`. Every relink changes the
+  hash; compare before a run.
 - NVIDIA GeForce RTX 3080 Ti, LUID 0:122e1, driver 616.56 (32.0.16.1656),
   NVENC API 13.1; Windows 11 Pro 26200.9711. Displays: DISPLAY1 2560×1440@144
   (primary), DISPLAY2 1080×1920@120.
