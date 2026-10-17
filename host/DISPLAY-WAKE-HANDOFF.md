@@ -3,7 +3,8 @@
 Written by the Mac session on 2026-10-17. **Status: done on Windows
 2026-10-17** (host commit `7b38109`, installed and verified on the real Mac;
 see "Windows verification record" below). The mid-session freeze in the open
-question is confirmed and **not fixed**.
+question was confirmed, then fixed the same day with a preemptive keep-alive
+(`af03936`, "Keep-alive" below).
 
 ## Symptom
 
@@ -140,9 +141,37 @@ disabled for the session") and the virtual display is the only one.
 So a zero-distance nudge restores capture mid-session without lighting the
 device-disabled monitors. Only the injected move was checked from a user
 process; the host would send it from the SYSTEM worker, which reaches the
-same session's input. Not exercised: the lock screen mid-session, a host run
-with `lock_physical` off (monitors not device-disabled), and how often a
-nudge would be needed. Nothing is implemented; the user decides.
+same session's input. Not exercised: the lock screen mid-session and a host
+run with `lock_physical` off (monitors not device-disabled).
+
+### Keep-alive (2026-10-17, `af03936`)
+
+The user asked for the nudge to be automatic. It is preemptive, not a
+reaction to stale capture: 0 fresh frames also means a desktop that is not
+changing, so a stale-frame trigger would nudge on any static screen and
+still show a freeze before every wake. `DisplayKeepAlive` (`server.rs`) runs
+one thread per session from just after `acquire_display` until just before
+the layout is restored. The thread is bound to the input desktop and polls
+`input::idle_time()` (`GetLastInputInfo`) every 250 ms. Once the session has
+been idle for 30 s (under Windows' shortest 1-minute display-off timeout), it
+sends `wake_displays`, at most once every 30 s. If the desktop changed, it
+binds again and retries once. It logs the first nudge and a count at the
+end. Side effect: while a client is connected, the screen saver and an
+inactivity lock do not start, as with real input.
+
+Verified on Windows: fmt, 164 unit tests (3 new for the timing) plus the
+probe integration test, clippy `-D warnings` on 1.98 and 1.99, release
+build, elevated `install-host.ps1 -SkipDriver`, installed SHA-256 =
+`5B6DBD61521CF6EE2FAEB2002C7919F5E058907028764D0493CD14CECA9EDB60` (the same
+as the release build). Real Mac in Observe mode, display-off timeout at 1 min,
+ticking window on screen, nobody touching the PC: connected 12:14:19 UTC, first
+nudge 12:15:18, and for the 3 minutes watched every capture report had about
+90 fresh of 600 frames (never 0). The session's idle time, sampled every
+0.5 s, never went above 29.9 s, so Windows counts the nudge as input. The
+user saw the ticker run throughout and both physical monitors stay dark. At
+disconnect (12:21:12) the host logged 11 nudges, then restored monitors and
+layout. The timeout is back to 15 min. Not exercised: the keep-alive at the
+lock screen and in Control mode with an idle Mac.
 
 ## Mac side, done (2026-10-17)
 

@@ -335,7 +335,11 @@ glyph as its own icon; see [assets/README.md](assets/README.md).
   MTT driver's own control pipe (`SETDISPLAYCOUNT`, `RELOAD_DRIVER`): on release
   25.7.23 it crashes the driver, and Windows gives up on it after five crashes.
 - **Capture produces no frames.** Windows delivers nothing while the monitors are
-  asleep. Move the mouse or press a key on the PC first.
+  asleep. A Mac session handles this itself: it wakes the displays when it
+  starts and, after 30 s without input, nudges them with a zero-distance mouse
+  move so they stay on. That also keeps the screen saver and inactivity lock
+  from starting while a Mac is connected. Other tools, such as `attach-test`,
+  don't do this: move the mouse or press a key on the PC first.
 - **The Mac doesn't see the PC.** Check that both firewall rules exist, then run
   `browse --seconds 5` to see what the PC is advertising.
 - **Windows calls the cable "Unidentified network".** That's expected: there is

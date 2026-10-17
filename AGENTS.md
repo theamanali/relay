@@ -83,12 +83,17 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   build, installed hash `6335D274...52D5941`. With the display-off timeout at
   1 min and the monitors dark, real-Mac Observe connects from the desktop and
   from the lock screen captured in about 2 s; monitors and layout restored on
-  each disconnect. **Open:** an Observe session freezes once the timeout
-  passes mid-stream (0 fresh frames from 60 s after the last input, with a
-  ticking window on screen); not fixed, ask the user first. Tested the same
-  day: the zero-distance nudge sent mid-freeze resumes capture at once and
-  the device-disabled physical monitors stay dark (real keyboard input too).
-  Evidence: `host/DISPLAY-WAKE-HANDOFF.md`.
+  each disconnect. An Observe session then froze once the timeout passed
+  mid-stream (0 fresh frames from 60 s after the last input); a zero-distance
+  nudge resumed capture with the device-disabled physical monitors still dark.
+  Fixed with `DisplayKeepAlive` (`af03936`, user request): a per-session
+  thread nudges after 30 s of `GetLastInputInfo` idle time, at most every
+  30 s, and stops before restore. It is preemptive on purpose: fresh-frame
+  counts cannot tell a static desktop from displays that are off. It also
+  holds off the screen saver and inactivity lock during a session. Real Mac,
+  Observe, 1-minute timeout: no freeze over 3 minutes, idle never above
+  29.9 s, monitors dark, 11 nudges logged, restore fine; installed hash
+  `5B6DBD61...CA9EDB60`. Evidence: `host/DISPLAY-WAKE-HANDOFF.md`.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over

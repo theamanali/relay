@@ -233,11 +233,11 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
       displays off after inactivity, Observe-mode connects from the desktop
       and from the lock screen showed a picture in about 2 s, and disconnect
       restored the monitors. See [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
-- [ ] A session that sends no input (Observe) freezes once Windows'
-      display-off timeout passes mid-stream: capture gets no new frames.
-      Not fixed yet, and never with `ES_DISPLAY_REQUIRED`. A zero-distance
-      nudge resumes capture without lighting the physical monitors (tested
-      2026-10-17); see the same handoff
+- [x] Keep the displays on while a session sends no input (2026-10-17):
+      Observe sessions used to freeze once Windows' display-off timeout
+      passed. The host now sends a zero-distance nudge after 30 s without
+      input; on the real Mac, 3 idle minutes at a 1-minute timeout never froze
+      and the physical monitors stayed dark. See the same handoff
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
 - [ ] Signed Windows installer and notarized Mac app
