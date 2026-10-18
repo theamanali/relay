@@ -224,3 +224,63 @@ final class SessionReportTests: XCTestCase {
         XCTAssertFalse(report.logLine.contains("\n"))
     }
 }
+
+final class SessionReportSummaryTests: XCTestCase {
+    func testSecondMediansKeepGapsAndTheSecondInProgress() {
+        var t = SecondMedians()
+        t.record(5, second: 0); t.record(7, second: 0); t.record(9, second: 0)
+        t.record(20, second: 2)
+        XCTAssertEqual(t.medians, [7], "second 2 is still in progress")
+        XCTAssertEqual(t.all, [7, nil, 20])
+        t.record(4, second: -1)
+        XCTAssertEqual(t.all, [7, nil, 20], "before measurement started")
+    }
+
+    private func histogram(_ values: [Double]) -> LatencyHistogram {
+        var h = LatencyHistogram(); values.forEach { h.record($0) }; return h
+    }
+
+    private func report(synced: Bool, replaced: Int = 4, dropped: Int = 1) -> SessionReport {
+        SessionReport(
+            stream: StreamInfo(host: "PC", codec: "HEVC", width: 3024, height: 1964, fps: 120, bitrateMbps: 120,
+                               format: "", link: "Ethernet", vsync: false),
+            endedAt: Date(timeIntervalSince1970: 0), duration: 10, presentedFPS: 119,
+            toScreen: histogram([4.4]), decode: histogram(Array(repeating: 3.0, count: 1_000)),
+            host: histogram([7.0]), network: histogram([0.9]), transfer: LatencyHistogram(),
+            inputSent: histogram([0.5]), decrypt: LatencyHistogram(),
+            desktopToScreen: synced ? histogram([14.9]) : LatencyHistogram(),
+            contentAge: synced ? histogram([3.3]) : LatencyHistogram(),
+            sentToReceived: synced ? histogram([0.4]) : LatencyHistogram(),
+            inputApplied: synced ? histogram([1.1]) : LatencyHistogram(),
+            clock: synced ? ClockSync.Sample(offset: 1, delay: 500) : nil, linkBitsPerSecond: nil,
+            counters: PresenterCounters(replaced: replaced, late: 0, dropped: dropped, unavailable: 0, gpuFailures: 0),
+            timeline: [14, nil, 16])
+    }
+
+    func testTheReportLeadsLikeTheHUD() throws {
+        let synced = report(synced: true)
+        XCTAssertEqual(synced.summary.label, "PC → your screen, median")
+        XCTAssertEqual(try XCTUnwrap(synced.summary.median), 14.9, accuracy: 0.05)
+        XCTAssertEqual(synced.headline.count, 1)
+        XCTAssertEqual(try XCTUnwrap(synced.summary.groups[0].milliseconds), 10.3, accuracy: 0.1)
+        XCTAssertEqual(try XCTUnwrap(synced.summary.input), 1.1, accuracy: 0.05)
+        let older = report(synced: false)
+        XCTAssertEqual(older.summary.label, "receive → screen, median")
+        XCTAssertEqual(try XCTUnwrap(older.headline.percentile(0.5)), 4.4, accuracy: 0.05)
+        XCTAssertEqual(older.summary.inputLabel, "Input → sent")
+    }
+
+    func testSkippedFramesInPlainWords() {
+        XCTAssertEqual(report(synced: true).skippedText, "Skipped 0.5% of frames") // 5 of 1,000 decoded
+        XCTAssertEqual(report(synced: true, replaced: 0, dropped: 0).skippedText, "Skipped 0.0% of frames")
+        XCTAssertEqual(report(synced: true, replaced: 0, dropped: 0).skippedFraction, 0)
+    }
+
+    func testMarkdownLeadsWithTheBreakdown() {
+        let md = report(synced: true).markdown
+        XCTAssertTrue(md.contains("PC → your screen p50 14.9 p95 14.9 · PC 10.3 · Network 0.4 · Mac 4.4 · "
+            + "Input → PC 1.1 · skipped 0.5% of frames (ms)"), md)
+        XCTAssertTrue(md.contains("| Desktop → screen |"), "the full table is still there")
+    }
+}
+

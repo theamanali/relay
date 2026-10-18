@@ -94,6 +94,36 @@ struct LatencyWindow: Sendable {
     }
 }
 
+/// One median per second of the session, for the report's timeline: the
+/// current second's samples build a histogram, its median is kept when the
+/// next second starts. Seconds without samples stay nil.
+struct SecondMedians: Sendable {
+    private(set) var medians: [Double?] = []
+    private var current: (second: Int, histogram: LatencyHistogram)?
+
+    /// `second` counts from the start of measurement.
+    mutating func record(_ ms: Double, second: Int) {
+        guard second >= 0 else { return }
+        if let c = current, c.second != second { flush() }
+        if current == nil { current = (second, LatencyHistogram()) }
+        current?.histogram.record(ms)
+    }
+
+    /// Every second so far, including the one still in progress.
+    var all: [Double?] {
+        var copy = self
+        copy.flush()
+        return copy.medians
+    }
+
+    private mutating func flush() {
+        guard let c = current else { return }
+        if medians.count < c.second { medians += Array(repeating: nil, count: c.second - medians.count) }
+        if medians.count == c.second { medians.append(c.histogram.percentile(0.5)) }
+        current = nil
+    }
+}
+
 /// The newest `capacity` values, oldest first when read.
 struct RecentSamples: Sendable {
     private var values: [Double]
@@ -232,6 +262,8 @@ final class LatencyStats: @unchecked Sendable {
     private var sessionInputApplied = LatencyHistogram()
     private var clock: ClockSync.Sample?
     private var desktopSparkline = RecentSamples(capacity: sparklineFrames)
+    private var toScreenTimeline = SecondMedians()
+    private var desktopTimeline = SecondMedians()
     /// A frame's PC present (Mac µs) and its Metal presentation meet here,
     /// whichever arrives first; keyed by the Mac's FRAME sequence.
     private var pendingShown: [UInt64: (present: Int64?, shown: Int64?)] = [:]
@@ -270,6 +302,8 @@ final class LatencyStats: @unchecked Sendable {
             sessionInputApplied = LatencyHistogram()
             clock = nil
             desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
+            toScreenTimeline = SecondMedians()
+            desktopTimeline = SecondMedians()
             pendingShown = [:]
             sessionToScreen = LatencyHistogram()
             sessionDecode = LatencyHistogram()
@@ -294,6 +328,7 @@ final class LatencyStats: @unchecked Sendable {
             toScreen.record(ms, at: nanos)
             sessionToScreen.record(ms)
             sparkline.append(ms)
+            toScreenTimeline.record(ms, second: second(of: nanos))
         }
     }
 
@@ -371,6 +406,11 @@ final class LatencyStats: @unchecked Sendable {
         }
     }
 
+    /// Seconds since measurement began; under the lock.
+    private func second(of nanos: UInt64) -> Int {
+        nanos >= measuringFrom ? Int((nanos - measuringFrom) / 1_000_000_000) : -1
+    }
+
     /// Under the lock.
     private func join(_ sequence: UInt64, present: Int64?, shown: Int64?, at nanos: UInt64) {
         var entry = pendingShown[sequence] ?? (nil, nil)
@@ -382,6 +422,7 @@ final class LatencyStats: @unchecked Sendable {
             desktopToScreen.record(ms, at: nanos)
             sessionDesktopToScreen.record(ms)
             desktopSparkline.append(ms)
+            desktopTimeline.record(ms, second: second(of: nanos))
             return
         }
         pendingShown[sequence] = entry
@@ -444,7 +485,8 @@ final class LatencyStats: @unchecked Sendable {
                                  sentToReceived: sessionSentToReceived, inputApplied: sessionInputApplied,
                                  clock: clock,
                                  linkBitsPerSecond: lateNanos > 0 ? Double(lateBytes) * 8 / (Double(lateNanos) / 1e9) : nil,
-                                 counters: counters)
+                                 counters: counters,
+                                 timeline: sessionDesktopToScreen.count > 0 ? desktopTimeline.all : toScreenTimeline.all)
         }
     }
 }
@@ -477,6 +519,9 @@ struct SessionReport: Sendable {
     /// The rate frames' later records arrived at, over the whole session.
     let linkBitsPerSecond: Double?
     let counters: PresenterCounters
+    /// The headline measure's median per second (desktop → screen once
+    /// synced, else receive → screen); nil for seconds with no frame.
+    var timeline: [Double?] = []
 
     struct Row: Identifiable {
         let name: String
@@ -496,6 +541,50 @@ struct SessionReport: Sendable {
          Row(name: "Receive → screen", histogram: toScreen),
          Row(name: "Input → sent", histogram: inputSent),
          Row(name: "Input → applied", histogram: inputApplied)]
+    }
+
+    /// The whole session in the HUD's terms, so the report's headline and
+    /// breakdown use the same measures, words and fallbacks as the HUD.
+    var snapshot: LatencyStats.HUDSnapshot {
+        var s = LatencyStats.HUDSnapshot(
+            presentedFPS: presentedFPS, decodedFPS: duration > 0 ? Double(decode.count) / duration : 0,
+            toScreen: .init(toScreen), decode: .init(decode), host: .init(host),
+            networkHalfRTT: network.percentile(0.5), transfer: .init(transfer), inputSent: .init(inputSent),
+            sparkline: [], frameBudget: 1_000 / Double(max(stream.fps, 1)), stream: stream, counters: counters)
+        s.desktopToScreen = .init(desktopToScreen)
+        s.contentAge = .init(contentAge)
+        s.sentToReceived = .init(sentToReceived)
+        s.inputApplied = .init(inputApplied)
+        return s
+    }
+
+    var summary: StatsHUD.Summary { StatsHUD.Summary(snapshot) }
+
+    /// The headline measure for the whole session: desktop → screen once
+    /// synced, else receive → screen.
+    var headline: LatencyHistogram { desktopToScreen.count > 0 ? desktopToScreen : toScreen }
+
+    /// Decoded frames that never reached the screen (replaced by a newer one
+    /// or dropped by the display), as a share of decoded frames.
+    var skippedFraction: Double? {
+        guard decode.count > 0 else { return nil }
+        return min(1, Double(counters.replaced + counters.dropped) / Double(decode.count))
+    }
+
+    /// "Skipped 0.4% of frames".
+    var skippedText: String {
+        guard let f = skippedFraction else { return "Skipped frames: –" }
+        return f > 0 && f < 0.001 ? "Skipped under 0.1% of frames" : String(format: "Skipped %.1f%% of frames", f * 100)
+    }
+
+    /// The breakdown on one line, for the Markdown and the log.
+    var summaryLine: String {
+        let s = summary
+        var parts = ["\(s.label.replacingOccurrences(of: ", median", with: "")) p50 \(Self.ms(s.median)) p95 \(Self.ms(s.p95))"]
+        parts += s.groups.map { "\($0.name) \(Self.ms($0.milliseconds))" }
+        parts.append("\(s.inputLabel) \(Self.ms(s.input))")
+        parts.append(skippedText.lowercased())
+        return parts.joined(separator: " · ")
     }
 
     /// "PC clock +12.345 ms from this Mac (best delay 0.081 ms)", or nil.
@@ -537,6 +626,8 @@ struct SessionReport: Sendable {
             "### \(stream.host), \(date)",
             "",
             stream.summary,
+            "",
+            summaryLine + " (ms)",
             "",
             "Length \(lengthText) · \(String(format: "%.1f", presentedFPS)) fps shown · \(countersText)"
                 + (linkText.map { " · " + $0 } ?? "") + (clockText.map { " · " + $0 } ?? ""),

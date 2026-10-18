@@ -140,9 +140,15 @@ The **Settings** gear in the footer opens:
   not slow the stream: it is part of the video frame, not a window over it.
   It appears 3 seconds into a session: start-up frames are left out of every
   number, the session report's included.
-  When a session ends with it on, the **session report** opens: whole-session
-  percentiles, a histogram and Copy as Markdown (View ▸ Last Session Report
-  any time). Three of its rows are measured on the Mac alone: **Frame
+  When a session ends with it on, the **session report** opens on the screen
+  you streamed on (View ▸ Last Session Report any time). **Summary** leads
+  with the same measure as the HUD (PC → your screen: median, 95% of frames
+  within, frames shown), then the median per second over the session (so a
+  slow stretch shows when it happened), a histogram, where the time went
+  (PC, Network, Mac), input → PC and the share of frames skipped. **Details**
+  swaps those for every stage's p50/p95/p99/max, the counters, the link rate
+  and the clock estimate. Copy as Markdown always includes everything. Three
+  of its rows are measured on the Mac alone: **Frame
   transfer (est.)** is a frame's size over the rate its later records
   arrived at (frames that fit one record, or that were already buffered,
   are skipped), **Decrypt** is the time spent opening its records, and

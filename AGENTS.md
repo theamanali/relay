@@ -643,7 +643,16 @@ documented there. What follows is only the mechanics that are easy to break:
   skipped frames/s (decoded − shown) and the stream on up to three lines
   that always fit. What to show is `StatsHUD.Summary` (pure, tested); the
   developer figures (offset, RTT/2, frame transfer, decrypt, p99, counters)
-  live in the session report. Panel alpha 0.9 so bright content behind it
+  live in the session report's Details page. The report (same day) uses
+  `SessionReport.summary` (= `StatsHUD.Summary` over the session's
+  histograms) for its tiles, histogram and breakdown, plus
+  `SecondMedians` (median per second of the headline measure) for a
+  timeline. Summary/Details is a segmented control that swaps content in
+  place: a folding Details grew the window to 1,129 pt, taller than a
+  MacBook screen. Never put a `GeometryReader` in the report: in the
+  self-sizing window it looped constraint passes until AppKit crashed the
+  app (`NSGenericException`, 2026-10-18); the bar is sized from the fixed
+  width. Panel alpha 0.9 so bright content behind it
   does not show through. Clock sync: see Status, "Clock sync + frame timing".
   The first 3 s after STREAM_START (`LatencyStats.warmUp`) are not recorded
   and the HUD stays hidden until they pass.
