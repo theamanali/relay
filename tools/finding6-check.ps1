@@ -4,7 +4,7 @@
 #             .\tools\finding6-check.ps1 -Build new   (this build)
 # No virtual display, no topology change. Starts the Relay service again at
 # the end, even on failure.
-param([ValidateSet('old', 'new')][string]$Build = 'new', [int]$Gap = 5, [int]$Watch = 75)
+param([ValidateSet('old', 'new')][string]$Build = 'new', [int]$Gap = 5, [int]$Watch = 75, [int]$Before = 20)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot
 $exe = if ($Build -eq 'old') { "$env:ProgramFiles\Relay\relay-host.exe" } else { "$repo\host\target\release\relay-host.exe" }
@@ -23,7 +23,7 @@ try {
     Kill-DevHost
     Start-Process $exe '--no-vdd -v' -RedirectStandardError "$out-1.log" -NoNewWindow
     Stamp 'host 1 started. On the Mac: the PC should be listed as Paired.'
-    Start-Sleep 20
+    Start-Sleep $Before
     Kill-DevHost
     Stamp 'host 1 KILLED (no goodbye). On the Mac: select the PC and click Connect NOW (it should fail).'
     Start-Sleep $Gap
