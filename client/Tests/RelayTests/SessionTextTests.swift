@@ -30,11 +30,11 @@ final class SessionTextTests: XCTestCase {
         XCTAssertEqual(SessionText.ended("the PC didn't answer", streamed: false), "The PC didn't answer")
         XCTAssertEqual(
             SessionText.ended("host stopped the stream (reason 7)", streamed: true, bitrateMbps: 500),
-            "Connection couldn't sustain 500 Mbps — choose a lower bitrate."
+            "Couldn't sustain 500 Mbps — lower the bitrate"
         )
         XCTAssertEqual(
             SessionText.ended("read error: connection reset", streamed: true, bitrateMbps: 500),
-            "Lost connection at 500 Mbps — try a lower bitrate."
+            "Lost connection at 500 Mbps — lower bitrate"
         )
         XCTAssertEqual(
             SessionText.ended("too many wrong PINs — the host accepts none for 599 s", streamed: false),
@@ -51,7 +51,9 @@ final class SessionTextTests: XCTestCase {
     }
 
     func testCompactMessagesFitTheFooter() {
-        let reasons = ["the host rejected the PIN", "pairing cancelled", "handshake failed: host identity changed",
+        let reasons = ["host stopped the stream (reason 7)", "macOS blocked Relay's local network access",
+                       "the PC didn't start the stream", "the PC sent no picture", "malformed record",
+                       "the host rejected the PIN", "pairing cancelled", "handshake failed: host identity changed",
                        "too many wrong PINs — the host accepts none for 599 s", "the PC is in another session",
                        "the PC didn't answer", "the PC forgot this MacBook",
                        "reason 4", "reason 3", "reason 1", "reason 2", "reason 0", "reason 6", "connection closed",
@@ -59,11 +61,39 @@ final class SessionTextTests: XCTestCase {
                        String(repeating: "z", count: 200)]
         for reason in reasons {
             for streamed in [true, false] {
-                XCTAssertLessThanOrEqual(SessionText.ended(reason, streamed: streamed).count, SessionText.footerLimit, reason)
+                for mbps in [nil, 120, 1000] {
+                    let text = SessionText.ended(reason, streamed: streamed, bitrateMbps: mbps)
+                    XCTAssertLessThanOrEqual(SessionText.width(text), SessionText.footerWidth, text)
+                }
             }
         }
-        XCTAssertEqual(SessionText.shortName("A very long computer name indeed").count, SessionText.nameLimit)
+        XCTAssertLessThanOrEqual(SessionText.width(SessionText.shortName("WWWWWWWWWWWWWWWWWWWWWWWW")),
+                                 SessionText.nameWidth)
         XCTAssertEqual(SessionText.fit("short"), "short")
+    }
+
+    /// Every other line the footer can show, with the widest PC name a
+    /// sentence can hold, fits whole.
+    func testEveryFooterLineFitsWithTheWidestName() {
+        let name = SessionText.shortName(String(repeating: "W", count: 40))
+        let lines = ["Pairing with \(name)…", "Connecting to \(name)…", "Waiting for \(name)…", "Forgetting \(name)…",
+                     "Paired with \(name)", "\(name) isn't paired", "Forgot \(name)", "Forgot \(name) on this Mac only",
+                     "Can't search for PCs — retrying", "Can't read this MacBook's identity key",
+                     SessionText.starting(width: 3024, height: 1964, fps: 120, settings: ["4:4:4", "10-bit", "Balanced"]),
+                     SessionText.starting(width: 7680, height: 4320, fps: 240, settings: ["4:4:4", "10-bit", "Balanced"])]
+        for line in lines {
+            XCTAssertLessThanOrEqual(SessionText.width(line), SessionText.footerWidth, line)
+            XCTAssertFalse(line.contains("·"), line)
+        }
+    }
+
+    func testStartingKeepsTheSettingsThatFitAndUsesCommas() {
+        XCTAssertEqual(SessionText.starting(width: 1920, height: 1080, fps: 60, settings: ["10-bit"]),
+                       "Starting 1920×1080 @ 60 fps, 10-bit…")
+        XCTAssertEqual(SessionText.starting(width: 1920, height: 1080, fps: 60, settings: []),
+                       "Starting 1920×1080 @ 60 fps…")
+        let full = SessionText.starting(width: 3024, height: 1964, fps: 120, settings: ["4:4:4", "10-bit", "Balanced"])
+        XCTAssertTrue(full.hasPrefix("Starting 3024×1964 @ 120 fps, 4:4:4"), full)
     }
 
     func testOnlyStallsReachTheFooter() {
@@ -82,7 +112,7 @@ final class SessionTextTests: XCTestCase {
 
     func testLocalNetworkDenialExplainsPermissionAndRelaunch() {
         XCTAssertEqual(SessionText.ended("macOS blocked Relay's local network access", streamed: false),
-                       "macOS blocked local network access — quit and reopen Relay")
+                       "Local network access blocked — reopen Relay")
         let help = SessionText.hostSideForgetHelp(detail: SessionText.localNetworkHelp, fingerprint: "1234ABCD")
         XCTAssertTrue(help.contains("Privacy & Security → Local Network"))
         XCTAssertTrue(help.contains("quit and reopen Relay"))

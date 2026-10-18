@@ -29,7 +29,7 @@ enum Style {
     }
 
     /// Narrow enough that the footer's mode row has even gaps, wide enough
-    /// for a full `SessionText.footerLimit` status beside Connect. The height
+    /// for a full `SessionText.footerWidth` status beside Connect. The height
     /// follows the list (`PickerLayout`).
     static let windowWidth: CGFloat = 410
     /// The settings popover's content width.

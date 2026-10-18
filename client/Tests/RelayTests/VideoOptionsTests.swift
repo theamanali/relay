@@ -122,14 +122,14 @@ final class VideoOptionsTests: XCTestCase {
         let header: [UInt8] = [0x0b, 0xd0, 0x07, 0xac, 0, 120, 0, 120, 2]
         let old = Proto.StreamStart(Data(header + [0]))
         XCTAssertNil(old?.quality)
-        XCTAssertEqual(old?.formatNote, "")
+        XCTAssertEqual(old?.formatSettings, [])
         // Typed: Xcode 16's compiler infers Int for an OR of literals here.
         let format: UInt8 = 0x04 | 0x08 | 0x02
         let rich = Proto.StreamStart(Data(header + [format]))
         XCTAssertEqual(rich?.quality, .balanced)
         XCTAssertEqual(rich?.fullColor, true)
         XCTAssertEqual(rich?.tenBit, true)
-        XCTAssertEqual(rich?.formatNote, " · 4:4:4 · 10-bit · Balanced")
+        XCTAssertEqual(rich?.formatSettings, ["4:4:4", "10-bit", "Balanced"])
     }
 
     private func host(_ name: String, key: UInt8, enc: String?) -> DiscoveredHost {

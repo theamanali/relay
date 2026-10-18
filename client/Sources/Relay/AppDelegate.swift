@@ -112,7 +112,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         renderer.firstFrameHandler = { @Sendable [weak self] generation in
             DispatchQueue.main.async {
                 guard let self, self.renderer.isCurrent(generation: generation) else { return }
-                self.view.status = ""
                 if let pending = self.pendingSession, !self.kioskActive {
                     self.pendingSession = nil
                     self.picker?.connecting = false
@@ -394,14 +393,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
                 case .confirmed:
                     p.flash("Forgot \(shown)")
                 case .busy:
-                    p.flash("Forgot \(shown) on this MacBook only")
+                    p.flash("Forgot \(shown) on this Mac only")
                     self.explainHostSideForget(host: shown, because: "is in another session", fingerprint: myFingerprint, on: p)
                 case .localNetworkDenied:
-                    p.flash("Forgot \(shown) on this MacBook only")
+                    p.flash("Forgot \(shown) on this Mac only")
                     self.explainHostSideForget(host: shown, because: "couldn’t be asked to forget this MacBook",
                                               detail: SessionText.localNetworkHelp, fingerprint: myFingerprint, on: p)
                 case .unreachable(let reason):
-                    p.flash("Forgot \(shown) on this MacBook only")
+                    p.flash("Forgot \(shown) on this Mac only")
                     self.explainHostSideForget(host: shown, because: "didn’t confirm forgetting this MacBook",
                                               detail: SessionText.ended(reason, streamed: false), fingerprint: myFingerprint, on: p)
                 }
@@ -468,9 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         kioskActive = true
         pickerModel.pickerActive = false
         window.setFrame(screen.frame, display: false)
-        view.status = pendingSession == nil && options.fixedHost != nil
-            ? "Starting \(mode.label(native: Self.nativePixelSize(of: screen)))…"
-            : ""
+        view.status = ""
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
@@ -543,7 +540,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         do {
             c = try HostConnection(options: opts)
         } catch {
-            view.status = "Cannot create this MacBook's identity key: \(error.localizedDescription)"
+            // The stream window shows no status but the Control/Observe
+            // flash; the picker's footer says it, the log has the detail.
+            NSLog("Cannot create this MacBook's identity key: %@", error.localizedDescription)
+            pendingSession = nil
+            picker?.connecting = false
+            picker?.flash("Can't read this MacBook's identity key")
             return
         }
         c.delegate = pipeline
@@ -627,9 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     func connection(_ c: HostConnection, didChangeStatus status: String) {
         guard self.connection === c else { return }
-        if self.kioskActive {
-            self.view.status = status
-        } else if let shown = SessionText.footerStatus(status, hostName: self.currentHostLabel) {
+        if !self.kioskActive, let shown = SessionText.footerStatus(status, hostName: self.currentHostLabel) {
             self.picker?.status = shown
         }
     }
@@ -665,7 +665,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) {
         guard connection === c else { return }
         NSLog("Stream: %@ %d×%d @ %d fps, %d Mbps%@", stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
-              stream.width, stream.height, stream.fps, stream.bitrateMbps, stream.formatNote)
+              stream.width, stream.height, stream.fps, stream.bitrateMbps,
+              stream.formatSettings.map { ", " + $0 }.joined())
         // The PC "Connect when Relay opens" goes back to.
         if options.fixedHost == nil, let key = currentHost?.publicKey {
             UserDefaults.standard.set(key, forKey: Self.lastHostKey)
@@ -673,16 +674,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         }
         if let pending = self.pendingSession, !self.kioskActive {
             self.window.setFrame(pending.screen.frame, display: false)
-            self.picker?.status = "Starting \(stream.width)×\(stream.height) @ \(stream.fps) fps\(stream.formatNote)…"
-        } else {
-            self.view.status = "Streaming \(stream.width)×\(stream.height) @ \(stream.fps) fps…"
+            self.picker?.status = SessionText.starting(width: stream.width, height: stream.height, fps: stream.fps,
+                                                       settings: stream.formatSettings)
         }
         self.view.streamSize = CGSize(width: stream.width, height: stream.height)
         latencyStats.setStream(StreamInfo(
             host: options.fixedHost == nil ? SessionText.shortName(currentHost?.name ?? "PC") : "\(options.fixedHost!)",
             codec: stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
             width: stream.width, height: stream.height, fps: stream.fps, bitrateMbps: stream.bitrateMbps,
-            format: String(stream.formatNote.dropFirst(3)).replacingOccurrences(of: " · ", with: ", "),
+            format: stream.formatSettings.joined(separator: ", "),
             link: options.fixedHost == nil ? currentHost?.connectLink : nil,
             vsync: prefs.preventTearing))
         sessionReportPending = true
@@ -714,7 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         self.dismissPINPrompt(for: c)
         self.pipeline.reset()
         self.view.releaseAllInput()
-        self.view.status = "Disconnected: \(reason)"
+        NSLog("Disconnected: %@", reason)
         guard self.options.fixedHost == nil else { return }
         if self.kioskActive {
             self.leaveKiosk(reason: SessionText.ended(

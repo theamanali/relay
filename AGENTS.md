@@ -694,6 +694,16 @@ documented there. What follows is only the mechanics that are easy to break:
   ⌃⌥⌘L cycling, its 50 fps matching fakehost's 49.8 sent, and the report
   opening over the picker after ⌃⌥⌘Q. Real PC, 2026-10-17: median time to
   screen 3.5 ms with the HUD on, 3.4 ms off.
+- Status text (2026-10-18, user request): the stream window shows only the
+  1.5 s "Controlling/Observing <PC>" flash; connection steps, "Starting…",
+  "Streaming…" and "Disconnected:" go to the log (`--host` mode included),
+  and an identity-key failure flashes in the picker. Every footer line must
+  fit whole: `SessionText.footerWidth` (255 pt of 11 pt system: window −
+  margins − gap − a ~99 pt Connect) and `nameWidth` (105 pt) are measured
+  widths, not character counts; `fit` only clips outside text (unknown
+  reasons, names). `SessionText.starting` drops picture settings from the
+  right until the line fits. Settings are `formatSettings` joined with
+  commas, never " · ". Tests measure every footer line with the widest name.
 - Every Connect (footer button, Return, double-click, PC menu, context menu)
   goes through `PickerModel.requestConnect()`: a paired PC whose
   `DiscoveredHost.connectsOverWiFi` gets the Wi-Fi alert first, unless

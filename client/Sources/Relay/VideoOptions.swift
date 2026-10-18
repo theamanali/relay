@@ -80,10 +80,9 @@ extension Proto.StreamStart {
     var quality: EncoderQuality? { EncoderQuality(rawValue: Int(videoFormat & 0x03)) }
     var fullColor: Bool { videoFormat & 0x04 != 0 }
     var tenBit: Bool { videoFormat & 0x08 != 0 }
-    /// " · 4:4:4 · 10-bit · Balanced" for status and logs; empty when the
-    /// PC reports nothing.
-    var formatNote: String {
+    /// ["4:4:4", "10-bit", "Balanced"] for status, the HUD and logs, which
+    /// join them with commas; empty when the PC reports nothing.
+    var formatSettings: [String] {
         [fullColor ? "4:4:4" : nil, tenBit ? "10-bit" : nil, quality?.title].compactMap { $0 }
-            .map { " · " + $0 }.joined()
     }
 }
