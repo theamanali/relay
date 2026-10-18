@@ -202,7 +202,7 @@ final class PickerModel {
         if let editing = renamingID, !next.contains(where: { $0.id == editing }) { finishRename() }
         rows = next
         // A section that drops below two PCs can no longer fold, so it opens.
-        collapsed = collapsed.filter(canCollapse)
+        collapsed = collapsed.filter { canCollapse($0) }
         if let wanted, let row = rows.first(where: { ($0.host.publicKey != nil && $0.host.publicKey == wanted.key) || $0.id == wanted.name }) {
             reveal(row)
             self.wanted = nil

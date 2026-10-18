@@ -332,7 +332,14 @@ func serve(_ fd: Int32) {
         var config = Data()
         for set in clip.parameterSets { config.appendBE32(UInt32(set.count)); config.append(set) }
         guard writeAll(fd, tx.seal(type: 0x02, payload: start)) else { return }
-        if noFrames { print("-- STREAM_START sent; withholding frames"); _ = readFrame(fd); return }
+        if noFrames {
+            // Stay connected until the Mac leaves: it sends TIME_REQUESTs
+            // right after STREAM_START, and returning on the first message
+            // closed the socket before its no-picture timeout could fire.
+            print("-- STREAM_START sent; withholding frames")
+            while readFrame(fd) != nil {}
+            return
+        }
         guard writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
         let closed = Flag()
         let clock = TimingState()
