@@ -146,11 +146,14 @@ final class PickerModelTests: XCTestCase {
     func testListIsAsTallAsItsRowsThenScrollsWithAPeek() {
         let row = Style.rowHeight, title = Style.sectionRowHeight, insets = PickerLayout.listInsets
         let titles = 2 * title + Style.Space.l
-        // Empty: the empty state, held at the two-row floor.
-        let floor = insets + title + 2 * row
+        // No PCs, one available PC, and one paired PC plus the searching
+        // row must all keep the entire picker at the same minimum size.
+        let floor = insets + titles + 2 * row
         XCTAssertEqual(PickerLayout.listHeight(rows: 0), floor)
         // Both titles, "No paired devices yet" and one available PC.
-        XCTAssertEqual(PickerLayout.listHeight(rows: titles + Style.noteRowHeight + row), insets + titles + Style.noteRowHeight + row)
+        XCTAssertEqual(PickerLayout.listHeight(rows: titles + Style.noteRowHeight + row), floor)
+        // Both titles, one paired PC and "Searching for PCs…".
+        XCTAssertEqual(PickerLayout.listHeight(rows: titles + 2 * row), floor)
         // Five PCs under both titles still fit exactly.
         let five = titles + 5 * row
         XCTAssertEqual(PickerLayout.listHeight(rows: five), insets + five)

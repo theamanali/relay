@@ -43,19 +43,19 @@ enum Style {
     static let headerTopInset: CGFloat = 16
 }
 
-/// The picker's list is as tall as its rows, so a single PC leaves no empty
-/// band above the footer. Past `maxHostRows` it scrolls, and is half a row
-/// taller than that so a partly shown row says there is more below.
+/// The picker's list grows with its rows above a stable zero/one-PC minimum.
+/// Past `maxHostRows` it scrolls, and is half a row taller than that so a
+/// partly shown row says there is more below.
 enum PickerLayout {
     /// The inset list's own padding above the first row and below the last.
     static let listInsets: CGFloat = 20
     static let maxHostRows = 5
 
-    /// `rows` is the height of the list's rows (titles, PCs, notes); with
-    /// none at all the empty state takes the two-row floor.
+    /// `rows` is the height of the list's rows (titles, PCs, notes). Reserve
+    /// both section titles and two full rows so zero PCs, one available PC,
+    /// and one paired PC with the searching row all use the same window size.
     static func listHeight(rows: CGFloat) -> CGFloat {
-        // Never so short that the first PC to appear makes the window jump far.
-        let floor = listInsets + Style.sectionRowHeight + 2 * Style.rowHeight
+        let floor = listInsets + 2 * Style.sectionRowHeight + Style.Space.l + 2 * Style.rowHeight
         return min(max(listInsets + rows, floor), scrollingHeight)
     }
 

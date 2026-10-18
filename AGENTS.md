@@ -481,8 +481,10 @@ documented there. What follows is only the mechanics that are easy to break:
   the field. The picker keeps the pre-SwiftUI layout and wording (2026-10-10,
   user request): hidden title bar, 410 wide (narrowed from the old 460 so the
   footer mode row has even gaps; the resolution popup takes the slack) and as
-  tall as the list (`PickerLayout`: rows, titles, 20 pt of list insets, a
-  two-row floor, scrolling past five PCs at half a row taller so a cut row
+  tall as the list (`PickerLayout`: rows, titles, 20 pt of list insets,
+  a minimum of both section titles plus two full rows, so zero PCs, one
+  available PC and one paired PC use the same window size; scrolling past
+  five PCs at half a row taller so a cut row
   shows there is more, scroller hidden unless it overflows;
   the window grows downward). Once any PC is known both sections are
   always listed: Paired shows "No paired devices yet" when empty, Available a
@@ -500,7 +502,7 @@ documented there. What follows is only the mechanics that are easy to break:
   fading ones while the window snapped to size. Available always listed with a mini spinner (no
   "Looking for PCs…" text, user request). With no PC at all there are no
   titles: a centered "No PCs Found" empty state (title, spinner, instruction)
-  sits over the empty list at the two-row floor. No PC count in
+  sits over the empty list at that same minimum size. No PC count in
   the footer (status only), `Style` metrics, tower
   glyph rows with "via <link>", plain header rows (not `Section`, whose header
   floats on a band), hover card (`HoverCard`: AppKit panel, SwiftUI grid,

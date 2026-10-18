@@ -53,7 +53,8 @@ from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchange
 ### The PC list
 
 Relay opens a small window listing the PCs it finds, under **Paired** and
-**Available**. The window is as tall as the list and scrolls past five PCs.
+**Available**. The window keeps the same size with zero or one PC, grows for
+longer lists, and scrolls past five PCs.
 Paired says "No paired devices yet" until a PC is paired, and Available shows
 "Searching for PCs…" while no unpaired PC is around, since Relay keeps
 searching. Click a section's title to collapse or expand it (Paired once
