@@ -63,6 +63,10 @@ or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
 and its key fingerprint.
 
+If a PC's worker crashes, Relay refreshes discovery after its row disappears
+or a picker connection cannot reach it. A returning PC keeps its saved
+pairing; reopening Relay or entering the PIN again should not be necessary.
+
 - **Pair** (an available PC): enter the 6-digit PIN from the PC's tray icon. The
   PC moves to Paired; nothing is streamed yet. A wrong PIN reopens the sheet,
   and after too many the sheet says how long the PC will refuse them.
@@ -242,7 +246,8 @@ The unit tests cover:
   names, the shared named CPace vector and name tampering;
 - the picker's row model, pairing classification and the debouncer that tells a
   PC's goodbye from a cable being unplugged;
-- the pairing-check scheduler and Bonjour reconfirm;
+- the pairing-check scheduler, Bonjour reconfirm, and bounded discovery
+  recovery after a lost row or failed dial;
 - stream mode and bitrate selection, remembered settings and footer text;
 - latency statistics and the newest-frame mailbox;
 - offscreen Metal renders of synthetic frames (colour range, orientation,
@@ -259,6 +264,52 @@ and a changed identity refused before msg3. Its temporary fixed
 Foundation home keeps identities and pairings isolated from the app's state;
 it asserts that isolation before constructing a client and deletes it on exit.
 No PC, display, installed service or real pairing is touched.
+
+### Worker-crash rediscovery (finding 6)
+
+Diagnosed on the real PC over the home LAN on 2026-10-17 Pacific
+(2026-10-18 UTC). The service PTR never left `dns-sd -B`. After a mid-session
+worker kill, `dns-sd -L` resolved the replacement worker with the same `pk`
+and `pg`, while Relay's existing `NWBrowser` kept a TXT-less result:
+
+```text
+18:11:58.032 HostConnection: GAMING-PC ended: ... Connection reset by peer
+18:12:05.429 dns-sd -L: GAMING-PC ... gaming-pc.local.:8468, full TXT
+18:12:05.430 HostBrowser: generation 1 results [GAMING-PC{txt=false,key=false,links=en0,en7}]
+18:12:08.161 HostBrowser: picker hosts [] (removal pending=false)
+```
+
+mDNSResponder logged replacement TXT remove/add events on both interfaces at
+18:12:05.428. The failed layer was the long-lived browser's TXT result, rather
+than pairing storage or missing host announcements. A separate idle kill
+delivered full TXT after 126 ms, so the failure depends on timing.
+
+`BrowseRecovery` recreates the browser 2.5, 10 and 30 seconds after a known
+row is removed. A picker dial that never reaches `.ready` also requires one
+fresh browse after reconfirm. Returning full TXT cancels remaining retries;
+duplicate triggers do not extend the schedule, and retries stop after 30 s.
+The existing debouncer survives browser replacement, preserving its removal
+and TXT-withdrawal grace for other PCs. Browser generations reject retired
+callbacks. Neither saved pairings nor the wire/TXT formats change.
+
+Verification: 164 Swift tests, `Tools/test-pair-name.sh`, and a signed local
+release bundle pass. An isolated smoke harness killed fakehost with SIGKILL,
+triggered failed-dial recovery, observed browse generation 2, restarted the
+same fake identity, and verified it without a PIN. GAMING-PC stayed visible
+through that restart. The local advertiser was kept alive: a record registered
+by this Mac cannot reproduce the real PC's TXT failure.
+
+Fixed-client real-PC checks, home LAN, 2026-10-18 UTC, source `4f74101`:
+
+| case | observed result |
+|---|---|
+| F6b 1, idle kill + Connect in the gap | Dial started 01:16:00.322, reached `.ready` 01:16:04.333 and streamed 01:16:05.779 without a PIN. TXT returned within grace; no row loss or app restart. The dial did not time out, so this did not exercise failed-dial recovery. |
+| F6b 2, mid-session kill | Connection reset 01:17:08.847; full TXT returned 01:17:16.468 after a 127 ms withdrawal. Row stayed Paired; reconnect streamed 01:17:31.033 without a PIN or app restart. |
+| Mid-session repeat | Reset 01:18:17.096; TXT-less result 01:18:24.978, row removed 01:18:27.652. Recovery was armed, then full TXT returned 01:18:27.982 (10.9 s after reset), restoring the row and cancelling the pending restart. Reconnect streamed 01:18:59.920 without a PIN or app restart. |
+
+These runs verify retention/return, saved pairing and cancellation on fresh
+TXT. The bounded restart itself was exercised by the isolated smoke harness;
+the real-PC failed-dial recovery check is still in progress.
 
 ### `fakehost`: a fake PC
 
@@ -355,7 +406,7 @@ planted for comparison shows |t| 41.
 | area | files |
 |---|---|
 | UI and lifecycle | [`RelayApp`](Sources/Relay/RelayApp.swift) (window, menus), [`PickerModel`](Sources/Relay/PickerModel.swift), [`HostPickerView`](Sources/Relay/HostPickerView.swift), [`HoverCard`](Sources/Relay/HoverCard.swift), [`PINEntryView`](Sources/Relay/PINEntryView.swift), [`Style`](Sources/Relay/Style.swift), [`AppDelegate`](Sources/Relay/AppDelegate.swift), [`HostPickerWindowController`](Sources/Relay/HostPickerWindowController.swift) |
-| Discovery | [`HostBrowser`](Sources/Relay/HostBrowser.swift), [`BonjourReconfirm`](Sources/Relay/BonjourReconfirm.swift), [`LocalNetworks`](Sources/Relay/LocalNetworks.swift) |
+| Discovery | [`HostBrowser`](Sources/Relay/HostBrowser.swift), [`BrowseRecovery`](Sources/Relay/BrowseRecovery.swift), [`BonjourReconfirm`](Sources/Relay/BonjourReconfirm.swift), [`LocalNetworks`](Sources/Relay/LocalNetworks.swift) |
 | Connection and pairing | [`HostConnection`](Sources/Relay/HostConnection.swift), [`Crypto`](Sources/Relay/Crypto.swift), [`Protocol`](Sources/Relay/Protocol.swift), [`FrameReader`](Sources/Relay/FrameReader.swift), [`PairingVerifier`](Sources/Relay/PairingVerifier.swift), [`VerifyTask`](Sources/Relay/VerifyTask.swift), [`UnpairTask`](Sources/Relay/UnpairTask.swift) |
 | Frame/control boundary | [`SessionPipeline`](Sources/Relay/SessionPipeline.swift) (frames remain off the main actor) |
 | Video | [`VideoRenderer`](Sources/Relay/VideoRenderer.swift), [`MetalPresenter`](Sources/Relay/MetalPresenter.swift), [`LatestFrame`](Sources/Relay/LatestFrame.swift), [`LatencyStats`](Sources/Relay/LatencyStats.swift) |

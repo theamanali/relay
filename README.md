@@ -202,11 +202,17 @@ physical layout came back after every case. After the killed worker the Mac
 found the PC again only once Relay was reopened: the dead worker sent no mDNS
 goodbye, and mdns-sd announces a new record only twice, in its first second.
 The host now announces each new record again 3, 8, 16, 32 and 60 s after
-registering it, and nothing after that. That is installed but did not fix it:
-after two more worker kills on 2026-10-18 the Mac never showed the PC again
-while the PC kept announcing. The fix is now the Mac's
-([handoff](host/REDISCOVERY-HANDOFF.md)). See
-[host/NVIDIA-RECOVERY-RETEST.md](host/NVIDIA-RECOVERY-RETEST.md).
+registering it, and nothing after that. That alone did not fix it. Mac captures
+on 2026-10-17 Pacific (2026-10-18 UTC) found that Bonjour still resolved full
+TXT while the app's long-lived browser retained a TXT-less result. The Mac
+now recreates the browser at 2.5, 10 and 30 s after a known row disappears,
+or after a picker dial fails before connecting, keeping the existing row
+grace and saved pairings. All 164 Swift tests, isolated pairing checks and
+a fakehost SIGKILL/restart smoke check pass. Real-PC idle and mid-session
+kills have kept or recovered the row without reopening Relay, with PIN-free
+reconnects; detailed results and limits are in the
+[Mac verification record](client/README.md#worker-crash-rediscovery-finding-6).
+The PC session maintains [its retest record](host/NVIDIA-RECOVERY-RETEST.md).
 
 **One native backend (2026-10-17, phase C):** the ffmpeg, AMF, Quick Sync and
 software encoders, `--ffmpeg`/`--no-native`, and the Parsec driver with its

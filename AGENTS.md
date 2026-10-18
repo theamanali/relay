@@ -93,9 +93,35 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Installed (`7074914…9CF97724`); it is **not enough**: on 2026-10-18 both
   real-worker kills (F6b) left the Mac's picker without the PC for good
   while host.log showed all five re-announcements. A `--no-vdd` dev host
-  killed the same way never lost the row (F6a). Mac work is in
-  `host/REDISCOVERY-HANDOFF.md` (find the losing layer with `dns-sd -B`,
-  then recreate the `NWBrowser` when a known host's row goes).
+  killed the same way never lost the row (F6a). Mac diagnosis/fix
+  (`b0620a6`, `4f74101`; 2026-10-17 Pacific / 2026-10-18 UTC): simultaneous
+  `dns-sd -B`, `dns-sd -L`, mDNSResponder and app captures establish an
+  app-side lost TXT update. The PTR never left either interface; after a
+  real mid-session kill at 18:11:58 Pacific, resolve returned full TXT at
+  18:12:05.429 and mDNSResponder delivered TXT remove/add to both queries,
+  but `NWBrowser` reported only `txt=false,key=false` at 18:12:05.430.
+  The debouncer correctly expired grace at 18:12:08.161; the browser supplied
+  no full TXT during the remaining ~3 minutes before relaunch. Other kills
+  deliver full TXT within grace, so
+  this is timing dependent. `BrowseRecovery` now recreates the browser at
+  2.5/10/30 s after a previously discovered keyed row is removed, or after
+  a picker dial never reaches `.ready` (alongside reconfirm). Duplicate
+  triggers coalesce, full TXT cancels remaining retries, and the debouncer
+  survives restarts so other rows retain grace. Stop cancels recovery;
+  retired browser callbacks are generation guarded. No pairing, wire or
+  TXT change. Verified: 164 Swift tests, isolated `test-pair-name.sh`,
+  signed local release build, isolated SIGKILL/restart fakehost smoke
+  (forced failed-dial recovery, generation 2, same-key verify without PIN,
+  other PC row preserved; local records cannot reproduce the real flush).
+  Fixed-client F6b on the home LAN: idle kill + gap Connect streamed without
+  PIN (01:16:05.779 UTC; dial reached ready, so no failed-dial timer); a
+  mid-session kill kept the row and reconnected without PIN; a repeat
+  removed the row at 01:18:27.652 UTC and restored it at 01:18:27.982,
+  10.9 s after reset, cancelling the pending restart. PIN-free reconnect
+  streamed 01:18:59.920 without reopening. Real-PC failed-dial recovery is
+  still being checked. Detailed Mac evidence:
+  `client/README.md#worker-crash-rediscovery-finding-6`. The PC session owns
+  updates to both host handoff/retest files.
 - Phase C (2026-10-17, handoff steps 6–7; `c2400d9`, `91430f0`, `382bc27`):
   one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
   and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`
