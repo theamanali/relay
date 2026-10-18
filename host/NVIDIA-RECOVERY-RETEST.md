@@ -111,14 +111,39 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    Phase C removed ffmpeg and left `signal_colour` and its callers unchanged,
    so every session now signals 1 / 1 / 6. Matrices 5 and 6 are both BT.601,
    and the Mac presenter uses only the matrix and range.
-6. Open, not introduced here (U6): after a killed worker the Mac's picker
-   lost the PC and did not find the new worker's announcements until Relay
-   was reopened. A worker that dies sends no mDNS goodbye; a dial during the
-   5 s respawn gap fails and the Mac reconfirms (flushes) the record, and its
-   continuous browse then queries again only on its own backoff. Candidates:
-   the host re-announcing a few times after a respawn, or the Mac restarting
-   its browse after a failed dial. A real crash would leave the user in the
-   same state.
+6. **Host-side fix landed (`6de6010`); real-Mac check pending.** Not
+   introduced here (U6): after a killed worker the Mac's picker lost the PC
+   and did not find the new worker's announcements until Relay was reopened.
+   A worker that dies sends no mDNS goodbye; a dial during the 5 s respawn
+   gap fails and the Mac reconfirms (flushes) the record, and its continuous
+   browse then queries again only on its own backoff. A real crash would
+   leave the user in the same state.
+
+   What the host sent: mdns-sd 0.11.5 (`host/Cargo.lock`) announces a new
+   registration twice, at once and 1 s later (`register_service` plus one
+   `RegisterResend`, RFC 6762's minimum), and after that only answers
+   queries, which it does from the moment it registers. So the new worker
+   was silent from 1 s after its start unless asked. A Mac dial started in
+   the gap waits out the picker's 12 s dial timeout before it reconfirms,
+   which puts the flush after both announcements.
+
+   Fix: `discovery::Advertisement::reannounce_if_due` registers the same
+   `ServiceInfo` again (mdns-sd's documented re-announce: no goodbye, same
+   TXT, the interfaces present at that moment) 3, 8, 16, 32 and 60 s after
+   each registration, driven by the readvertise thread's 1 s tick. Each is
+   two packets 1 s apart; nothing after the first minute. The schedule is a
+   pure function with unit tests. A flush up to about a minute after a
+   restart now meets an unsolicited announcement soon after.
+
+   Verified so far: fmt, 213 unit tests plus the probe integration test,
+   clippy `-D warnings` on 1.98 and 1.99, release build. Not yet: the A/B
+   with the Mac's picker open (below) and the real worker kill; not
+   installed as the service.
+
+   If the Mac still loses the PC with this build, the remaining fix is the
+   Mac's: restart the browse (a fresh `NWBrowser`) after a dial that never
+   reached `.ready` and was reconfirmed, so mDNSResponder queries at once
+   instead of on the backoff of a long-running question.
 
 ## User-run exclusive-display cases
 
@@ -217,6 +242,34 @@ virtual display on an iGPU. The monitors go dark for a few seconds.
    restoring displays`, `next worker in 5 s`, then `worker started in session
    …`; the physical monitors come back; the Mac can connect again without a
    PIN.
+
+### F6. Rediscovery after a host dies without a goodbye (finding 6)
+
+**F6a, dev host A/B (no exclusive display).** Mac picker open, PC listed as
+Paired. Elevated PowerShell at the repo root, once per build:
+`.\tools\finding6-check.ps1 -Build old` (the installed exe, no
+re-announcement), then `-Build new` (`host\target\release`). The script stops the service, runs
+a `--no-vdd` dev host on port 8468 for 20 s, kills it (no goodbye), and
+restarts it 5 s later. When it says KILLED, click Connect on the Mac so
+the dial fails during the gap. It then watches for 75 s, starts the service
+again and prints host 2's mDNS lines and what `browse` heard.
+Record for each build: whether and at what `+N s` the Mac's row came back,
+whether it needed Relay reopened, and (new build) the `re-announced … (n/5,
+… s after registering)` lines. If Connect happens to succeed after the
+restart, that is a `--no-vdd` session of the primary monitor: disconnect.
+
+**F6b, real worker (after `install-host.ps1 -SkipDriver` with this build).**
+1. Mac picker open, PC listed, no session. Kill the worker with U6's
+   command. On the Mac, click Connect within the 5 s gap. Expected: the
+   attempt fails ("couldn't reach the PC"), host.log shows `next worker in
+   5 s`, the new worker's `advertising …` and `re-announced … (1/5 …)` to
+   `(5/5 …)`, and the row is back without reopening Relay, within about 20 s
+   of the failed attempt. Then Connect works without a PIN.
+2. The same during a session (U6 as written). Expected: the session drops,
+   the monitors come back, the picker shows the PC again without reopening
+   Relay, Connect works without a PIN.
+3. If either needs Relay reopened, note how long you waited and keep
+   host.log: the Mac-side browse restart is then needed (finding 6).
 
 ## Gate result (2026-10-17)
 
