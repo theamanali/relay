@@ -35,7 +35,7 @@ enum SessionText {
         let r = reason.lowercased()
         func has(_ needle: String) -> Bool { r.contains(needle) }
 
-        if has("local network access") { return "Enable Relay’s Local Network access" }
+        if has("local network access") { return "macOS blocked local network access — quit and reopen Relay" }
         if has("too many wrong pins") { return "Too many wrong PINs — try again later" }
         if has("rejected the pin") { return "Wrong PIN — try again" }
         if has("pairing cancelled") { return "Pairing cancelled" }

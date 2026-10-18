@@ -62,6 +62,10 @@ final class HostConnection: @unchecked Sendable {
         /// (Network.framework only times out a SYN it has sent); the picker
         /// wants an answer, --host mode keeps waiting and re-dials.
         var dialTimeout: TimeInterval? = nil
+        /// The PC's advertised addresses (TXT `ip`), probed when the dial
+        /// times out to tell a Local Network privacy block from a PC that
+        /// is really out of reach.
+        var probeAddresses: [String] = []
         /// Forget the pairing on the host instead of streaming: UNPAIR is the
         /// first encrypted message and the connection ends with the reply.
         var unpairOnly = false
@@ -195,7 +199,15 @@ final class HostConnection: @unchecked Sendable {
                 // unpinned retry together.
                 queue.asyncAfter(deadline: .now() + limit) { [weak self] in
                     guard let self, !self.stopped, !self.everConnected else { return }
-                    self.finish("couldn't reach the PC in \(Int(limit)) s")
+                    self.probeLocalNetwork { [weak self] denied in
+                        guard let self, !self.stopped, !self.everConnected else { return }
+                        if denied {
+                            self.localNetworkDenied = true
+                            self.finish("macOS blocked Relay's local network access")
+                        } else {
+                            self.finish("couldn't reach the PC in \(Int(limit)) s")
+                        }
+                    }
                 }
             }
         }
@@ -328,6 +340,75 @@ final class HostConnection: @unchecked Sendable {
             }
         }
         c.start(queue: queue)
+    }
+
+    /// Whether macOS is blocking local network access, found by evaluating
+    /// a direct connection to one of the PC's addresses. A Bonjour
+    /// connection's own path stays "satisfied" while each address under it
+    /// fails with "Local network prohibited", which Network.framework never
+    /// reports upward, so a block looked like an unreachable PC (2026-10-18:
+    /// a running app lost the permission when its bundle was rebuilt). The
+    /// path is decided within milliseconds, before any packet; port 9
+    /// (discard) keeps a permitted probe from reaching Relay on the PC.
+    private func probeLocalNetwork(_ done: @escaping @Sendable (Bool) -> Void) {
+        let lan = options.probeAddresses.first { Self.isPrivateIPv4($0) } ?? options.probeAddresses.first
+        guard let lan, let port = NWEndpoint.Port(rawValue: 9) else { done(false); return }
+        let params = NWParameters.tcp
+        if let interface = options.interface { params.requiredInterface = interface }
+        let probe = LocalNetworkProbe(NWConnection(host: NWEndpoint.Host(lan), port: port, using: params),
+                                      address: lan, done: done)
+        probe.connection.pathUpdateHandler = { path in
+            if path.unsatisfiedReason == .localNetworkDenied { probe.answer(true) }
+        }
+        probe.connection.stateUpdateHandler = { state in
+            switch state {
+            case .waiting(let error), .failed(let error):
+                probe.answer(Self.isLocalNetworkDenied(error, pathReason: probe.connection.currentPath?.unsatisfiedReason))
+            case .preparing, .ready:
+                if let path = probe.connection.currentPath, path.status == .satisfied { probe.answer(false) }
+            default:
+                break
+            }
+        }
+        probe.connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 1) { probe.answer(false) }
+    }
+
+    /// One probe's connection and its single answer; every callback runs on
+    /// the connection queue.
+    private final class LocalNetworkProbe: @unchecked Sendable {
+        let connection: NWConnection
+        private let address: String
+        private let done: @Sendable (Bool) -> Void
+        private var answered = false
+
+        init(_ connection: NWConnection, address: String, done: @escaping @Sendable (Bool) -> Void) {
+            self.connection = connection
+            self.address = address
+            self.done = done
+        }
+
+        func answer(_ denied: Bool) {
+            guard !answered else { return }
+            answered = true
+            connection.pathUpdateHandler = nil
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            NSLog("HostConnection: local network probe to %@: %@", address, denied ? "blocked" : "allowed")
+            done(denied)
+        }
+    }
+
+    /// 10/8, 172.16/12, 192.168/16 or 169.254/16: the LAN the privacy
+    /// check covers, rather than a VPN address such as Tailscale's 100.x.
+    static func isPrivateIPv4(_ address: String) -> Bool {
+        let parts = address.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _), (192, 168), (169, 254): return true
+        case (172, 16...31): return true
+        default: return false
+        }
     }
 
     /// A privacy denial is not a cable failure; retrying on Wi-Fi cannot fix

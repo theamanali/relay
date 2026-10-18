@@ -82,9 +82,20 @@ final class SessionTextTests: XCTestCase {
 
     func testLocalNetworkDenialExplainsPermissionAndRelaunch() {
         XCTAssertEqual(SessionText.ended("macOS blocked Relay's local network access", streamed: false),
-                       "Enable Relay’s Local Network access")
+                       "macOS blocked local network access — quit and reopen Relay")
         let help = SessionText.hostSideForgetHelp(detail: SessionText.localNetworkHelp, fingerprint: "1234ABCD")
         XCTAssertTrue(help.contains("Privacy & Security → Local Network"))
         XCTAssertTrue(help.contains("quit and reopen Relay"))
+    }
+}
+
+final class LocalNetworkProbeTests: XCTestCase {
+    func testProbesALANAddressNotAVPNOne() {
+        for lan in ["10.0.0.47", "192.168.1.2", "172.20.0.1", "169.254.12.3"] {
+            XCTAssertTrue(HostConnection.isPrivateIPv4(lan), lan)
+        }
+        for other in ["100.98.48.108", "172.32.0.1", "8.8.8.8", "fe80::1", "gaming-pc.local", ""] {
+            XCTAssertFalse(HostConnection.isPrivateIPv4(other), other)
+        }
     }
 }

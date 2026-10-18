@@ -281,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             serviceName: host.name
         )
         connectionOptions.expectedHostKey = PairingClassifier.expectedKey(for: host, known: ClientState.knownHosts())
+        connectionOptions.probeAddresses = host.facts.ips
         p.connecting = true
         if connectionOptions.expectedHostKey == nil {
             // Available host: pair only. It moves to Paired; connecting is a
