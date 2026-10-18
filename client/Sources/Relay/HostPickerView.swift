@@ -462,12 +462,14 @@ struct SessionSettingsView: View {
             }
             Section("Video") {
                 // Automatic follows the resolution, refresh rate and link;
-                // moving the slider or typing a value turns it off.
+                // the Bitrate row below shows its value, greyed out, until
+                // Automatic is switched off.
                 SettingSwitch("Automatic bitrate",
                               detail: "Set for the resolution, refresh rate and connection.",
                               isOn: Binding(get: { model.prefs.bitrateAutomatic },
                                             set: { model.setBitrateAutomatic($0) }))
-                LabeledContent("Bitrate") {
+                let automatic = model.prefs.bitrateAutomatic
+                LabeledContent {
                     HStack(spacing: Style.Space.s) {
                         Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
                             model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
@@ -486,9 +488,13 @@ struct SessionSettingsView: View {
                             .multilineTextAlignment(.trailing)
                             .frame(width: 48)
                             .accessibilityLabel("Video bitrate in megabits per second")
-                        Text("Mbps").foregroundStyle(.secondary)
+                        Text("Mbps").foregroundStyle(automatic ? .tertiary : .secondary)
                     }
+                } label: {
+                    // Text ignores .disabled; dim it like the disabled switches' titles.
+                    Text("Bitrate").foregroundStyle(automatic ? .tertiary : .primary)
                 }
+                .disabled(automatic)
                 // Applied by the PC when it offers them (TXT `enc`); otherwise
                 // disabled, with the reason where the description would be.
                 let quality = model.availability(.encoderQuality)

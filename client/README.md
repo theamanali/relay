@@ -113,9 +113,10 @@ Latency, Input) of switches, laid out like System Settings:
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
   for less (20–200 Mbps), capped at 80 Mbps over Wi-Fi. Over a gigabit cable
-  every 120 Mbps costs about 1 ms of transfer per frame. The logarithmic slider
-  (1–1000 Mbps) or the field sets a value of your own and turns Automatic off;
-  switching it on again goes back. A value chosen before Automatic existed is kept.
+  every 120 Mbps costs about 1 ms of transfer per frame. Switch it off to
+  set a value of your own with the logarithmic slider (1–1000 Mbps) or the
+  field; while it is on they are greyed out and show the automatic value.
+  Switching it on again goes back. A value chosen before Automatic existed is kept.
 - **Encoder**: Fastest (default), Balanced or Best quality, the PC's NVENC
   preset (P1 / P4 / P6). Better quality takes the PC longer per frame.
 - **Full color (4:4:4)**: full color resolution, so colored text and thin
