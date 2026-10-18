@@ -41,7 +41,7 @@ use crate::cursor_overlay::CursorOverlay;
 use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Quality};
 use crate::gpu::{GpuInfo, Luid};
 use crate::nvenc_caps::{codec_label, CodecCaps, EncoderCaps, Profile};
-use crate::protocol::Codec;
+use crate::protocol::{Codec, UNKNOWN_TIME};
 
 /// Open a short-lived NVENC session on a D3D11 device for the selected GPU and
 /// read what it can encode. No Desktop Duplication, no display change; safe
@@ -420,6 +420,11 @@ struct CaptureInfo {
     age: Option<Duration>,
     /// The desktop had nothing new; the previous frame was re-encoded.
     reused: bool,
+    /// DWM's present time of the newest content in this picture, host clock
+    /// (`crate::clock`); `UNKNOWN_TIME` without one (re-encode, cursor only).
+    present_us: u64,
+    /// Host clock when NvEncEncodePicture returned.
+    submit_us: u64,
 }
 
 struct CompletedOutput {
@@ -777,6 +782,8 @@ impl NativeNvenc {
             access_unit.timing = Some(EncoderTiming {
                 capture: completed.capture.work,
                 encode: completed.encode_latency,
+                present_us: completed.capture.present_us,
+                submit_us: completed.capture.submit_us,
             });
         }
         let result = completed.result.map(Some);
@@ -1237,6 +1244,7 @@ impl CaptureLoop {
         }
         self.slots[slot_index].mapped = map.mappedResource;
         let submitted_at = Instant::now();
+        let submit_us = crate::clock::now_us();
         let pending = PendingOutput {
             slot_index,
             mapped: map.mappedResource,
@@ -1249,6 +1257,10 @@ impl CaptureLoop {
             work: self.pending_work + work_start.elapsed(),
             age,
             reused: !self.dirty,
+            present_us: self
+                .pending_present_qpc
+                .map_or(UNKNOWN_TIME, crate::clock::qpc_to_us),
+            submit_us,
         };
         if self
             .worker_tx

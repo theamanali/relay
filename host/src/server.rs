@@ -20,8 +20,8 @@ use crate::gpu::{GpuInfo, Luid};
 use crate::input::Injector;
 use crate::nvenc_caps::{codec_label, EncoderCaps, Requirement};
 use crate::protocol::{
-    self, msg, stop_reason, video_flags, ClientHello, Codec, FrameTiming, VideoFormat,
-    FLAG_KEYFRAME, UNKNOWN_MICROS,
+    self, msg, stop_reason, video_flags, ClientHello, Codec, FrameTiming, FrameTimingExt,
+    TimeReply, VideoFormat, FLAG_KEYFRAME, UNKNOWN_MICROS, UNKNOWN_TIME,
 };
 use crate::status::{HostStatus, SessionInfo, NO_END_REQUEST};
 use crate::topology;
@@ -61,6 +61,58 @@ const MAX_CLIENT_PAYLOAD: usize = 4096;
 /// One Mac streaming plus a few pairing, forgetting or checking `pg` fit well
 /// under it.
 const MAX_CONNECTIONS: usize = 8;
+/// TIME_REQUESTs waiting for `pump`. The Mac sends five in its first 250 ms
+/// and then one a second; past this a client is flooding and the newest wait.
+const MAX_PENDING_TIME_REQUESTS: usize = 16;
+
+/// Clock sync and input accounting shared by `read_loop` and `pump`, all on
+/// the host clock (`crate::clock`). See TIME_REQUEST in docs/PROTOCOL.md.
+#[derive(Default)]
+struct SessionTiming {
+    /// The last PING → PONG round trip (FRAME_TIMING's `network_rtt_us`).
+    network_rtt: Mutex<Option<Duration>>,
+    /// (client_time_us, host_receive_us) for each TIME_REQUEST not answered
+    /// yet. `read_loop` stamps and queues; `pump` owns the writer and replies.
+    requests: Mutex<Vec<(u64, u64)>>,
+    /// The client has sent a TIME_REQUEST: input messages count from here.
+    counting_inputs: AtomicBool,
+    /// (inputs_applied, last_input_us), updated together so FRAME_TIMING_EXT
+    /// never pairs a count with another message's time.
+    inputs: Mutex<(u64, u64)>,
+}
+
+impl SessionTiming {
+    fn new() -> Self {
+        Self {
+            inputs: Mutex::new((0, UNKNOWN_TIME)),
+            ..Self::default()
+        }
+    }
+
+    fn request(&self, client_time_us: u64, host_receive_us: u64) {
+        self.counting_inputs.store(true, Ordering::Release);
+        let mut requests = self.requests.lock().unwrap();
+        if requests.len() < MAX_PENDING_TIME_REQUESTS {
+            requests.push((client_time_us, host_receive_us));
+        }
+    }
+
+    fn take_requests(&self) -> Vec<(u64, u64)> {
+        std::mem::take(&mut *self.requests.lock().unwrap())
+    }
+
+    /// An input message (0x90–0x93) was handled at `at_us`, applied or not.
+    fn input_handled(&self, at_us: u64) {
+        if self.counting_inputs.load(Ordering::Acquire) {
+            let mut inputs = self.inputs.lock().unwrap();
+            *inputs = (inputs.0 + 1, at_us);
+        }
+    }
+
+    fn inputs(&self) -> (u64, u64) {
+        *self.inputs.lock().unwrap()
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -1046,13 +1098,13 @@ fn handle_session(
     let stop = Arc::new(AtomicBool::new(false));
     let last_pong = Arc::new(Mutex::new(Instant::now()));
     let last_ping_sent = Arc::new(Mutex::new(None));
-    let network_rtt = Arc::new(Mutex::new(None));
+    let timing = Arc::new(SessionTiming::new());
     rx.set_read_timeout(None)?;
     let reader = {
         let stop = Arc::clone(&stop);
         let last_pong = Arc::clone(&last_pong);
         let last_ping_sent = Arc::clone(&last_ping_sent);
-        let network_rtt = Arc::clone(&network_rtt);
+        let timing = Arc::clone(&timing);
         let injector = (cfg.allow_input && hello.wants_input)
             .then(|| Injector::new(placement, cfg.driver.is_some()));
         thread::Builder::new()
@@ -1065,7 +1117,7 @@ fn handle_session(
                         log::debug!("input thread on the {name} desktop");
                     }
                 }
-                let r = read_loop(rx, injector, &last_pong, &last_ping_sent, &network_rtt);
+                let r = read_loop(rx, injector, &last_pong, &last_ping_sent, &timing);
                 if let Err(e) = r {
                     log::debug!("client reader finished: {e:#}");
                 }
@@ -1091,7 +1143,7 @@ fn handle_session(
         &ending,
         &last_pong,
         &last_ping_sent,
-        &network_rtt,
+        &timing,
     );
 
     if matches!(result, Ok(PumpEnd::Ended)) {
@@ -1166,8 +1218,10 @@ fn pump(
     ending: &SessionEnding<'_>,
     last_pong: &Mutex<Instant>,
     last_ping_sent: &Mutex<Option<Instant>>,
-    network_rtt: &Mutex<Option<Duration>>,
+    timing: &SessionTiming,
 ) -> Result<PumpEnd> {
+    // FRAME_TIMING_EXT replaces FRAME_TIMING from the first TIME_REPLY on.
+    let mut timing_ext = false;
     let mut last_config: Vec<Vec<u8>> = Vec::new();
     let mut next_ping = Instant::now() + PING_INTERVAL;
     let mut ping_outstanding: Option<Instant> = None;
@@ -1232,6 +1286,7 @@ fn pump(
                     last_pong,
                     last_ping_sent,
                 )?;
+                answer_time_requests(tx, timing, &mut timing_ext)?;
 
                 // A fullscreen transition can change both the active monitor
                 // set and DXGI output numbering. Let the game's own modeset
@@ -1309,6 +1364,8 @@ fn pump(
         };
 
         encoder_wait += read_at.elapsed();
+        // Before the frame, so a long frame write does not delay the replies.
+        answer_time_requests(tx, timing, &mut timing_ext)?;
         let send_at = Instant::now();
         if !au.param_sets.is_empty() && au.param_sets != last_config {
             tx.send_nals(msg::CODEC_CONFIG, 0, &au.param_sets)?;
@@ -1317,6 +1374,7 @@ fn pump(
         let flags = if au.keyframe { FLAG_KEYFRAME } else { 0 };
         tx.send_nals(msg::FRAME, flags, &au.nals)?;
         let frame_send = send_at.elapsed();
+        let sent_us = crate::clock::now_us();
         if congestion.observe(frame_send, recovery.encoder_config.fps) {
             let bitrate = recovery.encoder_config.bitrate_mbps;
             log::warn!(
@@ -1326,21 +1384,37 @@ fn pump(
             let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::BANDWIDTH_EXCEEDED]);
             bail!("connection could not sustain the selected {bitrate} Mbps bitrate");
         }
-        if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
-            let (capture_us, encode_us) = au
-                .timing
-                .map_or((UNKNOWN_MICROS, UNKNOWN_MICROS), |timing| {
-                    (duration_us(timing.capture), duration_us(timing.encode))
-                });
+        let (capture_us, encode_us) = au.timing.map_or((UNKNOWN_MICROS, UNKNOWN_MICROS), |t| {
+            (duration_us(t.capture), duration_us(t.encode))
+        });
+        let network_rtt_us = timing
+            .network_rtt
+            .lock()
+            .unwrap()
+            .map_or(UNKNOWN_MICROS, duration_us);
+        if timing_ext {
+            let (inputs_applied, last_input_us) = timing.inputs();
+            let ext = FrameTimingExt {
+                sequence: frame_sequence,
+                present_us: au.timing.map_or(UNKNOWN_TIME, |t| t.present_us),
+                submit_us: au.timing.map_or(UNKNOWN_TIME, |t| t.submit_us),
+                sent_us,
+                capture_us,
+                encode_us,
+                send_us: duration_us(frame_send),
+                copy_gpu_us: UNKNOWN_MICROS,
+                network_rtt_us,
+                inputs_applied,
+                last_input_us,
+            };
+            tx.send(msg::FRAME_TIMING_EXT, 0, &ext.payload())?;
+        } else if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
             let timing = FrameTiming {
                 sequence: frame_sequence,
                 capture_us,
                 encode_us,
                 send_us: duration_us(frame_send),
-                network_rtt_us: network_rtt
-                    .lock()
-                    .unwrap()
-                    .map_or(UNKNOWN_MICROS, duration_us),
+                network_rtt_us,
             };
             tx.send(msg::FRAME_TIMING, 0, &timing.payload())?;
         }
@@ -1410,22 +1484,46 @@ fn maintain_connection(
     Ok(())
 }
 
+/// TIME_REPLY to every TIME_REQUEST `read_loop` queued, each stamped just
+/// before its write. The first one switches FRAME_TIMING to FRAME_TIMING_EXT.
+fn answer_time_requests(
+    tx: &mut SecureWriter,
+    timing: &SessionTiming,
+    timing_ext: &mut bool,
+) -> Result<()> {
+    for (client_time_us, host_receive_us) in timing.take_requests() {
+        let reply = TimeReply {
+            client_time_us,
+            host_receive_us,
+            host_send_us: crate::clock::now_us(),
+        };
+        tx.send(msg::TIME_REPLY, 0, &reply.payload())?;
+        *timing_ext = true;
+    }
+    Ok(())
+}
+
 fn read_loop(
     mut rx: SecureReader,
     mut injector: Option<Injector>,
     last_pong: &Mutex<Instant>,
     last_ping_sent: &Mutex<Option<Instant>>,
-    network_rtt: &Mutex<Option<Duration>>,
+    timing: &SessionTiming,
 ) -> Result<()> {
     loop {
         let (ty, _flags, p) = rx.recv()?;
+        let received_us = crate::clock::now_us();
         match ty {
             msg::PONG => {
                 *last_pong.lock().unwrap() = Instant::now();
                 if let Some(sent) = *last_ping_sent.lock().unwrap() {
-                    *network_rtt.lock().unwrap() = Some(sent.elapsed());
+                    *timing.network_rtt.lock().unwrap() = Some(sent.elapsed());
                 }
             }
+            msg::TIME_REQUEST => match protocol::parse_time_request(&p) {
+                Some(client_time_us) => timing.request(client_time_us, received_us),
+                None => log::debug!("ignoring TIME_REQUEST of {} bytes", p.len()),
+            },
             msg::MOUSE_MOVE if p.len() >= 4 => {
                 if let Some(inj) = &injector {
                     inj.mouse_move(
@@ -1455,7 +1553,16 @@ fn read_loop(
             msg::CLIENT_HELLO => log::debug!("ignoring duplicate CLIENT_HELLO"),
             other => log::debug!("ignoring client message 0x{other:02x} ({} bytes)", p.len()),
         }
+        // Every input message counts, applied or not (Observe, a short
+        // payload): the Mac counts what it sent, and TCP keeps them in order.
+        if is_input_message(ty) {
+            timing.input_handled(crate::clock::now_us());
+        }
     }
+}
+
+fn is_input_message(ty: u8) -> bool {
+    (msg::MOUSE_MOVE..=msg::KEY).contains(&ty)
 }
 
 fn duration_us(duration: Duration) -> u32 {
@@ -1982,6 +2089,7 @@ mod pairing_wait_tests {
             assert_eq!(hello[name_end] != 0, known);
             assert_ne!(hello[name_end + 1] & protocol::CAP_PAIR_NAME, 0);
             assert_ne!(hello[name_end + 1] & protocol::CAP_VIDEO_OPTIONS, 0);
+            assert_ne!(hello[name_end + 1] & protocol::CAP_TIMING, 0);
 
             // Exceeds the old known-client deadline, through the production
             // handler rather than a fixture that sets its own host timeout.
@@ -2488,5 +2596,106 @@ mod display_keepalive_tests {
     #[test]
     fn stays_under_the_shortest_display_off_timeout() {
         assert!(DISPLAY_NUDGE_AFTER + DISPLAY_IDLE_POLL < Duration::from_secs(60));
+    }
+}
+
+#[cfg(test)]
+mod session_timing_tests {
+    use super::*;
+
+    /// Runs the production `read_loop` (no injector: Observe) on the host end
+    /// of a real loopback channel until the client's messages run out.
+    fn read_loop_after(send: impl FnOnce(&mut SecureWriter)) -> (SessionTiming, u64, u64) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let dir = std::env::temp_dir().join(format!("relay-timing-{}", std::process::id()));
+            let peers = Mutex::new(PeerList::load(&dir.join("none.txt")).unwrap());
+            let hs = crypto::host_handshake(&mut s, &Identity::generate(), &peers).unwrap();
+            let rx = SecureReader::new(s, &hs.keys, MAX_CLIENT_PAYLOAD);
+            let timing = SessionTiming::new();
+            let (pong, ping) = (Mutex::new(Instant::now()), Mutex::new(None));
+            assert!(read_loop(rx, None, &pong, &ping, &timing).is_err());
+            timing
+        });
+        let mut c = TcpStream::connect(addr).unwrap();
+        let hs = crypto::client_handshake(&mut c, &Identity::generate(), None).unwrap();
+        let mut tx = SecureWriter::new(c, &hs.keys);
+        let before = crate::clock::now_us();
+        send(&mut tx);
+        tx.shutdown();
+        let timing = host.join().unwrap();
+        (timing, before, crate::clock::now_us())
+    }
+
+    #[test]
+    fn inputs_count_only_after_the_first_time_request_applied_or_not() {
+        let (timing, before, after) = read_loop_after(|tx| {
+            tx.send(msg::MOUSE_MOVE, 0, &[0, 1, 0, 2]).unwrap();
+            tx.send(msg::KEY, 0, &[0, 4, 1]).unwrap();
+            tx.send(msg::TIME_REQUEST, 0, &42u64.to_be_bytes()).unwrap();
+            tx.send(msg::MOUSE_MOVE, 0, &[0, 1, 0, 2]).unwrap();
+            tx.send(msg::MOUSE_MOVE, 0, &[0, 1]).unwrap(); // short
+            tx.send(msg::MOUSE_BUTTON, 0, &[1, 1]).unwrap();
+            tx.send(msg::PONG, 0, &[0; 8]).unwrap();
+            tx.send(msg::MOUSE_WHEEL, 0, &[0, 0, 0, 120]).unwrap();
+            tx.send(msg::KEY, 0, &[0, 4]).unwrap(); // short
+            tx.send(msg::KEY, 0, &[0, 4, 0]).unwrap();
+            tx.send(0x94, 0, &[1, 2, 3, 4]).unwrap(); // not an input type
+            tx.send(msg::CLIENT_HELLO, 0, &[]).unwrap();
+        });
+        let requests = timing.take_requests();
+        assert_eq!(requests.len(), 1);
+        let (client_time, received) = requests[0];
+        assert_eq!(client_time, 42);
+        let (count, last) = timing.inputs();
+        assert_eq!(count, 6);
+        assert!(before <= received && received <= last && last <= after);
+    }
+
+    #[test]
+    fn time_requests_queue_in_order_and_ignore_trailing_bytes() {
+        let (timing, before, after) = read_loop_after(|tx| {
+            tx.send(msg::TIME_REQUEST, 0, &[0; 7]).unwrap(); // too short: ignored
+            tx.send(msg::TIME_REQUEST, 0, &7u64.to_be_bytes()).unwrap();
+            let long = [&8u64.to_be_bytes()[..], &[0xee; 24]].concat();
+            tx.send(msg::TIME_REQUEST, 0, &long).unwrap();
+        });
+        let requests = timing.take_requests();
+        assert_eq!(requests.iter().map(|r| r.0).collect::<Vec<_>>(), [7, 8]);
+        assert!(before <= requests[0].1 && requests[0].1 <= requests[1].1);
+        assert!(requests[1].1 <= after);
+        assert!(timing.take_requests().is_empty());
+        assert_eq!(timing.inputs(), (0, UNKNOWN_TIME));
+    }
+
+    #[test]
+    fn a_flood_of_time_requests_is_bounded() {
+        let timing = SessionTiming::new();
+        for i in 0..100 {
+            timing.request(i, i);
+        }
+        let queued = timing.take_requests();
+        assert_eq!(queued.len(), MAX_PENDING_TIME_REQUESTS);
+        assert_eq!(queued[0], (0, 0));
+    }
+
+    #[test]
+    fn input_count_and_time_move_together() {
+        let timing = Arc::new(SessionTiming::new());
+        timing.request(0, 0);
+        let writer = {
+            let timing = Arc::clone(&timing);
+            // The time of the n-th input is n: a torn pair would show up as a
+            // count that differs from its time.
+            thread::spawn(move || (1..=20_000).for_each(|n| timing.input_handled(n)))
+        };
+        while !writer.is_finished() {
+            let (count, last) = timing.inputs();
+            assert!(count == 0 && last == UNKNOWN_TIME || count == last);
+        }
+        writer.join().unwrap();
+        assert_eq!(timing.inputs(), (20_000, 20_000));
     }
 }

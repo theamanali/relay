@@ -234,6 +234,18 @@ ffplay -f hevc capture.hevc
 | `--codec h264\|hevc` | both | Offer only this codec. |
 | `--quality fastest\|balanced\|best` | | Ask for an encoder preset (CLIENT_HELLO's picture-options extension). |
 | `--444`, `--10bit` | | Ask for HEVC 4:4:4 / 10-bit. The extension goes only to a host whose SERVER_HELLO has capability `0x02`, and only when one of these three is given. |
+| `--timing` | | Clock sync (capability `0x04`): TIME_REQUESTs as the Mac sends them, the offset once a second, and per frame present → submit → sent → received from FRAME_TIMING_EXT. With `--wiggle`, also input → applied. |
+| `--progress` | | Print the frames received in each second. |
+
+`--timing` ends with a summary: the offset at the lowest delay, how many
+frames were fresh or re-encoded (`present_us` = `u64::MAX`), any fresh frame
+with present > submit or submit > sent, p50 / p95 of each step, and (with
+`--wiggle`) the inputs sent against the host's `inputs_applied`. On loopback
+both clocks are the same QPC, so the offset should be within a few µs of 0:
+
+```powershell
+target\release\probe.exe --addr 127.0.0.1:18468 --timing --wiggle --seconds 8
+```
 
 The summary also prints STREAM_START's `video_format` and the host's PC work
 (capture + encode + send) p50 / p95 from FRAME_TIMING, the same figure the

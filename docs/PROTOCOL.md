@@ -146,7 +146,8 @@ the initiator (A) and the host as the responder (B):
 
 **Optional name extension (v4).** SERVER_HELLO may append one capability byte
 after `paired`. Bit `0x01` is `CAP_PAIR_NAME` (bit `0x02`, `CAP_VIDEO_OPTIONS`,
-is described under "Picture options"); an absent byte means zero, and clients
+is described under "Picture options", bit `0x04`, `CAP_TIMING`, under "Clock
+sync and frame timing"); an absent byte means zero, and clients
 ignore unknown bits. Only when that bit is set, a client sends
 PAIR = `Ya[32] | u8 client_name_len | client_name_utf8`. The name is capped
 at 255 UTF-8 bytes, truncated on a Unicode scalar boundary, without a terminator;
@@ -321,7 +322,7 @@ another session" rather than retry in a loop.
 
 | type | name           | payload |
 |------|----------------|---------|
-| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`, `0x02` = `CAP_VIDEO_OPTIONS`; missing = 0, ignore unknown bits) |
+| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`, `0x02` = `CAP_VIDEO_OPTIONS`, `0x04` = `CAP_TIMING`; missing = 0, ignore unknown bits) |
 | 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 video_format` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
@@ -329,6 +330,8 @@ another session" rather than retry in a loop.
 | 0x06 | STREAM_STOP    | `u8 reason` (0 = host shutting down, 1 = encoder failed, 2 = display lost, 3 = bad version, 4 = not paired, 5 = unpaired at the client's request, 6 = busy with another client, 7 = selected bitrate exceeded the connection's sustained bandwidth) |
 | 0x07 | PING           | `u64 host_time_us` |
 | 0x08 | FRAME_TIMING   | optional telemetry for the immediately preceding FRAME: `u64 sequence`, `u32 capture_us`, `u32 encode_us`, `u32 frame_send_us`, `u32 network_rtt_us`. A duration of `0xffffffff` is unavailable. |
+| 0x09 | TIME_REPLY     | answer to TIME_REQUEST: `u64 client_time_us` (echoed), `u64 host_receive_us`, `u64 host_send_us` (Clock sync and frame timing, below) |
+| 0x0A | FRAME_TIMING_EXT | after every FRAME, in place of FRAME_TIMING, once the client has sent a TIME_REQUEST: 68 bytes (Clock sync and frame timing, below) |
 
 `codec`: 1 = H.264, 2 = HEVC, 3 = AV1 (reserved).
 
@@ -358,6 +361,8 @@ the host need not send telemetry for every frame. The host reports NVENC's captu
 durations; a duration it cannot measure is sent as unavailable. The client
 estimates one-way network latency as half the measured ping round trip. Existing
 clients can ignore this message and continue decoding the preceding FRAME normally.
+The host sends FRAME_TIMING after every fourth FRAME, and FRAME_TIMING_EXT
+instead (after every FRAME) once the client has sent a TIME_REQUEST.
 
 The host bounds encoded output waiting behind the socket. If, for a continuous
 five-second window, frame delivery stays below 95% of the selected frame rate
@@ -373,6 +378,7 @@ retry reason 7 without a lower user-selected value.
 |------|--------------|---------|
 | 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name`, optional `u8 encoder_quality`, `u8 video_flags` (Picture options, below) |
 | 0x87 | PONG         | echo of the PING payload |
+| 0x88 | TIME_REQUEST | `u64 client_time_us` (the client's clock; opaque to the host). Only to a host with `CAP_TIMING`. |
 | 0x90 | MOUSE_MOVE   | `u16 x`, `u16 y` — position normalised to 0..65535 across the streamed frame |
 | 0x91 | MOUSE_BUTTON | `u8 button` (0 left, 1 right, 2 middle, 3 back, 4 forward), `u8 down` |
 | 0x92 | MOUSE_WHEEL  | `i16 dx`, `i16 dy` — Windows wheel units, 120 = one notch; positive dy scrolls up (content moves down), positive dx scrolls right |
@@ -417,6 +423,74 @@ client may append two bytes after `name`:
 Keys are sent as HID usages so the protocol is platform-neutral; the client
 decides how macOS modifiers map (default: ⌘→Ctrl, ⌥→Alt, ⌃→Win) and the host
 translates HID usages to PS/2 scan codes for `SendInput`.
+
+## Clock sync and frame timing
+
+With the two clocks related, a client can measure a frame from DWM's present
+on the PC to its own screen, and an input event to `SendInput`.
+
+**Capability and opt-in.** A host with SERVER_HELLO capability `0x04`
+(`CAP_TIMING`) answers TIME_REQUEST. A client sends TIME_REQUEST only to such
+a host. The host sends TIME_REPLY and FRAME_TIMING_EXT only to a client that
+has sent a TIME_REQUEST, so neither side ever receives a type it does not
+know. CLIENT_HELLO is unchanged.
+
+**The host clock.** Every host time below is QueryPerformanceCounter in
+microseconds (`QPC × 1 000 000 / frequency`, as u64): the same base as DXGI's
+`LastPresentTime`, which the host converts with the same function. It never
+steps; its zero is arbitrary, so a client uses only differences and the
+offset. `u64::MAX` is "unknown". (PING's `host_time_us` is a different
+clock and is not comparable.)
+
+**Parsing.** TIME_REQUEST, TIME_REPLY and FRAME_TIMING_EXT are read as "at
+least this long; ignore the rest", so they can grow. (Clients built before
+this section end the session on a FRAME_TIMING that is not exactly 24 bytes,
+which is why FRAME_TIMING_EXT is a new type.)
+
+**TIME_REQUEST / TIME_REPLY.** The host stamps `host_receive_us` as soon as
+its reader has the request decrypted, and `host_send_us` immediately before
+it writes the reply. Replies are written by the thread that sends video,
+before its next FRAME, so a reply can wait up to a frame interval (longer
+while capture is recovering and no frames flow); the two stamps take that out
+of the math. The host keeps at most 16 unanswered requests and drops the
+rest. With `t1 = client_time_us`, `t2 = host_receive_us`,
+`t3 = host_send_us` and `t4` the client's clock when the reply arrived:
+
+- `delay = (t4 − t1) − (t3 − t2)`
+- `offset = ((t2 − t1) + (t3 − t4)) / 2` (signed; host minus client)
+
+A client keeps the last few samples and uses the offset of the one with the
+lowest delay; the client time of a host stamp `h` is `h − offset`. The Mac
+(and `probe --timing`) sends five requests 50 ms apart after STREAM_START,
+then one a second, and keeps eight samples.
+
+**FRAME_TIMING_EXT** (`0x0A`). From the host's first TIME_REPLY on, it
+follows every FRAME instead of FRAME_TIMING. 68 bytes:
+
+| offset | field | type | meaning |
+|---|---|---|---|
+| 0 | `sequence` | u64 | as FRAME_TIMING |
+| 8 | `present_us` | u64 | DWM's `LastPresentTime` of the newest desktop frame in this picture; `u64::MAX` when the tick re-encoded unchanged content or only the cursor moved |
+| 16 | `submit_us` | u64 | when `NvEncEncodePicture` returned for this picture |
+| 24 | `sent_us` | u64 | after the FRAME was written to the socket |
+| 32 | `capture_us` | u32 | as FRAME_TIMING |
+| 36 | `encode_us` | u32 | as FRAME_TIMING |
+| 40 | `send_us` | u32 | as FRAME_TIMING's `frame_send_us` |
+| 44 | `copy_gpu_us` | u32 | GPU time of the desktop → composition → encoder-input copies; `0xffffffff` (always, for now) |
+| 48 | `network_rtt_us` | u32 | as FRAME_TIMING |
+| 52 | `inputs_applied` | u64 | input messages (`0x90`–`0x93`) the host handled since the client's first TIME_REQUEST |
+| 60 | `last_input_us` | u64 | when the `inputs_applied`-th of them was handled (after `SendInput` returned); `u64::MAX` before any |
+
+On a fresh picture `present_us ≤ submit_us ≤ sent_us`. `inputs_applied`
+counts every input message read after the first TIME_REQUEST, including ones
+not applied (Observe, or a payload too short); a client counts every input
+message it sends after its first TIME_REQUEST, and TCP's ordering makes the
+N-th on each side the same message. The host updates the count and its time
+together. Useful differences: `submit_us − present_us` (content age at
+encode), `sent_us − submit_us` (encode + send), the client's receive time
+minus `sent_us − offset` (one way), its present time minus `present_us −
+offset` (desktop → screen), and `last_input_us − offset` minus the client's
+send time of input N (input → applied).
 
 ## Notes
 

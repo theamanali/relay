@@ -13,6 +13,9 @@ pub const MAX_BITRATE_MBPS: u16 = 1_000;
 pub const CAP_PAIR_NAME: u8 = 0x01;
 /// The host reads CLIENT_HELLO's picture-options extension after `name`.
 pub const CAP_VIDEO_OPTIONS: u8 = 0x02;
+/// The host answers TIME_REQUEST, and sends FRAME_TIMING_EXT instead of
+/// FRAME_TIMING once the client has sent one.
+pub const CAP_TIMING: u8 = 0x04;
 
 /// CLIENT_HELLO extension `encoder_quality`: 0 = the host's default, then
 /// fastest / balanced / best (NVENC P1 / P4 / P6). STREAM_START reports the
@@ -103,12 +106,20 @@ pub mod msg {
     /// Timing for the immediately preceding FRAME. Optional telemetry; clients
     /// that do not know this message safely ignore it.
     pub const FRAME_TIMING: u8 = 0x08;
+    /// Answer to TIME_REQUEST: the echoed client time plus host receive and
+    /// send times (`TimeReply`).
+    pub const TIME_REPLY: u8 = 0x09;
+    /// FRAME_TIMING with host-clock stamps (`FrameTimingExt`), after every
+    /// FRAME once the client has sent a TIME_REQUEST.
+    pub const FRAME_TIMING_EXT: u8 = 0x0A;
     pub const PAIR_RESULT: u8 = 0xA1;
     /// CPace: the host's share and confirmation tag, in answer to PAIR.
     pub const PAIR_REPLY: u8 = 0xA3;
     // client -> host
     pub const CLIENT_HELLO: u8 = 0x81;
     pub const PONG: u8 = 0x87;
+    /// `u64 client_time_us`, opaque to the host (CAP_TIMING).
+    pub const TIME_REQUEST: u8 = 0x88;
     pub const MOUSE_MOVE: u8 = 0x90;
     pub const MOUSE_BUTTON: u8 = 0x91;
     pub const MOUSE_WHEEL: u8 = 0x92;
@@ -154,6 +165,115 @@ impl FrameTiming {
             encode_us: u32::from_be_bytes(p[12..16].try_into().unwrap()),
             send_us: u32::from_be_bytes(p[16..20].try_into().unwrap()),
             network_rtt_us: u32::from_be_bytes(p[20..24].try_into().unwrap()),
+        })
+    }
+}
+
+/// A host-clock time (`crate::clock`) that is not known: a re-encoded
+/// picture's `present_us`, `last_input_us` before any input.
+pub const UNKNOWN_TIME: u64 = u64::MAX;
+
+fn be_u64(p: &[u8], at: usize) -> u64 {
+    u64::from_be_bytes(p[at..at + 8].try_into().unwrap())
+}
+
+fn be_u32(p: &[u8], at: usize) -> u32 {
+    u32::from_be_bytes(p[at..at + 4].try_into().unwrap())
+}
+
+/// TIME_REQUEST: the client's clock, echoed back untouched. Like every timing
+/// payload, at least this long; anything after it is ignored.
+pub fn parse_time_request(p: &[u8]) -> Option<u64> {
+    (p.len() >= 8).then(|| be_u64(p, 0))
+}
+
+/// TIME_REPLY. NTP's four stamps: the client's send time (echoed) and
+/// receive time (its own), the host's receive and send times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeReply {
+    pub client_time_us: u64,
+    pub host_receive_us: u64,
+    pub host_send_us: u64,
+}
+
+impl TimeReply {
+    pub const PAYLOAD_LEN: usize = 24;
+
+    pub fn payload(self) -> [u8; Self::PAYLOAD_LEN] {
+        let mut p = [0u8; Self::PAYLOAD_LEN];
+        p[0..8].copy_from_slice(&self.client_time_us.to_be_bytes());
+        p[8..16].copy_from_slice(&self.host_receive_us.to_be_bytes());
+        p[16..24].copy_from_slice(&self.host_send_us.to_be_bytes());
+        p
+    }
+
+    pub fn parse(p: &[u8]) -> Option<Self> {
+        (p.len() >= Self::PAYLOAD_LEN).then(|| Self {
+            client_time_us: be_u64(p, 0),
+            host_receive_us: be_u64(p, 8),
+            host_send_us: be_u64(p, 16),
+        })
+    }
+}
+
+/// FRAME_TIMING_EXT: FRAME_TIMING plus host-clock stamps for the preceding
+/// FRAME and the input counter. A new type because today's Mac ends the
+/// session on a FRAME_TIMING that is not exactly 24 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTimingExt {
+    pub sequence: u64,
+    /// DWM's present time of the newest desktop frame in this picture;
+    /// `UNKNOWN_TIME` when the tick re-encoded unchanged content (or only
+    /// the cursor moved).
+    pub present_us: u64,
+    /// When NvEncEncodePicture returned for this picture.
+    pub submit_us: u64,
+    /// After the FRAME was written to the socket.
+    pub sent_us: u64,
+    pub capture_us: u32,
+    pub encode_us: u32,
+    pub send_us: u32,
+    /// GPU time of the desktop/composition/slot copies; `UNKNOWN_MICROS`.
+    pub copy_gpu_us: u32,
+    pub network_rtt_us: u32,
+    /// Input messages handled since the first TIME_REQUEST.
+    pub inputs_applied: u64,
+    /// When the `inputs_applied`-th was handled; `UNKNOWN_TIME` before any.
+    pub last_input_us: u64,
+}
+
+impl FrameTimingExt {
+    pub const PAYLOAD_LEN: usize = 68;
+
+    pub fn payload(self) -> [u8; Self::PAYLOAD_LEN] {
+        let mut p = [0u8; Self::PAYLOAD_LEN];
+        p[0..8].copy_from_slice(&self.sequence.to_be_bytes());
+        p[8..16].copy_from_slice(&self.present_us.to_be_bytes());
+        p[16..24].copy_from_slice(&self.submit_us.to_be_bytes());
+        p[24..32].copy_from_slice(&self.sent_us.to_be_bytes());
+        p[32..36].copy_from_slice(&self.capture_us.to_be_bytes());
+        p[36..40].copy_from_slice(&self.encode_us.to_be_bytes());
+        p[40..44].copy_from_slice(&self.send_us.to_be_bytes());
+        p[44..48].copy_from_slice(&self.copy_gpu_us.to_be_bytes());
+        p[48..52].copy_from_slice(&self.network_rtt_us.to_be_bytes());
+        p[52..60].copy_from_slice(&self.inputs_applied.to_be_bytes());
+        p[60..68].copy_from_slice(&self.last_input_us.to_be_bytes());
+        p
+    }
+
+    pub fn parse(p: &[u8]) -> Option<Self> {
+        (p.len() >= Self::PAYLOAD_LEN).then(|| Self {
+            sequence: be_u64(p, 0),
+            present_us: be_u64(p, 8),
+            submit_us: be_u64(p, 16),
+            sent_us: be_u64(p, 24),
+            capture_us: be_u32(p, 32),
+            encode_us: be_u32(p, 36),
+            send_us: be_u32(p, 40),
+            copy_gpu_us: be_u32(p, 44),
+            network_rtt_us: be_u32(p, 48),
+            inputs_applied: be_u64(p, 52),
+            last_input_us: be_u64(p, 60),
         })
     }
 }
@@ -287,7 +407,7 @@ pub fn server_hello(name: &str, paired: bool) -> Vec<u8> {
 /// Keep server_hello() as the legacy form for the original v4 test vector.
 pub fn server_hello_with_capabilities(name: &str, paired: bool) -> Vec<u8> {
     let mut p = server_hello(name, paired);
-    p.push(CAP_PAIR_NAME | CAP_VIDEO_OPTIONS);
+    p.push(CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING);
     p
 }
 
@@ -370,8 +490,100 @@ mod timing_tests {
         let extended = server_hello_with_capabilities("Test PC", true);
         assert_eq!(&extended[..legacy.len()], legacy);
         assert_eq!(extended.len(), legacy.len() + 1);
-        assert_eq!(extended[legacy.len()], CAP_PAIR_NAME | CAP_VIDEO_OPTIONS);
-        assert_eq!(extended[legacy.len()], 0x03);
+        assert_eq!(
+            extended[legacy.len()],
+            CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING
+        );
+        assert_eq!(extended[legacy.len()], 0x07);
+    }
+
+    #[test]
+    fn timing_message_types_do_not_collide() {
+        let host = [
+            msg::SERVER_HELLO,
+            msg::STREAM_START,
+            msg::CODEC_CONFIG,
+            msg::FRAME,
+            msg::CURSOR,
+            msg::STREAM_STOP,
+            msg::PING,
+            msg::FRAME_TIMING,
+            msg::TIME_REPLY,
+            msg::FRAME_TIMING_EXT,
+        ];
+        assert_eq!(&host[8..], [0x09, 0x0a]);
+        for (i, a) in host.iter().enumerate() {
+            assert!(host[i + 1..].iter().all(|b| a != b));
+        }
+        assert_eq!(msg::TIME_REQUEST, 0x88);
+        const { assert!(msg::TIME_REQUEST != msg::PONG && msg::TIME_REQUEST < msg::MOUSE_MOVE) };
+    }
+
+    #[test]
+    fn time_request_takes_at_least_eight_bytes() {
+        let t = 0x0102_0304_0506_0708u64;
+        assert_eq!(parse_time_request(&t.to_be_bytes()), Some(t));
+        let mut longer = t.to_be_bytes().to_vec();
+        longer.extend_from_slice(&[0xff; 9]);
+        assert_eq!(parse_time_request(&longer), Some(t));
+        assert_eq!(parse_time_request(&longer[..7]), None);
+        assert_eq!(parse_time_request(&[]), None);
+    }
+
+    #[test]
+    fn time_reply_round_trips_and_ignores_trailing_bytes() {
+        let reply = TimeReply {
+            client_time_us: 1,
+            host_receive_us: 0x1122_3344_5566_7788,
+            host_send_us: u64::MAX - 1,
+        };
+        let payload = reply.payload();
+        assert_eq!(payload.len(), 24);
+        assert_eq!(&payload[..8], [0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(TimeReply::parse(&payload), Some(reply));
+        assert_eq!(
+            TimeReply::parse(&[&payload[..], &[7; 5]].concat()),
+            Some(reply)
+        );
+        assert_eq!(TimeReply::parse(&payload[..23]), None);
+    }
+
+    #[test]
+    fn frame_timing_ext_layout_and_round_trip() {
+        let timing = FrameTimingExt {
+            sequence: 0x0102_0304_0506_0708,
+            present_us: UNKNOWN_TIME,
+            submit_us: 0x1000,
+            sent_us: 0x2000,
+            capture_us: 0x30,
+            encode_us: 0x40,
+            send_us: 0x50,
+            copy_gpu_us: UNKNOWN_MICROS,
+            network_rtt_us: 0x60,
+            inputs_applied: 0x70,
+            last_input_us: 0x80,
+        };
+        let p = timing.payload();
+        assert_eq!(p.len(), 68);
+        assert_eq!(&p[0..8], [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&p[8..16], [0xff; 8]);
+        assert_eq!(&p[16..24], 0x1000u64.to_be_bytes());
+        assert_eq!(&p[24..32], 0x2000u64.to_be_bytes());
+        assert_eq!(&p[32..36], [0, 0, 0, 0x30]);
+        assert_eq!(&p[36..40], [0, 0, 0, 0x40]);
+        assert_eq!(&p[40..44], [0, 0, 0, 0x50]);
+        assert_eq!(&p[44..48], [0xff; 4]);
+        assert_eq!(&p[48..52], [0, 0, 0, 0x60]);
+        assert_eq!(&p[52..60], 0x70u64.to_be_bytes());
+        assert_eq!(&p[60..68], 0x80u64.to_be_bytes());
+        assert_eq!(FrameTimingExt::parse(&p), Some(timing));
+        assert_eq!(
+            FrameTimingExt::parse(&[&p[..], &[0; 12]].concat()),
+            Some(timing)
+        );
+        assert_eq!(FrameTimingExt::parse(&p[..67]), None);
+        // Not mistaken for the old 24-byte FRAME_TIMING, nor the reverse.
+        assert_eq!(FrameTiming::parse(&p), None);
     }
 
     #[test]

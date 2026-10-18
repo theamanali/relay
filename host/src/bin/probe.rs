@@ -114,6 +114,67 @@ struct Args {
     /// Ask for HEVC 10-bit (CLIENT_HELLO extension)
     #[arg(long = "10bit")]
     ten_bit: bool,
+    /// Clock sync and per-frame timing (CAP_TIMING): send TIME_REQUESTs as
+    /// the Mac does, print the offset once a second and every frame's
+    /// present → submit → sent → received. With --wiggle, also input → applied.
+    #[arg(long)]
+    timing: bool,
+}
+
+/// NTP's estimate from one TIME_REPLY: t1 client send, t2 host receive,
+/// t3 host send, t4 client receive. `offset` is host − client.
+#[derive(Debug, Clone, Copy)]
+struct ClockSample {
+    delay_us: i64,
+    offset_us: i64,
+}
+
+impl ClockSample {
+    fn new(t1: u64, t2: u64, t3: u64, t4: u64) -> Self {
+        let (t1, t2, t3, t4) = (t1 as i64, t2 as i64, t3 as i64, t4 as i64);
+        Self {
+            delay_us: (t4 - t1) - (t3 - t2),
+            offset_us: ((t2 - t1) + (t3 - t4)) / 2,
+        }
+    }
+}
+
+/// The last eight samples; the one with the lowest delay wins.
+#[derive(Default)]
+struct ClockSync {
+    samples: std::collections::VecDeque<ClockSample>,
+}
+
+impl ClockSync {
+    fn add(&mut self, sample: ClockSample) {
+        if self.samples.len() == 8 {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(sample);
+    }
+
+    fn best(&self) -> Option<ClockSample> {
+        self.samples.iter().copied().min_by_key(|s| s.delay_us)
+    }
+
+    /// A host-clock stamp on this machine's clock.
+    fn to_local(&self, host_us: u64) -> Option<i64> {
+        self.best().map(|s| host_us as i64 - s.offset_us)
+    }
+}
+
+fn ms(us: i64) -> f64 {
+    us as f64 / 1000.0
+}
+
+/// p50 / p95 of a list of microseconds, in ms.
+fn percentiles(values: &mut [i64]) -> Option<(f64, f64)> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let at = |q: f64| ms(values[((values.len() - 1) as f64 * q).round() as usize]);
+    Some((at(0.50), at(0.95)))
 }
 
 fn main() -> Result<()> {
@@ -155,6 +216,10 @@ fn main() -> Result<()> {
     let capabilities = p.get(name_end + 1).copied().unwrap_or(0);
     let named_pairing = capabilities & protocol::CAP_PAIR_NAME != 0;
     let video_options = capabilities & protocol::CAP_VIDEO_OPTIONS != 0;
+    let timing = args.timing && capabilities & protocol::CAP_TIMING != 0;
+    if args.timing && !timing {
+        println!("host does not advertise timing; not sending TIME_REQUEST");
+    }
     println!(
         "host '{name}' protocol v{version}, {}, capabilities 0x{capabilities:02x}",
         if paired {
@@ -266,7 +331,43 @@ fn main() -> Result<()> {
     let (mut next_report, mut reported_frames) = (start + Duration::from_secs(1), 0u64);
     rx.set_read_timeout(Some(Duration::from_secs(3)))?;
 
+    // --timing: like the Mac, five TIME_REQUESTs 50 ms apart after
+    // STREAM_START, then one a second.
+    let mut sync = ClockSync::default();
+    let mut next_time_request: Option<Instant> = None;
+    let mut time_requests = 0u32;
+    let mut next_clock_report: Option<Instant> = None;
+    let mut frame_received_us: Option<u64> = None;
+    // When each input message after the first TIME_REQUEST was sent.
+    let mut input_sent_us: Vec<u64> = Vec::new();
+    let mut last_inputs_applied = 0u64;
+    let (mut ext_frames, mut fresh, mut reused, mut out_of_order) = (0u64, 0u64, 0u64, 0u64);
+    let (mut present_submit, mut submit_sent, mut sent_received, mut input_applied) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
     while Instant::now() < deadline {
+        if let Some(due) = next_time_request.filter(|&due| Instant::now() >= due) {
+            tx.send(
+                msg::TIME_REQUEST,
+                0,
+                &relay_host::clock::now_us().to_be_bytes(),
+            )?;
+            time_requests += 1;
+            let gap = if time_requests < 5 { 50 } else { 1000 };
+            next_time_request = Some(due + Duration::from_millis(gap));
+        }
+        if let Some(due) = next_clock_report.filter(|&due| Instant::now() >= due) {
+            match sync.best() {
+                Some(best) => println!(
+                    "clock: offset {} µs, min delay {} µs ({} samples)",
+                    best.offset_us,
+                    best.delay_us,
+                    sync.samples.len()
+                ),
+                None => println!("clock: no TIME_REPLY yet"),
+            }
+            next_clock_report = Some(due + Duration::from_secs(1));
+        }
         if args.progress && Instant::now() >= next_report {
             println!(
                 "t={:>3}s {:>4} frames",
@@ -287,6 +388,7 @@ fn main() -> Result<()> {
             }
             Err(e) => return Err(e.into()),
         };
+        let received_us = relay_host::clock::now_us();
         match ty {
             msg::STREAM_START => {
                 let w = u16::from_be_bytes([p[0], p[1]]);
@@ -307,6 +409,74 @@ fn main() -> Result<()> {
                     if format.full_color { "4:4:4" } else { "4:2:0" },
                     if format.ten_bit { 10 } else { 8 }
                 );
+                if timing {
+                    next_time_request = Some(Instant::now());
+                    next_clock_report = Some(Instant::now() + Duration::from_secs(1));
+                }
+            }
+            msg::TIME_REPLY => match protocol::TimeReply::parse(&p) {
+                Some(reply) => sync.add(ClockSample::new(
+                    reply.client_time_us,
+                    reply.host_receive_us,
+                    reply.host_send_us,
+                    received_us,
+                )),
+                None => bail!("TIME_REPLY of {} bytes", p.len()),
+            },
+            msg::FRAME_TIMING_EXT => {
+                let Some(t) = protocol::FrameTimingExt::parse(&p) else {
+                    bail!("FRAME_TIMING_EXT of {} bytes", p.len());
+                };
+                timings += 1;
+                ext_frames += 1;
+                if t.send_us != protocol::UNKNOWN_MICROS {
+                    send_us_total += u64::from(t.send_us);
+                    send_samples += 1;
+                }
+                let parts = [t.capture_us, t.encode_us, t.send_us];
+                if parts.iter().all(|&us| us != protocol::UNKNOWN_MICROS) {
+                    work_us.push(parts.iter().sum());
+                }
+                let is_fresh = t.present_us != protocol::UNKNOWN_TIME;
+                let submit_to_sent = t.sent_us as i64 - t.submit_us as i64;
+                submit_sent.push(submit_to_sent);
+                let present_to_submit = is_fresh.then(|| t.submit_us as i64 - t.present_us as i64);
+                if let Some(us) = present_to_submit {
+                    fresh += 1;
+                    present_submit.push(us);
+                    if us < 0 || submit_to_sent < 0 {
+                        out_of_order += 1;
+                    }
+                } else {
+                    reused += 1;
+                }
+                let sent_to_received = frame_received_us
+                    .take()
+                    .zip(sync.to_local(t.sent_us))
+                    .map(|(received, sent)| received as i64 - sent);
+                if let Some(us) = sent_to_received {
+                    sent_received.push(us);
+                }
+                if t.inputs_applied > last_inputs_applied
+                    && t.last_input_us != protocol::UNKNOWN_TIME
+                {
+                    last_inputs_applied = t.inputs_applied;
+                    let sent = input_sent_us.get(t.inputs_applied as usize - 1);
+                    if let (Some(&sent), Some(applied)) = (sent, sync.to_local(t.last_input_us)) {
+                        input_applied.push(applied - sent as i64);
+                    }
+                }
+                let show =
+                    |us: Option<i64>| us.map_or("--".to_string(), |us| format!("{:.3}", ms(us)));
+                println!(
+                    "frame {:>5} {}: present→submit {} ms, submit→sent {:.3} ms, sent→received {} ms, inputs {}",
+                    t.sequence,
+                    if is_fresh { "fresh " } else { "reused" },
+                    show(present_to_submit),
+                    ms(submit_to_sent),
+                    show(sent_to_received),
+                    t.inputs_applied,
+                );
             }
             msg::CODEC_CONFIG => {
                 configs += 1;
@@ -314,6 +484,7 @@ fn main() -> Result<()> {
                 write_nals(&mut out, &p)?;
             }
             msg::FRAME => {
+                frame_received_us = Some(received_us);
                 frames += 1;
                 bytes += p.len() as u64;
                 if flags & protocol::FLAG_KEYFRAME != 0 {
@@ -362,6 +533,9 @@ fn main() -> Result<()> {
             mm.extend_from_slice(&x.to_be_bytes());
             mm.extend_from_slice(&y.to_be_bytes());
             tx.send(msg::MOUSE_MOVE, 0, &mm)?;
+            if time_requests > 0 {
+                input_sent_us.push(relay_host::clock::now_us());
+            }
         }
     }
 
@@ -383,6 +557,37 @@ fn main() -> Result<()> {
             work_us.len()
         );
     }
+    if timing {
+        match sync.best() {
+            Some(best) => println!(
+                "clock: {time_requests} TIME_REQUESTs, {} replies kept; offset {} µs at min delay {} µs",
+                sync.samples.len(),
+                best.offset_us,
+                best.delay_us
+            ),
+            None => println!("clock: {time_requests} TIME_REQUESTs, no TIME_REPLY"),
+        }
+        println!(
+            "FRAME_TIMING_EXT on {ext_frames} frames: {fresh} fresh, {reused} reused (present = u64::MAX), {out_of_order} fresh out of order (present > submit or submit > sent)"
+        );
+        for (label, values) in [
+            ("present → submit", &mut present_submit),
+            ("submit → sent", &mut submit_sent),
+            ("sent → received", &mut sent_received),
+            ("input → applied", &mut input_applied),
+        ] {
+            let n = values.len();
+            if let Some((p50, p95)) = percentiles(values) {
+                println!("  {label} p50 / p95 {p50:.3} / {p95:.3} ms over {n} samples");
+            }
+        }
+        if args.wiggle {
+            println!(
+                "inputs: probe sent {} after its first TIME_REQUEST, host last reported {last_inputs_applied}",
+                input_sent_us.len()
+            );
+        }
+    }
     if let Some(mut w) = out {
         w.flush()?;
         println!("wrote {}", args.out.unwrap().display());
@@ -403,5 +608,43 @@ fn stop_name(reason: Option<u8>) -> String {
         Some(r::BANDWIDTH_EXCEEDED) => "selected bitrate exceeds connection bandwidth".into(),
         Some(other) => format!("reason {other}"),
         None => "no reason given".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_sample_recovers_a_known_offset() {
+        // Host 5 s ahead, 100 µs each way, 300 µs inside the host.
+        let host = |client: u64| client + 5_000_000;
+        let (t1, t4) = (1_000, 1_500);
+        let sample = ClockSample::new(t1, host(1_100), host(1_400), t4);
+        assert_eq!(sample.offset_us, 5_000_000);
+        assert_eq!(sample.delay_us, 200);
+        // Host behind, asymmetric path: the error is half the asymmetry.
+        let sample = ClockSample::new(10_000, 7_300, 7_300, 10_500);
+        assert_eq!(sample.delay_us, 500);
+        assert_eq!(sample.offset_us, -2_950);
+    }
+
+    #[test]
+    fn clock_sync_uses_the_lowest_delay_of_the_last_eight() {
+        let mut sync = ClockSync::default();
+        assert!(sync.to_local(1).is_none());
+        sync.add(ClockSample {
+            delay_us: 10,
+            offset_us: 7,
+        });
+        for i in 0..8 {
+            sync.add(ClockSample {
+                delay_us: 100 + i,
+                offset_us: i,
+            });
+        }
+        // The 10 µs sample has aged out.
+        assert_eq!(sync.best().unwrap().offset_us, 0);
+        assert_eq!(sync.to_local(1_000), Some(1_000));
     }
 }
