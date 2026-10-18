@@ -118,8 +118,19 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   mid-session kill kept the row and reconnected without PIN; a repeat
   removed the row at 01:18:27.652 UTC and restored it at 01:18:27.982,
   10.9 s after reset, cancelling the pending restart. PIN-free reconnect
-  streamed 01:18:59.920 without reopening. Real-PC failed-dial recovery is
-  still being checked. Detailed Mac evidence:
+  streamed 01:18:59.920 without reopening. A timed-out dial at 01:21:56.758
+  exercised reconfirm and browser generations 2–5. PTR flush at 01:22:03.450
+  also appeared in `dns-sd -B`; the row returned at 01:22:45.652 (39.5 s
+  after row removal, slower than the approximate 10–30 s target), and
+  reconnected without PIN. The auxiliary browse was still active; its effect
+  on the shared daemon question is an unproven hypothesis. After closing it,
+  a mid-session kill reproduced stuck TXT: reset 01:23:55.426, row removed
+  01:24:06.239, recovery generation 6 at 01:24:08.864, full TXT and Paired row
+  at 01:24:08.895 (**13.5 s after reset**, no app restart); PIN-free reconnect
+  streamed 01:24:31.189. Thus real browser
+  replacement fixes the reproduced TXT failure, and the slow PTR-flush case
+  also recovered, but a universal 30 s bound is not established. All these
+  later times are 2026-10-18 UTC. Detailed Mac evidence:
   `client/README.md#worker-crash-rediscovery-finding-6`. The PC session owns
   updates to both host handoff/retest files.
 - Phase C (2026-10-17, handoff steps 6–7; `c2400d9`, `91430f0`, `382bc27`):

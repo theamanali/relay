@@ -306,10 +306,18 @@ Fixed-client real-PC checks, home LAN, 2026-10-18 UTC, source `4f74101`:
 | F6b 1, idle kill + Connect in the gap | Dial started 01:16:00.322, reached `.ready` 01:16:04.333 and streamed 01:16:05.779 without a PIN. TXT returned within grace; no row loss or app restart. The dial did not time out, so this did not exercise failed-dial recovery. |
 | F6b 2, mid-session kill | Connection reset 01:17:08.847; full TXT returned 01:17:16.468 after a 127 ms withdrawal. Row stayed Paired; reconnect streamed 01:17:31.033 without a PIN or app restart. |
 | Mid-session repeat | Reset 01:18:17.096; TXT-less result 01:18:24.978, row removed 01:18:27.652. Recovery was armed, then full TXT returned 01:18:27.982 (10.9 s after reset), restoring the row and cancelling the pending restart. Reconnect streamed 01:18:59.920 without a PIN or app restart. |
+| Idle repeat, timed-out dial | Dial started 01:21:44.159 and timed out 01:21:56.758. Reconfirm and recovery ran; generation 2 returned full TXT at 01:21:59.416. Reconfirm subsequently flushed the PTR (`dns-sd -B` Rmv 01:22:03.450); the row expired 01:22:06.183. Browser generations 3/4/5 started 01:22:08.808 / :16.550 / :36.699. PTR Add arrived 01:22:44.651 and the Paired row returned 01:22:45.652, without reopening. PIN-free reconnect streamed 01:23:34.166. |
+| Mid-session repeat, stuck TXT, auxiliary browse closed | Reset 01:23:55.426; resolver returned full TXT while generation 5 reported TXT-less at 01:24:03.509. Row removed 01:24:06.239; recovery recreated the browser 01:24:08.864. Generation 6 returned full TXT and restored the Paired row 01:24:08.895: **13.5 s after reset, 2.7 s after row removal**, without reopening. PIN-free reconnect streamed 01:24:31.189. |
 
-These runs verify retention/return, saved pairing and cancellation on fresh
-TXT. The bounded restart itself was exercised by the isolated smoke harness;
-the real-PC failed-dial recovery check is still in progress.
+The last run reproduces the original stuck-TXT failure and verifies that
+browser replacement restores it. The timed-out dial also exercised real
+reconfirm and every restart slot. That run took **39.5 s after row removal**
+(48.9 s after dial failure), exceeding the approximate 10–30 s target. The
+auxiliary `dns-sd -B` remained active during it; a shared daemon question may
+affect restart timing, but that cause is not established. It was closed before
+the final mid-session repeat; `dns-sd -L` and mDNSResponder logging continued.
+These checks establish recovery without reopening or losing pairing, not a
+universal 30-second bound. Direct TCP to the PC succeeded during the slow case.
 
 ### `fakehost`: a fake PC
 

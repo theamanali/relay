@@ -210,7 +210,10 @@ or after a picker dial fails before connecting, keeping the existing row
 grace and saved pairings. All 164 Swift tests, isolated pairing checks and
 a fakehost SIGKILL/restart smoke check pass. Real-PC idle and mid-session
 kills have kept or recovered the row without reopening Relay, with PIN-free
-reconnects; detailed results and limits are in the
+reconnects. A reproduced stuck-TXT case returned in 13.5 s through the new
+browse restart; one reconfirm/PTR-flush run with the diagnostic browse still
+active took 39.5 s after row removal, so a universal 30 s bound is unproven.
+Detailed results and limits are in the
 [Mac verification record](client/README.md#worker-crash-rediscovery-finding-6).
 The PC session maintains [its retest record](host/NVIDIA-RECOVERY-RETEST.md).
 
