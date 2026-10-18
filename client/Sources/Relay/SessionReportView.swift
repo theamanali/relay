@@ -11,6 +11,8 @@ import SwiftUI
 struct SessionReportView: View {
     let report: SessionReport
     @State private var copied = false
+    /// Bumped on every click, so only the newest one turns "Copied" back.
+    @State private var copies = 0
     @State private var page = Page.summary
 
     enum Page: Hashable { case summary, details }
@@ -62,6 +64,12 @@ struct SessionReportView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(report.markdown, forType: .string)
                     copied = true
+                    copies += 1
+                    let click = copies
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.5))
+                        if copies == click { copied = false }
+                    }
                 }
             }
         }
