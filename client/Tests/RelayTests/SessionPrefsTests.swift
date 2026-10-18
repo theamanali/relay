@@ -114,19 +114,4 @@ final class SessionPrefsTests: XCTestCase {
         let launch = LaunchOptions.parse(["Relay", "--latency-stats"])
         XCTAssertEqual(SessionPrefs.load(from: defaults).overridden(by: launch).hudMode, .compact)
     }
-
-    func testTurningControlOffTurnsTheInputOptionsOff() {
-        var prefs = SessionPrefs()
-        prefs.modifiers = .mac
-        prefs.scrollDirection = .natural
-        prefs.setForwardInput(false)
-        XCTAssertFalse(prefs.forwardInput)
-        XCTAssertEqual(prefs.modifiers, .physical)
-        XCTAssertEqual(prefs.scrollDirection, .standard)
-        // Back on: they stay off until chosen again.
-        prefs.setForwardInput(true)
-        XCTAssertTrue(prefs.forwardInput)
-        XCTAssertEqual(prefs.modifiers, .physical)
-        XCTAssertEqual(prefs.scrollDirection, .standard)
-    }
 }

@@ -117,17 +117,6 @@ struct SessionPrefs: Equatable {
         d.set(tenBit, forKey: Self.tenBitKey)
     }
 
-    /// Control the PC on or off, from every place that switches it (settings,
-    /// PC ▸ Control / Observe, ⌃⌥⌘K). Off also turns off the options that
-    /// only matter while controlling, and they stay off when control comes
-    /// back (user request): keys by physical position, standard scrolling.
-    mutating func setForwardInput(_ on: Bool) {
-        forwardInput = on
-        guard !on else { return }
-        modifiers = .physical
-        scrollDirection = .standard
-    }
-
     /// Command-line flags override the remembered values for this launch.
     func overridden(by o: LaunchOptions) -> SessionPrefs {
         var p = self

@@ -528,12 +528,11 @@ struct SessionSettingsView: View {
             Section("Input") {
                 let controlling = model.prefs.forwardInput
                 // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
-                // matter while the Mac controls the PC; turning it off turns
-                // them off too (`setForwardInput`), and they stay off.
+                // matter while the Mac controls the PC: they show off while it
+                // is off, like the color options a PC lacks, but keep their
+                // saved values for when control comes back.
                 SettingSwitch("Control the PC", detail: "Off to watch without sending keys or clicks.",
-                              isOn: Binding(get: { model.prefs.forwardInput }, set: {
-                                  var prefs = model.prefs; prefs.setForwardInput($0); model.setPrefs(prefs)
-                              }))
+                              isOn: preference(\.forwardInput))
                 Group {
                     // Off sends keys by their physical position instead. The note
                     // describes the current mapping, in the same key order.
