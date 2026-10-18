@@ -526,27 +526,31 @@ struct SessionSettingsView: View {
                 SettingSwitch("Show session report on disconnect", isOn: preference(\.showSessionReport))
             }
             Section("Input") {
+                let controlling = model.prefs.forwardInput
                 // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
-                // matter while the Mac controls the PC; they keep their values.
+                // matter while the Mac controls the PC: they show off while it
+                // is off, like the color options a PC lacks, but keep their
+                // saved values for when control comes back.
                 SettingSwitch("Control the PC", detail: "Off to watch without sending keys or clicks.",
                               isOn: preference(\.forwardInput))
                 Group {
                     // Off sends keys by their physical position instead. The note
                     // describes the current mapping, in the same key order.
                     SettingSwitch("Mac-style modifier keys",
-                                  detail: model.prefs.modifiers == .mac
+                                  detail: !controlling ? "Applies while controlling the PC."
+                                      : model.prefs.modifiers == .mac
                                       ? "\u{2318} is Ctrl, \u{2325} is Alt, \u{2303} is the Windows key."
                                       : "\u{2318} is Alt, \u{2325} is the Windows key, \u{2303} is Ctrl.",
-                                  isOn: Binding(get: { model.prefs.modifiers == .mac }, set: {
+                                  isOn: Binding(get: { controlling && model.prefs.modifiers == .mac }, set: {
                                       var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
                                   }))
                     SettingSwitch("Natural scrolling", isOn: Binding(get: {
-                        model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
+                        controlling && model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
                     }, set: {
                         var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
                     }))
                 }
-                .disabled(!model.prefs.forwardInput)
+                .disabled(!controlling)
             }
         }
         .formStyle(.grouped)
