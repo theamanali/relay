@@ -130,11 +130,12 @@ The **Settings** gear in the footer opens:
 - **Show latency overlay**: a small HUD drawn into the stream's corner. Its
   headline is how far behind the PC your screen is (PC → your screen, measured
   across both machines; a PC without clock sync shows the Mac's own share,
-  receive → screen), with frame rate, p95 and a sparkline.
+  receive → screen), with frame rate, p95, skipped frames per second when
+  there are any, and a sparkline.
   ⌃⌥⌘L cycles Off → Compact → Detailed; Detailed adds where the time goes: a
   bar split into PC, Network and Mac, each with its parts (image age and
-  encode & send; one-way network; decode and display), then input → PC,
-  skipped frames per second and the stream as rows (Video, Picture, Display,
+  encode & send; one-way network; decode and display), then input → PC
+  and the stream as rows (Video, Picture, Display when VSync is on,
   Link, and Data: the video actually arriving against the bitrate asked for,
   e.g. 48 of 120 Mbps). Also View ▸ Latency
   Overlay. Clock offset, ping estimate, frame transfer, decrypt and the

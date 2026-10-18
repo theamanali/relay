@@ -96,13 +96,20 @@ enum StatsHUD {
                               font: font(26, .semibold), color: level?.color ?? primary, x: padding, baseline: y + 25)
         canvas.text("ms", font: font(13, .medium), color: secondary, x: padding + big + 3, baseline: y + 25)
         canvas.text(String(format: "%.0f fps", s.presentedFPS), font: font(13, .semibold), color: primary,
-                    right: padding + inner, baseline: y + 14)
-        let p95Level = summary.p95.map { Level(value: $0, budget: summary.budget) }
-        canvas.text("p95 " + ms(summary.p95), font: font(11, .medium), color: p95Level?.color ?? secondary,
-                    right: padding + inner, baseline: y + 29)
+                    right: padding + inner, baseline: y + 25)
         y += 32
-        canvas.text(summary.label, font: font(10), color: secondary, x: padding, baseline: y + 9)
-        y += 18
+        // Two columns: p95 under the latency it qualifies, skipped frames
+        // (only when there are enough to matter) under the frame rate.
+        let p95Level = summary.p95.map { Level(value: $0, budget: summary.budget) }
+        let p95Label = canvas.text("p95: ", font: font(11), color: secondary, x: padding, baseline: y + 10)
+        canvas.text(milliseconds(summary.p95), font: font(11, .medium), color: p95Level?.color ?? secondary,
+                    x: padding + p95Label, baseline: y + 10)
+        if summary.skipping {
+            canvas.text(String(format: "%.0f skipped/s", summary.skippedPerSecond), font: font(11, .medium),
+                        color: Level.warning.color, right: padding + inner, baseline: y + 10)
+        }
+        y += headerSecondLine
+        y += headerToSparkline
 
         sparkline(ctx: ctx, canvas: canvas, values: summary.sparkline, budget: summary.budget,
                   frame: CGRect(x: padding, y: y, width: inner, height: sparklineHeight))
@@ -137,20 +144,17 @@ enum StatsHUD {
         canvas.text(milliseconds(summary.input), font: font(11, .medium), color: primary,
                     right: padding + inner, baseline: y + 12)
         y += rowHeight
-        canvas.text("Skipped frames", font: font(11), color: secondary, x: padding, baseline: y + 12)
-        canvas.text(String(format: "%.0f/s", summary.skippedPerSecond), font: font(11, .medium),
-                    color: summary.skippedPerSecond >= max(1, s.decodedFPS * 0.05) ? Level.warning.color : primary,
-                    right: padding + inner, baseline: y + 12)
-        y += rowHeight
 
         if let stream = s.stream {
             y += gap - 4
             divider(ctx, y: y)
             y += gap - 2
             // Label / value rows, like the rows above, instead of loose lines.
+            // The settings are fixed for the session; only Data moves, so
+            // it is the one drawn at full strength.
             for (label, value) in streamRows(stream, receivedMbps: s.receivedMbps) {
                 canvas.text(label, font: font(10), color: secondary, x: padding, baseline: y + 11)
-                canvas.text(value, font: font(10, .medium), color: CGColor(gray: 1, alpha: 0.8),
+                canvas.text(value, font: font(10, .medium), color: label == "Data" ? primary : CGColor(gray: 1, alpha: 0.7),
                             right: padding + inner, baseline: y + 11, maxWidth: inner - streamLabelWidth)
                 y += streamLineHeight
             }
@@ -159,6 +163,8 @@ enum StatsHUD {
     }
 
     private static let gap: CGFloat = 10
+    private static let headerSecondLine: CGFloat = 15
+    private static let headerToSparkline: CGFloat = 6
     private static let barHeight: CGFloat = 6
     private static let detailHeight: CGFloat = 15
     private static let streamLineHeight: CGFloat = 15
@@ -166,10 +172,10 @@ enum StatsHUD {
     static let streamLabelWidth: CGFloat = 52
 
     static func height(for s: LatencyStats.HUDSnapshot, mode: HUDMode) -> CGFloat {
-        let compact = padding + 32 + 18 + sparklineHeight + padding
+        let compact = padding + 32 + headerSecondLine + headerToSparkline + sparklineHeight + padding
         guard mode == .detailed else { return compact }
         let breakdown = 2 * gap + barHeight + gap + 3 * (rowHeight + detailHeight)
-        let footer = (gap - 4) + (gap - 2) + 2 * rowHeight
+        let footer = (gap - 4) + (gap - 2) + rowHeight
         let stream = s.stream.map {
             (gap - 4) + (gap - 2) + CGFloat(streamRows($0, receivedMbps: s.receivedMbps).count) * streamLineHeight
         } ?? 0
@@ -188,6 +194,7 @@ enum StatsHUD {
         }
 
         /// The headline and its sparkline: desktop → screen once synced.
+        /// The HUD leaves the label out; the session report names its measure with it.
         let label: String
         let median: Double?
         let p95: Double?
@@ -200,6 +207,8 @@ enum StatsHUD {
         let inputLabel: String
         let input: Double?
         let skippedPerSecond: Double
+        /// Enough skipped frames to point out: one a second, or 5 %.
+        let skipping: Bool
 
         static let pcColor = CGColor(srgbRed: 0.39, green: 0.62, blue: 1, alpha: 1)
         static let networkColor = CGColor(srgbRed: 0.75, green: 0.55, blue: 1, alpha: 1)
@@ -224,7 +233,7 @@ enum StatsHUD {
             groups = [
                 Group(name: "PC", milliseconds: pc, detail: pcDetail, color: Self.pcColor),
                 Group(name: "Network", milliseconds: network,
-                      detail: measured != nil ? "one way, measured" : "half a ping round trip",
+                      detail: measured != nil ? "one way" : "half a ping round trip",
                       color: Self.networkColor),
                 Group(name: "Mac", milliseconds: mac,
                       detail: "decode \(StatsHUD.ms(s.decode.p50)), display \(StatsHUD.ms(display))",
@@ -236,6 +245,7 @@ enum StatsHUD {
             // Clamp before rounding: a window with a few more shown than decoded
             // rounds to −0, which max(0, −0) keeps and prints as "-0".
             skippedPerSecond = max(0, s.decodedFPS - s.presentedFPS).rounded()
+            skipping = skippedPerSecond >= max(1, s.decodedFPS * 0.05)
         }
     }
 
@@ -244,7 +254,8 @@ enum StatsHUD {
     static func streamRows(_ s: StreamInfo, receivedMbps: Double?) -> [(String, String)] {
         var rows = [("Video", "\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz")]
         if !s.format.isEmpty { rows.append(("Picture", s.format)) }
-        rows.append(("Display", s.vsync ? "VSync on" : "VSync off"))
+        // VSync off is the default; only the exception takes a row.
+        if s.vsync { rows.append(("Display", "VSync on")) }
         if let link = s.link { rows.append(("Link", link)) }
         rows.append(("Data", "\(receivedMbps.map { String(format: "%.0f", $0) } ?? "––") of \(s.bitrateMbps) Mbps"))
         return rows
@@ -253,22 +264,30 @@ enum StatsHUD {
     private static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "––" }
 
     /// Proportional segments with a sliver of space between them; empty
-    /// segments are left out.
+    /// segments are left out, and one too short to see still gets a few
+    /// points (the network is often under 3 % of the total).
     private static func bar(_ ctx: CGContext, segments: [(Double, CGColor)], frame: CGRect) {
+        let total = segments.reduce(0) { $0 + max(0, $1.0) }
         ctx.saveGState()
         ctx.addPath(CGPath(roundedRect: frame, cornerWidth: frame.height / 2, cornerHeight: frame.height / 2,
                            transform: nil))
         ctx.clip()
         ctx.setFillColor(CGColor(gray: 1, alpha: 0.08))
         ctx.fill(frame)
-        let total = segments.reduce(0) { $0 + max(0, $1.0) }
         if total > 0 {
+            // Short segments take their minimum out of the rest's share.
+            let shown = segments.filter { $0.0 > 0 }
+            let minimum: CGFloat = 4
+            let raw = shown.map { frame.width * CGFloat($0.0 / total) }
+            let short = raw.filter { $0 < minimum }
+            let long = raw.filter { $0 >= minimum }.reduce(0, +)
+            let squeeze = long > 0 ? (frame.width - minimum * CGFloat(short.count)) / long : 1
             var x = frame.minX
-            for (value, color) in segments where value > 0 {
-                let w = frame.width * CGFloat(value / total)
+            for ((_, color), w) in zip(shown, raw) {
+                let width = w < minimum ? minimum : w * squeeze
                 ctx.setFillColor(color)
-                ctx.fill(CGRect(x: x, y: frame.minY, width: max(1, w - 1.5), height: frame.height))
-                x += w
+                ctx.fill(CGRect(x: x, y: frame.minY, width: max(1, width - 1.5), height: frame.height))
+                x += width
             }
         }
         ctx.restoreGState()
@@ -281,19 +300,36 @@ enum StatsHUD {
         ctx.fill(CGRect(x: padding, y: y, width: width - 2 * padding, height: 1))
     }
 
-    /// Time to screen per frame, oldest on the left; a dashed line marks one
-    /// refresh interval, and the part of the curve above it is drawn red.
+    /// The worst frame in each point-wide column, oldest on the left, so a
+    /// single slow frame stays a visible peak instead of aliasing between
+    /// samples. The window is always `sparklineFrames` wide; a short history
+    /// fills the right-hand columns.
+    static func columnMaxima(_ values: [Double], columns: Int) -> [Double] {
+        guard columns > 0, !values.isEmpty else { return [] }
+        let span = Double(max(values.count, LatencyStats.sparklineFrames)) / Double(columns)
+        let offset = max(values.count, LatencyStats.sparklineFrames) - values.count
+        var out: [Double] = []
+        for c in 0..<columns {
+            let lo = max(0, Int((Double(c) * span).rounded(.down)) - offset)
+            let hi = min(values.count, Int((Double(c + 1) * span).rounded(.down)) - offset)
+            if lo < hi { out.append(values[lo..<hi].max()!) }
+        }
+        return out
+    }
+
+    /// Time to screen per frame; a dashed line marks the budget, and the
+    /// part of the curve above it is drawn red.
     private static func sparkline(ctx: CGContext, canvas: Canvas, values: [Double], budget: Double, frame: CGRect) {
         ctx.setFillColor(CGColor(gray: 1, alpha: 0.05))
         ctx.fill(frame)
         let top = max(budget * 1.5, min(values.max() ?? 0, budget * 4))
         func y(_ v: Double) -> CGFloat { frame.maxY - CGFloat(min(v, top) / top) * frame.height }
-        if values.count > 1 {
-            let step = frame.width / CGFloat(Swift.max(values.count, LatencyStats.sparklineFrames) - 1)
-            let start = frame.maxX - step * CGFloat(values.count - 1)
+        let columns = columnMaxima(values, columns: Int(frame.width))
+        if columns.count > 1 {
+            let start = frame.maxX - CGFloat(columns.count - 1)
             let line = CGMutablePath()
-            for (i, v) in values.enumerated() {
-                let p = CGPoint(x: start + step * CGFloat(i), y: y(v))
+            for (i, v) in columns.enumerated() {
+                let p = CGPoint(x: start + CGFloat(i), y: y(v))
                 i == 0 ? line.move(to: p) : line.addLine(to: p)
             }
             let area = line.mutableCopy()!
@@ -325,13 +361,28 @@ enum StatsHUD {
         ctx.addLine(to: CGPoint(x: frame.maxX, y: by))
         ctx.strokePath()
         ctx.setLineDash(phase: 0, lengths: [])
-        canvas.text(String(format: "%.1f", budget), font: font(9, .medium), color: secondary,
-                    right: frame.maxX - 2, baseline: by - 2)
+        // The limit's value on a chip in the panel color, so the curve
+        // never runs through the digits.
+        let label = String(format: "%.0f ms", budget)
+        let labelFont = font(9, .medium)
+        let labelWidth = canvas.width(label, font: labelFont)
+        let chip = CGRect(x: frame.minX, y: by - 6, width: labelWidth + 8, height: 12)
+        ctx.addPath(CGPath(roundedRect: chip, cornerWidth: 3, cornerHeight: 3, transform: nil))
+        ctx.setFillColor(CGColor(gray: 0.12, alpha: 1))
+        ctx.fillPath()
+        canvas.text(label, font: labelFont, color: secondary, x: chip.minX + 4, baseline: by + 3)
     }
 
     /// One-line CoreText drawing in the flipped context.
     private struct Canvas {
         let ctx: CGContext
+
+        func width(_ string: String, font: CTFont) -> CGFloat {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+            ]))
+            return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        }
 
         @discardableResult
         func text(_ string: String, font: CTFont, color: CGColor, x: CGFloat? = nil, right: CGFloat? = nil,

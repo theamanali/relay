@@ -64,7 +64,7 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(summary.groups[0].milliseconds), 3.3 + 4.1, accuracy: 0.1)
         XCTAssertEqual(summary.groups[0].detail, "image age 3.3, encode & send 4.1")
         XCTAssertEqual(try XCTUnwrap(summary.groups[1].milliseconds), 0.4, accuracy: 0.05)
-        XCTAssertEqual(summary.groups[1].detail, "one way, measured")
+        XCTAssertEqual(summary.groups[1].detail, "one way")
         XCTAssertEqual(summary.inputLabel, "Input → PC")
         XCTAssertEqual(try XCTUnwrap(summary.input), 1.1, accuracy: 0.05)
     }
@@ -95,8 +95,8 @@ final class StatsHUDTests: XCTestCase {
         let rows = StatsHUD.streamRows(StreamInfo(host: "", codec: "HEVC", width: 3024, height: 1964, fps: 120,
                                                   bitrateMbps: 120, format: "4:4:4, 10-bit, Fastest",
                                                   link: "Ethernet", vsync: false), receivedMbps: 47.6)
-        XCTAssertEqual(rows.map(\.0), ["Video", "Picture", "Display", "Link", "Data"])
-        XCTAssertEqual(rows.map(\.1), ["HEVC 3024×1964 @ 120 Hz", "4:4:4, 10-bit, Fastest", "VSync off",
+        XCTAssertEqual(rows.map(\.0), ["Video", "Picture", "Link", "Data"])
+        XCTAssertEqual(rows.map(\.1), ["HEVC 3024×1964 @ 120 Hz", "4:4:4, 10-bit, Fastest",
                                        "Ethernet", "48 of 120 Mbps"])
         // No picture options, no link (--host), no data yet.
         let bare = StatsHUD.streamRows(StreamInfo(host: "", codec: "HEVC", width: 1, height: 1, fps: 60,
@@ -119,6 +119,25 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(CGFloat(image.height), StatsHUD.height(for: snapshot(), mode: .detailed).rounded(.up))
         // The bottom padding stays clear of text: the last rows are inside.
         XCTAssertLessThan(StatsHUD.height(for: snapshot(), mode: .detailed), 400)
+    }
+
+    func testSkippingIsFlaggedFromOneFrameASecondOrFivePercent() {
+        var s = snapshot()
+        XCTAssertFalse(StatsHUD.Summary(s).skipping)
+        s.presentedFPS = 112
+        XCTAssertTrue(StatsHUD.Summary(s).skipping)
+    }
+
+    func testSparklineColumnsKeepTheWorstFrame() {
+        let full = (0..<LatencyStats.sparklineFrames).map { $0 == 101 ? 40.0 : 5.0 }
+        let columns = StatsHUD.columnMaxima(full, columns: 212)
+        XCTAssertEqual(columns.count, 212)
+        XCTAssertEqual(columns.filter { $0 == 40 }.count, 1, "one slow frame, one peak")
+        // A short history fills only the newest (right-hand) columns.
+        let short = StatsHUD.columnMaxima([7, 8, 9], columns: 212)
+        XCTAssertFalse(short.isEmpty)
+        XCTAssertLessThanOrEqual(short.count, 3)
+        XCTAssertEqual(short.last, 9)
     }
 
     func testModeCycles() {

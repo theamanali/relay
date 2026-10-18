@@ -637,11 +637,17 @@ documented there. What follows is only the mechanics that are easy to break:
   sampling, pixel margin). It refreshes only when a video frame arrives.
   HUD layout (2026-10-18, user request): the headline is Desktop → screen
   ("PC → your screen", colored against three refresh intervals) once
-  synced, else receive → screen (one interval). Detailed = a bar and three
-  groups (PC = content age + PC work, Network = sent → received or RTT/2,
-  Mac = receive → screen split into decode and display), then input → PC,
-  skipped frames/s (decoded − shown) and the stream on up to three lines
-  that always fit. What to show is `StatsHUD.Summary` (pure, tested); the
+  synced, else receive → screen (one interval). Header (2026-10-18, user
+  review): median + fps on one line, then "p95:" under the median and
+  "N skipped/s" (decoded − shown, only past 1/s or 5 %) under the fps; no
+  description line (the report still uses `Summary.label`), no divider
+  before the sparkline. The sparkline plots each point column's worst
+  frame (`columnMaxima`) and labels the budget "25 ms" on a chip. Detailed
+  = a proportional bar (PC/Network/Mac split, not budget-scaled: user
+  decision; short segments get 4 pt) and three groups (PC = content age +
+  PC work, Network = "one way" or RTT/2, Mac = decode and display), then
+  input → PC and the stream as label/value rows: Video, Picture, Display
+  only when VSync is on, Link, Data (drawn brighter: the only live value). What to show is `StatsHUD.Summary` (pure, tested); the
   developer figures (offset, RTT/2, frame transfer, decrypt, p99, counters)
   live in the session report's Details page. The report (same day) uses
   `SessionReport.summary` (= `StatsHUD.Summary` over the session's
