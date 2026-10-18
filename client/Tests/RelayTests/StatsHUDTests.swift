@@ -85,6 +85,10 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(StatsHUD.Summary(s).skippedPerSecond, 0) // 120.1 decoded, 119.8 shown
         s.presentedFPS = 52
         XCTAssertEqual(StatsHUD.Summary(s).skippedPerSecond, 68)
+        // Slightly more shown than decoded in the window: 0, never -0.
+        s.presentedFPS = 120.4
+        XCTAssertEqual(String(format: "%.0f/s", StatsHUD.Summary(s).skippedPerSecond), "0/s")
+        XCTAssertFalse(StatsHUD.Summary(s).skippedPerSecond.sign == .minus)
     }
 
     func testTheStreamFitsOnShortLines() {

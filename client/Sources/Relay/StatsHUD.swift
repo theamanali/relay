@@ -226,7 +226,9 @@ enum StatsHUD {
             let applied = s.inputApplied.p50
             inputLabel = applied != nil || endToEnd ? "Input → PC" : "Input → sent"
             input = applied ?? (endToEnd ? nil : s.inputSent.p50)
-            skippedPerSecond = max(0, (s.decodedFPS - s.presentedFPS).rounded())
+            // Clamp before rounding: a window with a few more shown than decoded
+            // rounds to −0, which max(0, −0) keeps and prints as "-0".
+            skippedPerSecond = max(0, s.decodedFPS - s.presentedFPS).rounded()
         }
     }
 
