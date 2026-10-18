@@ -317,7 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     /// Control the PC, so it persists and the picker shows it; mid-session
     /// it takes effect at once and the stream says which way it went.
     private func toggleControl() {
-        prefs.forwardInput.toggle()
+        prefs.setForwardInput(!prefs.forwardInput)
         prefs.save()
         applyPrefs()
         picker?.prefs = prefs

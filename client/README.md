@@ -169,7 +169,8 @@ Latency, Input) of switches, laid out like System Settings:
   Report opens it any time.
 - **Control the PC**: whether your keyboard and pointer go to the PC; off
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
-  apply only while it is on.
+  apply only while it is on; turning it off turns them off too, and they stay
+  off when control comes back.
 - **Mac-style modifier keys**: on by default, ⌘ is Ctrl, ⌥ is Alt and ⌃ is the
   Windows key, so ⌘C copies; off maps them by position (below). The note under
   it shows the mapping currently in use.

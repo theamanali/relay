@@ -593,8 +593,10 @@ documented there. What follows is only the mechanics that are easy to break:
   rows (~730 pt tall). Subtitles stay on one line at that width (user
   request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
-  matter while forwarding; while it is off they show off (user request) but
-  keep their saved values. VSync flips `displaySyncEnabled` on the
+  matter while forwarding. Turning it off (settings, PC menu or ⌃⌥⌘K, all
+  through `SessionPrefs.setForwardInput`) also sets the modifiers to physical
+  and scrolling to standard, and they stay off when it comes back (user
+  request); a `--no-input` launch only shows them off. VSync flips `displaySyncEnabled` on the
   live layer; Natural scrolling follows the Mac (`com.apple.swipescrolldirection`)
   until chosen, and the sign is decided per event from
   `isDirectionInvertedFromDevice`, since AppKit's deltas already follow the Mac.

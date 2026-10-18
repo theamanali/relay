@@ -180,7 +180,7 @@ struct RelayCommands: Commands {
         let current = model.prefs.forwardInput == forwardInput
         return Toggle(isOn: Binding(get: { current }, set: { _ in
             guard !current else { return }
-            var prefs = model.prefs; prefs.forwardInput = forwardInput; model.setPrefs(prefs)
+            var prefs = model.prefs; prefs.setForwardInput(forwardInput); model.setPrefs(prefs)
         })) {
             Label(title, systemImage: systemImage)
         }
