@@ -148,6 +148,16 @@ were measured and rejected; both are written up in
 
 ## Status
 
+**End-to-end timing (2026-10-18):** the Mac and PC now relate their clocks
+(PROTOCOL.md "Clock sync and frame timing"), so the detailed latency HUD and
+the session report measure a frame from Windows' present to the Mac's screen,
+and an input event to `SendInput`. First real-PC session over the cable
+(3024×1964@120, Fastest, 4:4:4 10-bit, 40 s, synthetic pointer motion):
+**desktop → screen p50 14.9 / p95 23.3 ms** (content age 3.3, PC work 7.1,
+sent → received 0.4, receive → screen 4.4) and **input → applied p50 1.1 ms**.
+Verified with 182 Mac tests, the isolated fakehost checks and fakehost with
+known clock offsets; host side as in the [timing handoff](docs/TIMING-HANDOFF.md).
+
 **Platform migration (2026-10-10):** the Mac now uses SwiftUI for the picker,
 settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
 bundle with a macOS 14 minimum (Observation). Metal and hardware decoding are

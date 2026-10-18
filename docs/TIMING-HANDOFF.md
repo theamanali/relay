@@ -1,7 +1,12 @@
 # Handoff for the PC session: clock sync and per-frame timing
 
-**Status (2026-10-18): host, `probe` and `docs/PROTOCOL.md` done and
-installed; the Mac side is next.** Every byte, value and name below shipped
+**Status (2026-10-18): done on both sides.** The Mac half landed in
+`cac14a2` (fakehost `f5c0716`) with no wire change, and a real-PC session
+over the cable measured Desktop → screen p50 14.9 ms (details: `AGENTS.md`
+Status, "Clock sync + frame timing"). One deviation from the Mac-side notes
+below: Sent → received ends when the whole frame has arrived, not at its
+first record, since `sent_us` is stamped after the last byte is written.
+Earlier status: host, `probe` and `docs/PROTOCOL.md` done and installed. Every byte, value and name below shipped
 as written; three details were pinned down while implementing and are
 marked *(as built)*. The spec is now PROTOCOL.md "Clock sync and frame
 timing". Verified on Windows: fmt, 223 unit tests + the probe integration

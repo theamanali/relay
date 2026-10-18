@@ -194,7 +194,31 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   delay 42 µs, 534 fresh frames 0 out of order, 214 `u64::MAX`,
   present→submit p50 0.9 ms, submit→sent 5.2 ms, sent→received 31 µs,
   input → applied p50 0.14 ms (p95 1.1), inputs 369 sent / 368 reported;
-  host.log: physical monitors and layout restored. The Mac side is next.
+  host.log: physical monitors and layout restored.
+  Mac side (2026-10-18, `cac14a2`, `f5c0716`): `ClockSync` (pure; 8
+  samples, lowest delay wins, delay > 50 ms or broken stamps dropped),
+  `InputLedger` (counts 0x90–0x93 from the first TIME_REQUEST; nil-event
+  sends counted, not sampled), `FrameEndToEnd`. HostConnection sends
+  requests only with CAP_TIMING (5 × 50 ms after STREAM_START, then 1/s),
+  pairs each EXT with the FRAME before it, feeds PC work/network from
+  `ext.basic`. `LatencyStats` joins present (Mac µs) with Metal's
+  `presentedTime` by the Mac's frame sequence in either order. All Mac
+  clocks share one base (`systemUptime`, `CACurrentMediaTime`,
+  `DispatchTime` within µs). Sent → received ends when the whole frame is
+  in, not at its first record (the PC stamps `sent_us` after the last
+  byte). fakehost `--clock-offset-ms` / `--no-timing`. Verified: 182 Swift
+  tests, `test-pair-name.sh` 17 PASS (it now compiles ReceiveTiming and
+  ClockSync, which it had missed), fakehost offset +250.5 → estimated
+  +250.508 ms and −3000 → −2999.999 ms with the same end-to-end rows,
+  `--no-timing` rows blank. Real PC over the cable (`en11`, 1 GbE, home
+  LAN), installed `107FDB55`, 3024×1964@120 Fastest 4:4:4 10-bit, 40 s
+  with synthetic 125 Hz pointer motion for the last 25 s: 119.7 fps;
+  Desktop → screen p50 14.9 / p95 23.3 ms, content age 3.3 / 11.7, PC work
+  7.1 / 7.1, sent → received 0.4 / 0.6, RTT/2 0.9, frame transfer (est.)
+  0.8 / 1.4, receive → decode 3.0, receive → screen 4.4 / 5.5, input →
+  sent 0.5 / 1.9, input → applied 1.1 / 2.4; best sync delay 0.50 ms. The
+  parts add up (3.3 + 7.1 + 0.4 + 4.4 ≈ 15.2). Whether a video tab was open
+  in a browser was not checked.
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
   `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup
@@ -611,9 +635,9 @@ documented there. What follows is only the mechanics that are easy to break:
   while on); `MetalPresenter.setOverlay` uploads it as a new texture and
   `encode` blends it as a second quad in the same pass (premultiplied, nearest
   sampling, pixel margin). It refreshes only when a video frame arrives.
-  Clock sync and per-frame PC timestamps (end-to-end figures, input →
-  applied) are proposed for the PC session in `docs/TIMING-HANDOFF.md`
-  (2026-10-18, not started).
+  With a CAP_TIMING PC the detailed HUD adds Desktop → screen, Content
+  age, Sent → received, Input → applied and the clock offset (13 rows);
+  see Status, "Clock sync + frame timing".
   The first 3 s after STREAM_START (`LatencyStats.warmUp`) are not recorded
   and the HUD stays hidden until they pass.
   Mac-only stages (2026-10-18): `ReceiveTimer` (pure, in
