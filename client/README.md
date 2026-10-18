@@ -152,8 +152,10 @@ The **Settings** gear in the footer opens:
   the budget, the latency split by stage (PC, Network, Mac), input → PC
   and the data received (total, and average against the bitrate asked
   for). **Details**
-  swaps those for every stage's p50/p95/p99/max, the counters, the link rate
-  and the clock estimate. Copy puts everything on the clipboard as Markdown. Three
+  swaps those for every stage's p50/p95/p99/max, grouped like the Summary
+  (Desktop → screen, then PC, Network, Mac and Input), and the frame
+  counters, link rate and clock estimate as label/value rows. The ping
+  estimate (RTT/2) is listed only for a PC without clock sync. Copy puts everything on the clipboard as Markdown. Three
   of its rows are measured on the Mac alone: **Frame
   transfer (est.)** is a frame's size over the rate its later records
   arrived at (frames that fit one record, or that were already buffered,

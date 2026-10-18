@@ -304,36 +304,103 @@ struct SessionReportView: View {
     /// Everything else: every stage's percentiles, the counters, the link
     /// rate, the clock estimate and what the numbers do not cover.
     private var details: some View {
-        VStack(alignment: .leading, spacing: Style.Space.m) {
+        VStack(alignment: .leading, spacing: Style.Space.l) {
             Grid(alignment: .trailing, horizontalSpacing: Style.Space.l, verticalSpacing: 6) {
                 GridRow {
                     Text("Stage (ms)").gridColumnAlignment(.leading)
                     Text("p50"); Text("p95"); Text("p99"); Text("max"); Text("samples")
                 }
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .foregroundStyle(.secondary)
                 Divider()
-                ForEach(report.rows) { row in
-                    GridRow {
-                        Text(verbatim: row.name).gridColumnAlignment(.leading)
-                        Text(verbatim: SessionReport.ms(row.histogram.percentile(0.5)))
-                        Text(verbatim: SessionReport.ms(row.histogram.percentile(0.95)))
-                        Text(verbatim: SessionReport.ms(row.histogram.percentile(0.99)))
-                        Text(verbatim: SessionReport.ms(row.histogram.count > 0 ? row.histogram.max : nil))
-                        Text(verbatim: "\(row.histogram.count)").foregroundStyle(.secondary)
+                // The end-to-end measure first, then the stages grouped and
+                // colored as in the Summary's split.
+                ForEach(detailSections, id: \.name) { section in
+                    if !section.name.isEmpty {
+                        GridRow {
+                            HStack(spacing: Style.Space.s) {
+                                // Input has no color; a clear dot keeps its name in line.
+                                Circle().fill(section.color.map { Color(cgColor: $0) } ?? .clear)
+                                    .frame(width: 8, height: 8)
+                                Text(verbatim: section.name).fontWeight(.semibold)
+                            }
+                            .gridCellColumns(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.top, Style.Space.s)
                     }
-                    .monospacedDigit()
+                    ForEach(section.rows) { row in
+                        GridRow {
+                            Text(verbatim: row.name).gridColumnAlignment(.leading)
+                                .padding(.leading, section.name.isEmpty ? 0 : 16)
+                                .fontWeight(section.name.isEmpty ? .semibold : .regular)
+                            Text(verbatim: SessionReport.ms(row.histogram.percentile(0.5)))
+                            Text(verbatim: SessionReport.ms(row.histogram.percentile(0.95)))
+                            Text(verbatim: SessionReport.ms(row.histogram.percentile(0.99)))
+                            Text(verbatim: SessionReport.ms(row.histogram.count > 0 ? row.histogram.max : nil))
+                            Text(row.histogram.count, format: .number).foregroundStyle(.secondary)
+                        }
+                        .monospacedDigit()
+                    }
                 }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: report.countersText.prefix(1).uppercased() + report.countersText.dropFirst())
-                if let link = report.linkText { Text(verbatim: link) }
-                if let clock = report.clockText { Text(verbatim: clock) }
+            Divider()
+            // Label / value rows, as under the Summary's split.
+            Grid(alignment: .leading, horizontalSpacing: Style.Space.l, verticalSpacing: Style.Space.s) {
+                GridRow {
+                    Text("Frames").foregroundStyle(.secondary)
+                    Text(verbatim: framesValue).frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                if let bps = report.linkBitsPerSecond {
+                    GridRow {
+                        Text("Link").foregroundStyle(.secondary)
+                        Text(verbatim: String(format: "Frame data at %.2f Gb/s", bps / 1e9)).monospacedDigit()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                }
+                if let clock = report.clock {
+                    GridRow {
+                        Text("Clock").foregroundStyle(.secondary)
+                        Text(verbatim: String(format: "PC %+.3f ms from this Mac, best delay %.3f ms",
+                                              Double(clock.offset) / 1_000, Double(clock.delay) / 1_000))
+                            .monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                }
             }
-            .font(.callout).foregroundStyle(.secondary)
             Text(verbatim: SessionReport.footnote)
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private struct DetailSection {
+        let name: String
+        let color: CGColor?
+        let rows: [SessionReport.Row]
+    }
+
+    private var detailSections: [DetailSection] {
+        let rows = Dictionary(uniqueKeysWithValues: report.rows.map { ($0.name, $0) })
+        func pick(_ names: [String]) -> [SessionReport.Row] { names.compactMap { rows[$0] } }
+        return [
+            DetailSection(name: "", color: nil, rows: pick(["Desktop → screen"])),
+            DetailSection(name: "PC", color: StatsHUD.Summary.pcColor, rows: pick(["Content age", "PC work"])),
+            DetailSection(name: "Network", color: StatsHUD.Summary.networkColor,
+                          // RTT/2 only stands in for a PC without clock sync, as in the Summary.
+                          rows: pick([report.sentToReceived.count > 0 ? "Sent → received" : "Network (RTT/2 est.)",
+                                      "Frame transfer (est.)"])),
+            DetailSection(name: "Mac", color: StatsHUD.Summary.macColor,
+                          rows: pick(["Decrypt", "Receive → decode", "Receive → screen"])),
+            DetailSection(name: "Input", color: nil, rows: pick(["Input → sent", "Input → applied"])),
+        ]
+    }
+
+    /// "40 replaced, 3 late, 1 dropped", plus any rarer failures.
+    private var framesValue: String {
+        let c = report.counters
+        var text = "\(c.replaced) replaced, \(c.late) late, \(c.dropped) dropped"
+        if c.unavailable > 0 { text += ", \(c.unavailable) without a drawable" }
+        if c.gpuFailures > 0 { text += ", \(c.gpuFailures) GPU errors" }
+        return text
     }
 
     /// "2.5 GB, 48 of 120 Mbps on average": the HUD's Data row over the session.

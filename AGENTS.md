@@ -660,7 +660,13 @@ documented there. What follows is only the mechanics that are easy to break:
   adds the share of frames over), "ms" on axis values, chart titles above
   each chart at body size with ~10 pt measured to the first mark (the
   breakdown title's 1.5 pt bottom padding evens it), "Latency split by
-  stage, median", then Input → PC / Data as label/value rows. Summary/Details is a segmented control that swaps content in
+  stage, median", then Input → PC / Data as label/value rows. Details
+  (same review) groups `report.rows` by name (`detailSections`): Desktop →
+  screen bold, then PC / Network / Mac with the Summary's dots and Input
+  (clear dot for alignment); Network (RTT/2 est.) only replaces Sent →
+  received when that is empty (user request; the Markdown keeps every
+  row). Frames / Link / Clock are label/value rows; counts use grouping.
+  Details is ~60 pt taller than Summary. Summary/Details is a segmented control that swaps content in
   place: a folding Details grew the window to 1,129 pt, taller than a
   MacBook screen. Never put a `GeometryReader` in the report: in the
   self-sizing window it looped constraint passes until AppKit crashed the
