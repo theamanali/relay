@@ -262,10 +262,12 @@ final class HostBrowser {
     private var latest: [DiscoveredHost] = []
     private var flush: DispatchWorkItem?
     private var generation = 0
+    private var publishedNames: [String] = []
 
     func start() {
         generation += 1
         let attempt = generation
+        NSLog("HostBrowser: starting browse generation %d", attempt)
         browser?.cancel()
         let params = NWParameters()
         params.includePeerToPeer = true
@@ -274,6 +276,7 @@ final class HostBrowser {
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == attempt else { return }
+                NSLog("HostBrowser: generation %d state %@", attempt, String(describing: state))
                 if case .failed(let err) = state {
                     NSLog("HostBrowser: browse failed: %@", err.localizedDescription)
                     self.report("Can't search for PCs — retrying")
@@ -288,6 +291,10 @@ final class HostBrowser {
             Task { @MainActor [weak self] in
                 guard let self, self.generation == attempt else { return }
                 self.latest = results.compactMap(Self.host(from:))
+                let summary = self.latest.map {
+                    "\($0.name){txt=\($0.hasTXT),key=\($0.publicKey != nil),links=\($0.links.sorted().joined(separator: ","))}"
+                }.sorted().joined(separator: " ")
+                NSLog("HostBrowser: generation %d results [%@]", attempt, summary)
                 self.publish()
             }
         }
@@ -320,6 +327,11 @@ final class HostBrowser {
     /// vanished host, come back after the grace period to let it go.
     private func publish() {
         let hosts = debouncer.update(seen: latest, now: Date())
+        let names = hosts.map(\.name)
+        if names != publishedNames {
+            NSLog("HostBrowser: picker hosts [%@] (removal pending=%@)", names.joined(separator: ","), String(debouncer.hasPendingRemovals))
+            publishedNames = names
+        }
         onChange?(hosts)
         flush?.cancel()
         flush = nil
