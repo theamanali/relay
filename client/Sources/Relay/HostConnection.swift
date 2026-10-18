@@ -25,11 +25,20 @@ protocol HostConnectionDelegate: AnyObject {
     /// An input message reached the socket this long after macOS stamped
     /// the event it came from.
     func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double)
+    /// A kept clock-sync exchange; `best` is the estimate in use.
+    func connection(_ c: HostConnection, didSyncClock best: ClockSync.Sample)
+    /// The last FRAME, measured across both clocks (FRAME_TIMING_EXT).
+    func connection(_ c: HostConnection, didMeasureFrame timing: FrameEndToEnd)
+    /// Input event → handled on the PC.
+    func connection(_ c: HostConnection, didApplyInputAfter milliseconds: Double)
 }
 
 extension HostConnectionDelegate {
     func connection(_ c: HostConnection, didMeasureFrameReceive timing: ReceiveTiming) {}
     func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double) {}
+    func connection(_ c: HostConnection, didSyncClock best: ClockSync.Sample) {}
+    func connection(_ c: HostConnection, didMeasureFrame timing: FrameEndToEnd) {}
+    func connection(_ c: HostConnection, didApplyInputAfter milliseconds: Double) {}
 }
 
 /// Mutable transport state is confined to `queue`. Configure the delegate before
@@ -110,6 +119,14 @@ final class HostConnection: @unchecked Sendable {
     private var receivedFrame = false
     private var supportsPairName = false
     private var supportsVideoOptions = false
+    /// SERVER_HELLO's CAP_TIMING, and the clock sync that follows it.
+    private var supportsTiming = false
+    private var clock = ClockSync()
+    /// From the first TIME_REQUEST on, input messages are counted.
+    private var timingStarted = false
+    private var inputs = InputLedger()
+    /// The last FRAME, which the next FRAME_TIMING_EXT describes.
+    private var lastFrame: (sequence: UInt64, receivedMicros: UInt64)?
     private var pairing = false
     /// Our half of the PIN exchange, from PAIR until PAIR_REPLY.
     private var cpace: CPaceInitiator?
@@ -198,6 +215,20 @@ final class HostConnection: @unchecked Sendable {
         }
     }
 
+    /// Clock sync: five TIME_REQUESTs 50 ms apart after STREAM_START, then
+    /// one a second for the rest of the session. Replies can wait a frame
+    /// (or a capture recovery) on the PC; their stamps take that out, so a
+    /// slow one is not a timeout.
+    private func scheduleTimeRequests(_ c: NWConnection, attempt: UInt64, sent: Int) {
+        guard isCurrent(c, attempt: attempt), ready else { return }
+        timingStarted = true
+        sendRaw(Proto.timeRequest(clientMicros: ClockSync.nowMicros()))
+        let next: DispatchTimeInterval = sent < 4 ? .milliseconds(50) : .seconds(1)
+        queue.asyncAfter(deadline: .now() + next) { [weak self] in
+            self?.scheduleTimeRequests(c, attempt: attempt, sent: sent + 1)
+        }
+    }
+
     /// Send a protocol message (already built by `Proto`) once the session is
     /// up. `eventTime` (seconds of system uptime, as `NSEvent.timestamp`) is
     /// the input event the message came from, for the Input → sent figure.
@@ -205,6 +236,7 @@ final class HostConnection: @unchecked Sendable {
         queue.async { [self] in
             guard ready else { return }
             sendRaw(message)
+            if timingStarted, Proto.isInput(message) { inputs.didSend(eventTime: eventTime) }
             if let eventTime {
                 let ms = (ProcessInfo.processInfo.systemUptime - eventTime) * 1_000
                 delegate?.connection(self, didSendInputAfter: ms)
@@ -255,6 +287,11 @@ final class HostConnection: @unchecked Sendable {
         receivedFrame = false
         supportsPairName = false
         supportsVideoOptions = false
+        supportsTiming = false
+        clock = ClockSync()
+        timingStarted = false
+        inputs = InputLedger()
+        lastFrame = nil
         pairing = false
         cpace = nil
         hostBusy = false
@@ -428,6 +465,7 @@ final class HostConnection: @unchecked Sendable {
         greeted = true
         supportsPairName = hello.supportsPairName
         supportsVideoOptions = hello.supportsVideoOptions
+        supportsTiming = hello.supportsTiming
         if !hello.name.isEmpty { serviceName = hello.name }
         if options.unpairOnly { return } // UNPAIR is already on its way
         if options.verifyOnly {
@@ -677,6 +715,7 @@ final class HostConnection: @unchecked Sendable {
                     guard let self, self.isCurrent(c, attempt: thisAttempt), !self.receivedFrame else { return }
                     self.finish("the PC sent no picture", from: c, attempt: thisAttempt)
                 }
+                if supportsTiming { scheduleTimeRequests(c, attempt: thisAttempt, sent: 0) }
             }
             delegate?.connection(self, didStart: start)
 
@@ -687,6 +726,7 @@ final class HostConnection: @unchecked Sendable {
             receivedFrame = true
             let sequence = nextFrameSequence
             nextFrameSequence &+= 1
+            lastFrame = (sequence, ClockSync.nowMicros())
             delegate?.connection(
                 self,
                 didReceiveFrame: payload,
@@ -694,6 +734,25 @@ final class HostConnection: @unchecked Sendable {
                 sequence: sequence,
                 receivedAt: CMClockGetTime(CMClockGetHostTimeClock())
             )
+
+        case .timeReply:
+            // Lengths are "at least": never end a session over telemetry.
+            guard let reply = Proto.TimeReply(payload) else { return }
+            if clock.add(t1: reply.clientMicros, t2: reply.hostReceiveMicros, t3: reply.hostSendMicros,
+                         t4: ClockSync.nowMicros()), let best = clock.best {
+                delegate?.connection(self, didSyncClock: best)
+            }
+
+        case .frameTimingExt:
+            guard let ext = Proto.FrameTimingExt(payload) else { return }
+            delegate?.connection(self, didReceiveFrameTiming: ext.basic)
+            if let frame = lastFrame {
+                delegate?.connection(self, didMeasureFrame: FrameEndToEnd(
+                    sequence: frame.sequence, ext: ext, clock: clock, receivedMicros: frame.receivedMicros))
+            }
+            if let ms = inputs.hostApplied(ext.inputsApplied, atMacMicros: clock.macMicros(ofHost: ext.lastInputMicros)) {
+                delegate?.connection(self, didApplyInputAfter: ms)
+            }
 
         case .frameTiming:
             guard let timing = Proto.FrameTiming(payload) else {

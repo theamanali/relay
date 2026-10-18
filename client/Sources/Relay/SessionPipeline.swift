@@ -61,6 +61,15 @@ final class SessionPipeline: HostConnectionDelegate, @unchecked Sendable {
     func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double) {
         withActive(c) { stats.recordInputSent(milliseconds: milliseconds) }
     }
+    func connection(_ c: HostConnection, didSyncClock best: ClockSync.Sample) {
+        withActive(c) { stats.recordClock(best) }
+    }
+    func connection(_ c: HostConnection, didMeasureFrame timing: FrameEndToEnd) {
+        withActive(c) { stats.record(timing) }
+    }
+    func connection(_ c: HostConnection, didApplyInputAfter milliseconds: Double) {
+        withActive(c) { stats.recordInputApplied(milliseconds: milliseconds) }
+    }
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         let outcome = ConnectionOutcome(c)
         withActive(c) { renderer.reset() }

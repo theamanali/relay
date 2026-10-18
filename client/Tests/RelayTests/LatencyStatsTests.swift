@@ -208,6 +208,9 @@ final class SessionReportTests: XCTestCase {
             endedAt: Date(timeIntervalSince1970: 0), duration: 61, presentedFPS: 119.6,
             toScreen: toScreen, decode: LatencyHistogram(), host: LatencyHistogram(), network: LatencyHistogram(),
             transfer: LatencyHistogram(), inputSent: LatencyHistogram(), decrypt: LatencyHistogram(),
+            desktopToScreen: LatencyHistogram(), contentAge: LatencyHistogram(),
+            sentToReceived: LatencyHistogram(), inputApplied: LatencyHistogram(),
+            clock: ClockSync.Sample(offset: 12_345, delay: 81),
             linkBitsPerSecond: 2.5e9,
             counters: PresenterCounters(replaced: 3, late: 1, dropped: 0, unavailable: 0, gpuFailures: 0))
         let md = report.markdown
@@ -216,6 +219,7 @@ final class SessionReportTests: XCTestCase {
         XCTAssertTrue(md.contains("| Receive → decode | – | – | – | – | 0 |"), md)
         XCTAssertTrue(md.contains("replaced 3, late 1, dropped 0 · Frame data arrived at 2.50 Gb/s"), md)
         XCTAssertTrue(md.contains("| Input → sent | – | – | – | – | 0 |"), md)
+        XCTAssertTrue(md.contains("PC clock +12.345 ms from this Mac (best delay 0.081 ms)"), md)
         XCTAssertTrue(md.contains("1:01"), md)
         XCTAssertFalse(report.logLine.contains("\n"))
     }

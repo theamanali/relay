@@ -49,9 +49,10 @@ final class MetalPresenter: @unchecked Sendable {
     private var unavailable = 0
     private var gpuFailures = 0
     private var unsupportedFormats = 0
-    /// Receive → on screen for each shown frame, in ms, on Metal's callback
-    /// thread. Set before the first frame.
-    var presentedHandler: (@Sendable (Double) -> Void)?
+    /// Each shown frame: its sequence, when it reached the screen (seconds
+    /// on the host clock, the same base as `systemUptime`) and receive → on
+    /// screen in ms; on Metal's callback thread. Set before the first frame.
+    var presentedHandler: (@Sendable (_ sequence: UInt64, _ presentedAt: Double, _ milliseconds: Double) -> Void)?
 
     /// Pixel formats the shader accepts: biplanar 4:2:0 or 4:4:4, 8- or
     /// 10-bit, video or full range. 4:4:4's chroma plane is simply full size;
@@ -433,7 +434,8 @@ final class MetalPresenter: @unchecked Sendable {
                     return true
                 }
                 guard current else { return }
-                self.presentedHandler?((shown.presentedTime - CMTimeGetSeconds(frame.pts)) * 1_000)
+                self.presentedHandler?(frame.sequence, shown.presentedTime,
+                                       (shown.presentedTime - CMTimeGetSeconds(frame.pts)) * 1_000)
             }
             let resources = TextureLifetime(luma: luma, chroma: chroma)
             command.addCompletedHandler { [weak self] buffer in

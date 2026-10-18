@@ -132,8 +132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         renderer.frameDecodedHandler = { @Sendable _, milliseconds in
             stats.recordDecoded(milliseconds: milliseconds)
         }
-        renderer.framePresentedHandler = { @Sendable milliseconds in
+        renderer.framePresentedHandler = { @Sendable sequence, presentedAt, milliseconds in
             stats.recordPresented(milliseconds: milliseconds)
+            stats.recordShown(sequence: sequence, atMicros: Int64(presentedAt * 1_000_000))
         }
 
         window = StreamWindow(

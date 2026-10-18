@@ -39,7 +39,7 @@ final class VideoRenderer: @unchecked Sendable {
     /// Final presentation timing comes from Metal drawable callbacks.
     var frameDecodedHandler: (@Sendable (UInt64, Double) -> Void)?
     /// Receive → on screen for each shown frame (Metal's callback thread).
-    var framePresentedHandler: (@Sendable (Double) -> Void)? {
+    var framePresentedHandler: (@Sendable (_ sequence: UInt64, _ presentedAt: Double, _ milliseconds: Double) -> Void)? {
         get { metal.presentedHandler }
         set { metal.presentedHandler = newValue }
     }

@@ -54,6 +54,7 @@ struct SessionReportView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: report.countersText.prefix(1).uppercased() + report.countersText.dropFirst())
                     if let link = report.linkText { Text(verbatim: link) }
+                    if let clock = report.clockText { Text(verbatim: clock) }
                 }
                 .font(.callout).foregroundStyle(.secondary)
                 Spacer()

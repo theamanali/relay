@@ -185,6 +185,14 @@ final class LatencyStats: @unchecked Sendable {
         var transfer: Stage
         /// macOS input event → message handed to the socket.
         var inputSent: Stage
+        /// Measured across both clocks (FRAME_TIMING_EXT), once synced.
+        var desktopToScreen = Stage(LatencyHistogram())
+        var contentAge = Stage(LatencyHistogram())
+        var sentToReceived = Stage(LatencyHistogram())
+        var inputApplied = Stage(LatencyHistogram())
+        /// PC minus Mac, and the delay of the exchange it came from.
+        var clockOffsetMs: Double?
+        var clockDelayMs: Double?
         /// Receive → screen per frame, oldest first.
         var sparkline: [Double]
         /// One refresh interval of the stream, in ms.
@@ -212,6 +220,18 @@ final class LatencyStats: @unchecked Sendable {
     private var network = LatencyWindow(seconds: windowSeconds)
     private var transfer = LatencyWindow(seconds: windowSeconds)
     private var inputSent = LatencyWindow(seconds: windowSeconds)
+    private var desktopToScreen = LatencyWindow(seconds: windowSeconds)
+    private var contentAge = LatencyWindow(seconds: windowSeconds)
+    private var sentToReceived = LatencyWindow(seconds: windowSeconds)
+    private var inputApplied = LatencyWindow(seconds: windowSeconds)
+    private var sessionDesktopToScreen = LatencyHistogram()
+    private var sessionContentAge = LatencyHistogram()
+    private var sessionSentToReceived = LatencyHistogram()
+    private var sessionInputApplied = LatencyHistogram()
+    private var clock: ClockSync.Sample?
+    /// A frame's PC present (Mac µs) and its Metal presentation meet here,
+    /// whichever arrives first; keyed by the Mac's FRAME sequence.
+    private var pendingShown: [UInt64: (present: Int64?, shown: Int64?)] = [:]
     private var sessionToScreen = LatencyHistogram()
     private var sessionDecode = LatencyHistogram()
     private var sessionHost = LatencyHistogram()
@@ -237,6 +257,16 @@ final class LatencyStats: @unchecked Sendable {
             network = LatencyWindow(seconds: Self.windowSeconds)
             transfer = LatencyWindow(seconds: Self.windowSeconds)
             inputSent = LatencyWindow(seconds: Self.windowSeconds)
+            desktopToScreen = LatencyWindow(seconds: Self.windowSeconds)
+            contentAge = LatencyWindow(seconds: Self.windowSeconds)
+            sentToReceived = LatencyWindow(seconds: Self.windowSeconds)
+            inputApplied = LatencyWindow(seconds: Self.windowSeconds)
+            sessionDesktopToScreen = LatencyHistogram()
+            sessionContentAge = LatencyHistogram()
+            sessionSentToReceived = LatencyHistogram()
+            sessionInputApplied = LatencyHistogram()
+            clock = nil
+            pendingShown = [:]
             sessionToScreen = LatencyHistogram()
             sessionDecode = LatencyHistogram()
             sessionHost = LatencyHistogram()
@@ -314,6 +344,58 @@ final class LatencyStats: @unchecked Sendable {
         }
     }
 
+    func recordClock(_ best: ClockSync.Sample) { lock.withLock { clock = best } }
+
+    /// One frame across both clocks. Content age and sent → received count
+    /// at once; desktop → screen waits for the frame's presentation.
+    func record(_ timing: FrameEndToEnd, at nanos: UInt64 = LatencyStats.now()) {
+        lock.withLock {
+            guard nanos >= measuringFrom else { return }
+            if let ms = timing.contentAgeMs { contentAge.record(ms, at: nanos); sessionContentAge.record(ms) }
+            if let ms = timing.sentToReceivedMs { sentToReceived.record(ms, at: nanos); sessionSentToReceived.record(ms) }
+            guard let present = timing.presentMacMicros else { return }
+            join(timing.sequence, present: present, shown: nil, at: nanos)
+        }
+    }
+
+    /// A frame reached the screen at `atMicros` (Mac µs).
+    func recordShown(sequence: UInt64, atMicros: Int64, at nanos: UInt64 = LatencyStats.now()) {
+        lock.withLock {
+            // Before any sync (or from an older PC) nothing will meet it.
+            guard clock != nil, nanos >= measuringFrom else { return }
+            join(sequence, present: nil, shown: atMicros, at: nanos)
+        }
+    }
+
+    /// Under the lock.
+    private func join(_ sequence: UInt64, present: Int64?, shown: Int64?, at nanos: UInt64) {
+        var entry = pendingShown[sequence] ?? (nil, nil)
+        if let present { entry.present = present }
+        if let shown { entry.shown = shown }
+        if let p = entry.present, let s = entry.shown {
+            pendingShown[sequence] = nil
+            let ms = Double(s - p) / 1_000
+            desktopToScreen.record(ms, at: nanos)
+            sessionDesktopToScreen.record(ms)
+            return
+        }
+        pendingShown[sequence] = entry
+        // Replaced frames are never shown, re-encoded ones have no present:
+        // forget anything well behind the newest.
+        if pendingShown.count > 256 {
+            pendingShown = pendingShown.filter { $0.key + 128 > sequence }
+        }
+    }
+
+    func recordInputApplied(milliseconds ms: Double, at nanos: UInt64 = LatencyStats.now()) {
+        guard ms.isFinite else { return }
+        lock.withLock {
+            guard nanos >= measuringFrom else { return }
+            inputApplied.record(ms, at: nanos)
+            sessionInputApplied.record(ms)
+        }
+    }
+
     func hudSnapshot(at nanos: UInt64 = LatencyStats.now()) -> HUDSnapshot {
         lock.withLock {
             let shown = toScreen.merged(at: nanos)
@@ -328,6 +410,12 @@ final class LatencyStats: @unchecked Sendable {
                 networkHalfRTT: network.merged(at: nanos).percentile(0.5),
                 transfer: Stage(transfer.merged(at: nanos)),
                 inputSent: Stage(inputSent.merged(at: nanos)),
+                desktopToScreen: Stage(desktopToScreen.merged(at: nanos)),
+                contentAge: Stage(contentAge.merged(at: nanos)),
+                sentToReceived: Stage(sentToReceived.merged(at: nanos)),
+                inputApplied: Stage(inputApplied.merged(at: nanos)),
+                clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
+                clockDelayMs: clock.map { Double($0.delay) / 1_000 },
                 sparkline: sparkline.ordered,
                 frameBudget: 1_000 / Double(max(stream?.fps ?? 60, 1)),
                 stream: stream,
@@ -346,6 +434,9 @@ final class LatencyStats: @unchecked Sendable {
                                  toScreen: sessionToScreen, decode: sessionDecode, host: sessionHost,
                                  network: sessionNetwork, transfer: sessionTransfer,
                                  inputSent: sessionInputSent, decrypt: sessionDecrypt,
+                                 desktopToScreen: sessionDesktopToScreen, contentAge: sessionContentAge,
+                                 sentToReceived: sessionSentToReceived, inputApplied: sessionInputApplied,
+                                 clock: clock,
                                  linkBitsPerSecond: lateNanos > 0 ? Double(lateBytes) * 8 / (Double(lateNanos) / 1e9) : nil,
                                  counters: counters)
         }
@@ -370,6 +461,13 @@ struct SessionReport: Sendable {
     let transfer: LatencyHistogram
     let inputSent: LatencyHistogram
     let decrypt: LatencyHistogram
+    let desktopToScreen: LatencyHistogram
+    let contentAge: LatencyHistogram
+    let sentToReceived: LatencyHistogram
+    let inputApplied: LatencyHistogram
+    /// The clock estimate in use when the session ended; nil for a PC
+    /// without CAP_TIMING.
+    let clock: ClockSync.Sample?
     /// The rate frames' later records arrived at, over the whole session.
     let linkBitsPerSecond: Double?
     let counters: PresenterCounters
@@ -381,13 +479,23 @@ struct SessionReport: Sendable {
     }
 
     var rows: [Row] {
-        [Row(name: "Receive → screen", histogram: toScreen),
-         Row(name: "Receive → decode", histogram: decode),
+        [Row(name: "Desktop → screen", histogram: desktopToScreen),
+         Row(name: "Content age", histogram: contentAge),
          Row(name: "PC work", histogram: host),
+         Row(name: "Sent → received", histogram: sentToReceived),
          Row(name: "Network (RTT/2 est.)", histogram: network),
          Row(name: "Frame transfer (est.)", histogram: transfer),
          Row(name: "Decrypt", histogram: decrypt),
-         Row(name: "Input → sent", histogram: inputSent)]
+         Row(name: "Receive → decode", histogram: decode),
+         Row(name: "Receive → screen", histogram: toScreen),
+         Row(name: "Input → sent", histogram: inputSent),
+         Row(name: "Input → applied", histogram: inputApplied)]
+    }
+
+    /// "PC clock +12.345 ms from this Mac (best delay 0.081 ms)", or nil.
+    var clockText: String? {
+        clock.map { String(format: "PC clock %+.3f ms from this Mac (best delay %.3f ms)",
+                           Double($0.offset) / 1_000, Double($0.delay) / 1_000) }
     }
 
     /// "Frame data arrived at 2.31 Gb/s", or nil when no frame measured it.
@@ -408,8 +516,9 @@ struct SessionReport: Sendable {
         return text
     }
 
-    static let footnote = "Receive starts after decryption. Frame transfer is estimated from the rate a frame's later "
-        + "records arrived; Input → sent ends at the Mac's socket. The stages do not add up to input-to-photon latency."
+    static let footnote = "Desktop → screen, Content age, Sent → received and Input → applied use the PC's clock, "
+        + "related to this Mac's by clock sync. Receive starts after decryption; Frame transfer is estimated. Not "
+        + "measured: the Windows app's own frame, input device sampling and the display panel."
 
     static func ms(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "–" }
 
@@ -424,7 +533,7 @@ struct SessionReport: Sendable {
             stream.summary,
             "",
             "Length \(lengthText) · \(String(format: "%.1f", presentedFPS)) fps shown · \(countersText)"
-                + (linkText.map { " · " + $0 } ?? ""),
+                + (linkText.map { " · " + $0 } ?? "") + (clockText.map { " · " + $0 } ?? ""),
             "",
             "| stage (ms) | p50 | p95 | p99 | max | samples |",
             "|---|---|---|---|---|---|",
@@ -442,6 +551,6 @@ struct SessionReport: Sendable {
         "\(stream.summary); \(lengthText), \(String(format: "%.1f", presentedFPS)) fps; "
             + rows.map { "\($0.name) p50 \(Self.ms($0.histogram.percentile(0.5))) p95 \(Self.ms($0.histogram.percentile(0.95)))" }
                 .joined(separator: ", ")
-            + "; \(countersText)"
+            + "; \(countersText)" + (clockText.map { "; " + $0 } ?? "")
     }
 }

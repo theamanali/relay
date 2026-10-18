@@ -114,11 +114,16 @@ enum StatsHUD {
         y += 6
         let rows: [(String, String, CGColor)] = [
             ("p99 to screen", ms(s.toScreen.p99), s.toScreen.p99.map { Level(value: $0, budget: budget).color } ?? primary),
+            ("Desktop → screen", ms(s.desktopToScreen.p50), primary),
+            ("Content age", ms(s.contentAge.p50), primary),
             ("PC work p50 / p95", ms(s.host.p50) + " / " + ms(s.host.p95), primary),
+            ("Sent → received", ms(s.sentToReceived.p50), primary),
             ("Network (RTT/2)", ms(s.networkHalfRTT), primary),
             ("Frame transfer (est.)", ms(s.transfer.p50), primary),
             ("Receive → decode", ms(s.decode.p50), primary),
             ("Input → sent", ms(s.inputSent.p50), primary),
+            ("Input → applied", ms(s.inputApplied.p50), primary),
+            ("Clock offset", s.clockOffsetMs.map { String(format: "%+.2f", $0) } ?? "––", primary),
             ("Decoded", String(format: "%.0f fps", s.decodedFPS), primary),
             ("Replaced · late · dropped", "\(s.counters.replaced) · \(s.counters.late) · \(s.counters.dropped)", primary),
         ]
@@ -148,7 +153,7 @@ enum StatsHUD {
     }
 
     /// Rows in the detailed view, below the divider.
-    static let detailRows = 8
+    static let detailRows = 13
 
     private static func streamLines(_ s: StreamInfo) -> [String] {
         var second = s.format.isEmpty ? [] : [s.format]

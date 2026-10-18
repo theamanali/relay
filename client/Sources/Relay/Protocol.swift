@@ -19,11 +19,14 @@ enum Proto {
         case streamStop = 0x06
         case ping = 0x07
         case frameTiming = 0x08
+        case timeReply = 0x09
+        case frameTimingExt = 0x0A
         case pairResult = 0xA1
         case pairReply = 0xA3
         // client -> host
         case clientHello = 0x81
         case pong = 0x87
+        case timeRequest = 0x88
         case mouseMove = 0x90
         case mouseButton = 0x91
         case mouseWheel = 0x92
@@ -38,6 +41,16 @@ enum Proto {
     /// SERVER_HELLO: the host reads CLIENT_HELLO's picture-options extension
     /// (proposed in docs/VIDEO-OPTIONS-HANDOFF.md).
     static let capVideoOptions: UInt8 = 0x02
+    /// SERVER_HELLO: the host answers TIME_REQUEST and then sends
+    /// FRAME_TIMING_EXT (PROTOCOL.md "Clock sync and frame timing").
+    static let capTiming: UInt8 = 0x04
+
+    /// Input messages (0x90–0x93): the ones FRAME_TIMING_EXT's
+    /// `inputs_applied` counts.
+    static func isInput(_ message: Data) -> Bool {
+        guard let type = message.first else { return false }
+        return (Msg.mouseMove.rawValue...Msg.key.rawValue).contains(type)
+    }
 
     /// CLIENT_HELLO extension after the name: `u8 encoder_quality` (0 = the
     /// host's default, else `EncoderQuality`), `u8 video_flags` (`VideoFlags`).
@@ -108,6 +121,7 @@ enum Proto {
 
         var supportsPairName: Bool { capabilities & Proto.capPairName != 0 }
         var supportsVideoOptions: Bool { capabilities & Proto.capVideoOptions != 0 }
+        var supportsTiming: Bool { capabilities & Proto.capTiming != 0 }
 
         init?(_ p: Data) {
             guard p.count >= 3 else { return nil }
@@ -201,6 +215,64 @@ enum Proto {
         }
     }
 
+    /// "At least this long; ignore the rest" for both clock-sync types.
+    struct TimeReply: Equatable {
+        static let minimumLength = 24
+        let clientMicros: UInt64
+        let hostReceiveMicros: UInt64
+        let hostSendMicros: UInt64
+
+        init?(_ p: Data) {
+            guard p.count >= Self.minimumLength else { return nil }
+            clientMicros = p.be64(at: 0)
+            hostReceiveMicros = p.be64(at: 8)
+            hostSendMicros = p.be64(at: 16)
+        }
+    }
+
+    /// Follows every FRAME once the host has answered a TIME_REQUEST. Host
+    /// times are its QPC in µs; `unknown` is u64::MAX.
+    struct FrameTimingExt: Equatable {
+        static let minimumLength = 68
+        static let unknown = UInt64.max
+
+        let sequence: UInt64
+        /// DWM's present of the newest desktop frame in this picture;
+        /// `unknown` on a re-encoded or cursor-only tick.
+        let presentMicros: UInt64
+        let submitMicros: UInt64
+        let sentMicros: UInt64
+        let captureMicros: UInt32
+        let encodeMicros: UInt32
+        let sendMicros: UInt32
+        let copyGPUMicros: UInt32
+        let networkRTTMicros: UInt32
+        /// Input messages the host handled since the first TIME_REQUEST.
+        let inputsApplied: UInt64
+        let lastInputMicros: UInt64
+
+        init?(_ p: Data) {
+            guard p.count >= Self.minimumLength else { return nil }
+            sequence = p.be64(at: 0)
+            presentMicros = p.be64(at: 8)
+            submitMicros = p.be64(at: 16)
+            sentMicros = p.be64(at: 24)
+            captureMicros = p.be32(at: 32)
+            encodeMicros = p.be32(at: 36)
+            sendMicros = p.be32(at: 40)
+            copyGPUMicros = p.be32(at: 44)
+            networkRTTMicros = p.be32(at: 48)
+            inputsApplied = p.be64(at: 52)
+            lastInputMicros = p.be64(at: 60)
+        }
+
+        /// The FRAME_TIMING fields, so PC work and the network row keep working.
+        var basic: FrameTiming {
+            FrameTiming(sequence: sequence, captureMicros: captureMicros, encodeMicros: encodeMicros,
+                        sendMicros: sendMicros, networkRTTMicros: networkRTTMicros)
+        }
+    }
+
     /// Split a length-prefixed NAL list (FRAME / CODEC_CONFIG payload) into units.
     static func nalUnits(in payload: Data) -> [Data] {
         var units: [Data] = []
@@ -244,6 +316,13 @@ enum Proto {
         p.append(contentsOf: nameBytes)
         if let video { p.append(contentsOf: [video.quality, video.flags]) }
         return message(.clientHello, payload: p)
+    }
+
+    /// `clientMicros` is this Mac's clock; the host echoes it.
+    static func timeRequest(clientMicros: UInt64) -> Data {
+        var p = Data(capacity: 8)
+        p.appendBE64(clientMicros)
+        return message(.timeRequest, payload: p)
     }
 
     static func pong(_ pingPayload: Data) -> Data {
@@ -302,6 +381,11 @@ extension Data {
         append(UInt8((v >> 16) & 0xff))
         append(UInt8((v >> 8) & 0xff))
         append(UInt8(v & 0xff))
+    }
+
+    mutating func appendBE64(_ v: UInt64) {
+        appendBE32(UInt32(v >> 32))
+        appendBE32(UInt32(v & 0xffff_ffff))
     }
 }
 
