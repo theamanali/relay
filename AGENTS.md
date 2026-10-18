@@ -29,11 +29,12 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
   picker restoration below), isolated
   fakehost checks, local release/signature and picker/PIN/Forget smoke tests
-  pass on macOS 27.0. Real-PC latency/input/display regressions and minimum /
-  latest stable OS qualification remain pending. Windows NVIDIA enforcement is
-  done (phase A, below); backend cleanup (phase C) waits on the failure/recovery
-  gate (phase B) of `docs/WINDOWS-PLATFORM-HANDOFF.md`. Details and acceptance
-  gates: `docs/PLATFORM-REVIEW.md#implementation-status`.
+  pass on macOS 27.0. The Windows half of `docs/WINDOWS-PLATFORM-HANDOFF.md`
+  is done (2026-10-17): phase A (NVIDIA enforcement), phase B (recovery gate,
+  U1–U6 passed) and phase C (one native backend, installed, real-Mac latency
+  with no regression), all below. Minimum / latest stable macOS qualification
+  and Developer ID notarization remain pending. Details and acceptance gates:
+  `docs/PLATFORM-REVIEW.md#implementation-status`.
 
 - NVIDIA enforcement, phase A (2026-10-17, handoff steps 1–4; `9334c1e`,
   `2f91bb4`, `421c177`, `4a8c5d6`): `gpu::choose` considers only `gpu::eligible`

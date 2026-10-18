@@ -15,8 +15,11 @@ case below has a recorded result on the hardware.
   installed with `install-host.ps1 -SkipDriver`. Every relink changes the
   hash; compare before a run.
 - NVIDIA GeForce RTX 3080 Ti, LUID 0:122e1, driver 616.56 (32.0.16.1656),
-  NVENC API 13.1; Windows 11 Pro 26200.9711. Displays: DISPLAY1 2560×1440@144
-  (primary), DISPLAY2 1080×1920@120.
+  NVENC API 13.1; Windows 11 Pro 26200.9711. Displays: the primary
+  2560×1440@144 landscape monitor at (0, 0) (ACR0692) and a 1080×1920@120
+  portrait monitor to its right at (2560, 0) (ACR0750). Windows renumbers
+  their GDI names (`\\.\DISPLAY1`/`2`) between sessions, so this record names
+  them by mode and position; `relay-host displays` shows the current names.
 - Test hooks (dev host only, never the service): `RELAY_TEST_NVENC_DRIVER_API`
   (pretend driver version), `RELAY_TEST_FAULT=trial` (the driver refuses the
   trial initialization), `RELAY_TEST_FAULT=display-gpu` (the attached display
@@ -34,7 +37,7 @@ Keep three kinds apart when reporting:
 ## Agent-run cases (dev host, `--no-vdd`, probe): probe-tested, 2026-10-17
 
 Service stopped, an elevated dev host on port 18468 streaming the primary
-display (DISPLAY1, 2560×1440@144), `probe` over loopback at 120 Mbps, the
+display (2560×1440@144), `probe` over loopback at 120 Mbps, the
 build above (B12 rerun on it after the fix below). None of these touch the
 virtual display driver or the topology code. "No display was changed" means
 the connection's log has no `woke displays` / `dev mode: streaming` line.
@@ -126,8 +129,8 @@ root with `./tools/install-host.ps1 -SkipDriver`, then check
 `(Get-FileHash "$env:ProgramFiles\Relay\relay-host.exe").Hash` against the
 release hash. Note the start time; `%ProgramData%\Relay\host.log` holds every
 line quoted below. After **every** case check that both physical monitors come
-back with the same primary, positions and refresh rates (DISPLAY1
-2560×1440@144 primary, DISPLAY2 1080×1920@120 to its right).
+back with the same primary, positions and refresh rates (2560×1440@144
+primary at (0, 0), 1080×1920@120 portrait to its right at (2560, 0)).
 
 Mac settings unless a case says otherwise: 3024×1964 @ 120 Hz, Balanced,
 4:2:0 8-bit, bitrate Automatic (120 Mbps), latency HUD on, Control on.
@@ -228,8 +231,8 @@ discovery issue outside this gate.
 
 The native-only build (`b11f2a4` source; release and installed SHA-256
 `C5EA77A8B37F4E1B869C206B1EDF1A8EAF76DA99169ED9F38BB2E43A754A7442`) on
-`--no-vdd` dev hosts with probe, primary display \\.\DISPLAY2 2560×1440@144
-(the GDI names had swapped). All 16 checks passed, then the script installed
+`--no-vdd` dev hosts with probe, the 2560×1440@144 primary display (logged
+as `\\.\DISPLAY2` that time; see the GDI-name note above). All 16 checks passed, then the script installed
 this build as the service (Running, hashes equal):
 
 - Streams: baseline Fastest 131.4 fps; Balanced 4:4:4 10-bit 121.7 fps

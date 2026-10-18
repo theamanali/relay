@@ -152,11 +152,14 @@ were measured and rejected; both are written up in
 settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
 bundle with a macOS 14 minimum (Observation). Metal and hardware decoding are
 required. All 107 Mac unit tests, isolated fakehost checks and the signed local
-release bundle pass on macOS 27.0. Windows NVIDIA enforcement is implemented
-(below); backend removal waits on its failure/recovery gate; see the
-[Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md). Real-PC regression/latency,
-minimum/latest-stable OS qualification and Developer ID notarization are still
-pending. Older hardware streaming results below predate this UI migration.
+release bundle pass on macOS 27.0. The Windows side of the migration is done
+(2026-10-17, below; see the [Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md)):
+NVIDIA-only encoding with a preflight (phase A), the failure/recovery gate on
+the real Mac and PC (phase B), and a single native backend with ffmpeg, AMF,
+Quick Sync, software encoding and Parsec removed (phase C), installed as the
+service and measured on the real Mac with no latency regression. Still pending:
+qualification on the minimum (macOS 14) and latest stable macOS, and Developer
+ID notarization. Older hardware streaming results below predate this migration.
 
 **NVIDIA enforcement, host phase A (2026-10-17):** the host only selects NVIDIA
 adapters (an explicit `--gpu` must name one; other adapters stay listed),

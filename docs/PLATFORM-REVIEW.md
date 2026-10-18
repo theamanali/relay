@@ -359,8 +359,8 @@ display change, post-attach revalidation of the adapter LUID and mode with
 rollback, and an adapter/size check on every capture start and restart.
 Unit-tested (204 tests plus the probe integration test), strict clippy on
 Rust 1.98 and 1.99, release build; the diagnostic passed on the RTX 3080 Ti
-(driver 616.56, NVENC API 13.1, Windows 11 26200). No session has run through
-the preflight yet, and the service is not redeployed.
+(driver 616.56, NVENC API 13.1, Windows 11 26200). Real-Mac sessions through
+the preflight and the redeployed service followed in phase B.
 
 Windows phase B, 2026-10-17 (step 5): the failure/recovery gate passed on the
 hardware, 17 dev-host probe cases and six real-Mac/VDD cases; see
@@ -375,8 +375,9 @@ build is installed as the service. A same-settings real-Mac comparison against
 
 Release qualification is still pending: macOS 14 hardware and latest stable
 27.0.1, 60 Hz Air/120 Hz Pro/external screen, real-PC pairing/Forget/reconnect,
-input release on focus loss, sleep/wake/mode changes, upgrade/network permission
-behavior and same-settings latency comparison. The present Mac runs 27.0.
+input release on focus loss, sleep/wake/mode changes and upgrade/network
+permission behavior. The same-settings latency comparison on this Mac and PC
+is done (phase C above). The present Mac runs 27.0.
 Developer ID signing/notarization is implemented as an opt-in build path but
 has not run without the user's identity and keychain profile. No release has
 been published and no claim of the full hardware matrix is made.
