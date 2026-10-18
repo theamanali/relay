@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
@@ -13,6 +14,59 @@ use crate::sysinfo::HostFacts;
 pub struct Advertisement {
     daemon: ServiceDaemon,
     fullname: String,
+    /// The record as built, before the daemon filled in addresses, so a
+    /// re-announcement picks up the interfaces present at that moment.
+    info: ServiceInfo,
+    registered: Instant,
+    /// How many entries of `REANNOUNCE_AFTER` have gone out.
+    reannounced: usize,
+}
+
+/// When to announce the record again after registering it, counted from the
+/// registration. mdns-sd announces twice at registration (at once and 1 s
+/// later) and then only answers queries. A worker that dies sends no goodbye,
+/// so a Mac that dialled during the respawn gap reconfirms (flushes) the old
+/// record and its long-running browse may not query again for a while; the
+/// new worker's first two announcements can fall before that flush
+/// (`host/NVIDIA-RECOVERY-RETEST.md` finding 6). A few more over the first
+/// minute put the record back on the Mac without waiting for its backoff.
+/// Each is one `register` call (two packets, 1 s apart); nothing goes out
+/// after the last one.
+const REANNOUNCE_AFTER: [Duration; 5] = [
+    Duration::from_secs(3),
+    Duration::from_secs(8),
+    Duration::from_secs(16),
+    Duration::from_secs(32),
+    Duration::from_secs(60),
+];
+
+/// The new count of sent re-announcements if one is due `elapsed` after
+/// registering with `done` already sent, or `None`. Entries that a late tick
+/// skipped past count as sent: one announcement covers them all.
+fn reannounce_step(elapsed: Duration, done: usize) -> Option<usize> {
+    let due = REANNOUNCE_AFTER.iter().filter(|&&at| elapsed >= at).count();
+    (due > done).then_some(due)
+}
+
+impl Advertisement {
+    /// Announce the record again if the start-up schedule says so. Called
+    /// about once a second by the server's readvertise thread.
+    pub fn reannounce_if_due(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.registered);
+        let Some(done) = reannounce_step(elapsed, self.reannounced) else {
+            return;
+        };
+        self.reannounced = done;
+        match self.daemon.register(self.info.clone()) {
+            Ok(()) => log::info!(
+                "re-announced {} ({done}/{}, {} s after registering)",
+                self.fullname,
+                REANNOUNCE_AFTER.len(),
+                elapsed.as_secs()
+            ),
+            Err(e) => log::warn!("re-announcing {} failed: {e}", self.fullname),
+        }
+    }
 }
 
 /// The live advertisement, shared between the thread that re-registers it on
@@ -48,9 +102,17 @@ pub fn advertise(
     )?
     .enable_addr_auto();
     let fullname = info.get_fullname().to_string();
-    daemon.register(info).context("registering mDNS service")?;
+    daemon
+        .register(info.clone())
+        .context("registering mDNS service")?;
     log::info!("advertising {fullname} on port {port}");
-    Ok(Advertisement { daemon, fullname })
+    Ok(Advertisement {
+        daemon,
+        fullname,
+        info,
+        registered: Instant::now(),
+        reannounced: 0,
+    })
 }
 
 /// Build the advertised service record: the protocol version, the host's
@@ -95,12 +157,12 @@ fn service_info(
 /// unacknowledged: with a single goodbye the Mac kept a half-expired entry
 /// (TXT flushed, PTR still there) whenever that one packet was lost on the
 /// Wi-Fi path, and the picker showed a nameless "Available" row.
-const GOODBYE_LINGER: std::time::Duration = std::time::Duration::from_millis(400);
+const GOODBYE_LINGER: Duration = Duration::from_millis(400);
 
 impl Drop for Advertisement {
     fn drop(&mut self) {
         if let Ok(rx) = self.daemon.unregister(&self.fullname) {
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(1));
+            let _ = rx.recv_timeout(Duration::from_secs(1));
             std::thread::sleep(GOODBYE_LINGER);
         }
         let _ = self.daemon.shutdown();
@@ -110,6 +172,37 @@ impl Drop for Advertisement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reannounces_on_the_startup_schedule_then_stops() {
+        let s = Duration::from_secs;
+        assert_eq!(reannounce_step(s(0), 0), None);
+        assert_eq!(reannounce_step(Duration::from_millis(2999), 0), None);
+        assert_eq!(reannounce_step(s(3), 0), Some(1));
+        assert_eq!(reannounce_step(s(5), 1), None);
+        assert_eq!(reannounce_step(s(8), 1), Some(2));
+        assert_eq!(reannounce_step(s(16), 2), Some(3));
+        assert_eq!(reannounce_step(s(32), 3), Some(4));
+        assert_eq!(reannounce_step(s(60), 4), Some(5));
+        // Steady state: nothing after the last entry.
+        assert_eq!(reannounce_step(s(61), 5), None);
+        assert_eq!(reannounce_step(s(86_400), 5), None);
+    }
+
+    #[test]
+    fn a_late_tick_sends_one_reannouncement_for_the_entries_it_skipped() {
+        let s = Duration::from_secs;
+        assert_eq!(reannounce_step(s(20), 1), Some(3));
+        assert_eq!(reannounce_step(s(20), 3), None);
+        assert_eq!(reannounce_step(s(100), 0), Some(REANNOUNCE_AFTER.len()));
+    }
+
+    #[test]
+    fn the_schedule_grows_and_ends_within_a_minute() {
+        assert!(REANNOUNCE_AFTER.windows(2).all(|w| w[0] < w[1]));
+        assert!(REANNOUNCE_AFTER[0] > Duration::from_secs(1));
+        assert!(*REANNOUNCE_AFTER.last().unwrap() <= Duration::from_secs(60));
+    }
 
     #[test]
     fn advertises_version_and_public_key_hex() {

@@ -179,7 +179,9 @@ pub fn run(cfg: ServerConfig) -> Result<()> {
 /// so a Forget from the tray is on the air about as fast as the Mac can
 /// notice). The same tick also picks up an edit of `paired-clients.txt` by
 /// another process (`relay-host paired --forget` in a terminal), which the
-/// running host would otherwise overwrite on its next save.
+/// running host would otherwise overwrite on its next save. On the other
+/// ticks it sends the few start-up re-announcements of each new record
+/// (`Advertisement::reannounce_if_due`; none after the first minute).
 fn readvertise_on_change(
     mut facts: crate::sysinfo::HostFacts,
     mut digest: String,
@@ -221,6 +223,9 @@ fn readvertise_on_change(
                     }
                 }
                 if why.is_empty() {
+                    if let Some(ad) = slot.lock().unwrap().as_mut() {
+                        ad.reannounce_if_due(Instant::now());
+                    }
                     continue;
                 }
                 log::info!("{}; re-advertising", why.join(", "));
