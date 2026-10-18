@@ -202,8 +202,10 @@ physical layout came back after every case. After the killed worker the Mac
 found the PC again only once Relay was reopened: the dead worker sent no mDNS
 goodbye, and mdns-sd announces a new record only twice, in its first second.
 The host now announces each new record again 3, 8, 16, 32 and 60 s after
-registering it, and nothing after that (unit-tested; the check with the Mac and
-a killed worker is still to run). See
+registering it, and nothing after that. That is installed but did not fix it:
+after two more worker kills on 2026-10-18 the Mac never showed the PC again
+while the PC kept announcing. The fix is now the Mac's
+([handoff](host/REDISCOVERY-HANDOFF.md)). See
 [host/NVIDIA-RECOVERY-RETEST.md](host/NVIDIA-RECOVERY-RETEST.md).
 
 **One native backend (2026-10-17, phase C):** the ffmpeg, AMF, Quick Sync and

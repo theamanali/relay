@@ -111,7 +111,12 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    Phase C removed ffmpeg and left `signal_colour` and its callers unchanged,
    so every session now signals 1 / 1 / 6. Matrices 5 and 6 are both BT.601,
    and the Mac presenter uses only the matrix and range.
-6. **Host-side fix landed (`6de6010`); real-Mac check pending.** Not
+6. **Open: the host-side re-announcement is installed and not enough; the
+   Mac must re-browse (`host/REDISCOVERY-HANDOFF.md`).** F6b on 2026-10-18:
+   both real-worker kills (idle with a failed Connect, and mid-session) left
+   the Mac's picker without the PC for good, although each new worker
+   registered and logged `re-announced` 1/5 to 5/5 within 60 s and `browse`
+   on the PC heard the record afterwards. Not
    introduced here (U6): after a killed worker the Mac's picker lost the PC
    and did not find the new worker's announcements until Relay was reopened.
    A worker that dies sends no mDNS goodbye; a dial during the 5 s respawn
@@ -135,15 +140,14 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    pure function with unit tests. A flush up to about a minute after a
    restart now meets an unsolicited announcement soon after.
 
-   Verified so far: fmt, 213 unit tests plus the probe integration test,
-   clippy `-D warnings` on 1.98 and 1.99, release build. Not yet: the A/B
-   with the Mac's picker open (below) and the real worker kill; not
-   installed as the service.
-
-   If the Mac still loses the PC with this build, the remaining fix is the
-   Mac's: restart the browse (a fresh `NWBrowser`) after a dial that never
-   reached `.ready` and was reconfirmed, so mDNSResponder queries at once
-   instead of on the backoff of a long-running question.
+   Verified: fmt, 213 unit tests plus the probe integration test, clippy
+   `-D warnings` on 1.98 and 1.99, release build; installed as the service
+   (SHA-256 `7074914257E396DABFB05BAA21AD230C592F94055DFC906650308DC99CF97724`),
+   and the re-announcements appear in host.log on schedule. It did not
+   bring the row back (F6b below), so the remaining fix is the Mac's:
+   recreate the browse after a known host's row goes or a dial is
+   reconfirmed. The re-announcement stays: it is bounded and harmless, and
+   a fresh browse still needs the host to answer.
 
 ## User-run exclusive-display cases
 
@@ -288,6 +292,16 @@ picker. The new build was not run; F6b is the next check.
    Relay, Connect works without a PIN.
 3. If either needs Relay reopened, note how long you waited and keep
    host.log: the Mac-side browse restart is then needed (finding 6).
+
+F6b results, 2026-10-18, installed `7074914…9CF97724`, home LAN: **fail
+(the host-side fix is not enough).**
+- 00:50:36 idle kill and Connect in the gap: "couldn't reach the PC"; new
+  worker `advertising` at 00:50:42, `re-announced` 1/5 to 5/5 by 00:51:42;
+  the row disappeared and never came back.
+- 00:53:40 mid-session kill: displays restored, new worker at 00:53:46,
+  re-announced 1/5 to 5/5 by 00:54:46; the row disappeared and never came
+  back.
+Unlike F6a's dev host, the real worker's death removed the row both times.
 
 ## Gate result (2026-10-17)
 

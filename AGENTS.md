@@ -90,9 +90,12 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   so `Advertisement::reannounce_if_due` re-`register`s the same
   `ServiceInfo` (no goodbye, same TXT) 3, 8, 16, 32 and 60 s after each
   registration, on the readvertise thread's tick; nothing after a minute.
-  Unit tests, clippy 1.98/1.99 and release pass; the Mac A/B and real
-  worker kill (retest F6a/F6b) are pending, and it is not installed. If it
-  is not enough, the Mac should restart its browse after a reconfirmed dial.
+  Installed (`7074914…9CF97724`); it is **not enough**: on 2026-10-18 both
+  real-worker kills (F6b) left the Mac's picker without the PC for good
+  while host.log showed all five re-announcements. A `--no-vdd` dev host
+  killed the same way never lost the row (F6a). Mac work is in
+  `host/REDISCOVERY-HANDOFF.md` (find the losing layer with `dns-sd -B`,
+  then recreate the `NWBrowser` when a known host's row goes).
 - Phase C (2026-10-17, handoff steps 6–7; `c2400d9`, `91430f0`, `382bc27`):
   one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
   and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`
