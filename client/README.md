@@ -102,7 +102,8 @@ The footer has a resolution popup (native, 75% or 50% of the screen the window
 is on, shown in pixels) and a refresh control with that screen's top rate and
 60 Hz (120/60 on a ProMotion MacBook, 144/60 or 165/60 on such a monitor;
 hidden on a 60 Hz screen). Both follow the window when it moves to another
-display. The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
+display. Streaming from the PC at 2560×1440@144 to a 144 Hz external monitor
+was verified on 2026-10-18 (user report). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
 The **Settings** gear in the footer opens a grouped pane (Video, Latency,
 Input) of switches, laid out like System Settings:

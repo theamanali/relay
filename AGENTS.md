@@ -725,6 +725,12 @@ documented there. What follows is only the mechanics that are easy to break:
   during streaming; the local monitor handles exit/control/latency shortcuts.
 - The stream still uses the native `StreamWindow`/`StreamView` and Metal layer.
   SwiftUI never wraps the full-screen video or observes individual frames.
+- Refresh rates (2026-10-18, user decision): the footer offers the picker
+  screen's top rate and 60 Hz (`StreamMode.refreshRates`; two segments so
+  the footer fits), following the window between displays. A user-reported
+  stream at 2560×1440@144 to an external monitor worked on the real PC;
+  165 Hz has not been streamed. `--max-fps` picks the highest offered rate
+  at or under it.
 - Build arm64 only, minimum macOS 14 (Observation). Latest stable OS is the
   qualification target, not automatically the deployment floor. Never claim
   qualification from compiling with that deployment target. Metal and hardware
