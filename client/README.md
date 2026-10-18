@@ -56,9 +56,9 @@ Relay opens a small window listing the PCs it finds, under **Paired** and
 **Available**. The window keeps the same size with zero or one PC, grows for
 longer lists, and scrolls past five PCs.
 Paired says "No paired devices yet" until a PC is paired, and Available shows
-"Searching for PCs…" while no unpaired PC is around, since Relay keeps
-searching. Click a section's title to collapse or expand it (Paired once
-something is paired). With no PC at all
+"Searching for other PCs…" while no unpaired PC is around, since Relay keeps
+searching. Click a section's title to collapse or expand it (once it lists two
+or more PCs). With no PC at all
 the list shows "No PCs Found" with a spinner and what to do on the PC. Each row shows the link the connection will use: Ethernet, Wi-Fi,
 or Direct cable when the PC gave itself a 169.254 address. Hovering a PC shows a
 card with its Windows version, CPU, RAM, GPU, its address on each shared link
@@ -129,14 +129,20 @@ The **Settings** gear in the footer opens:
   Off by default and switchable mid-session.
 - **Show latency overlay**: a small HUD drawn into the stream's corner: time
   to screen, frame rate and a sparkline against one refresh interval.
-  ⌃⌥⌘L cycles Off → Compact → Detailed (PC work, network, decode, dropped
-  frames and the stream's settings); also View ▸ Latency Overlay. It does
+  ⌃⌥⌘L cycles Off → Compact → Detailed (PC work, network, estimated frame
+  transfer, decode, input → sent, dropped frames and the stream's settings); also View ▸ Latency Overlay. It does
   not slow the stream: it is part of the video frame, not a window over it.
   It appears 3 seconds into a session: start-up frames are left out of every
   number, the session report's included.
   When a session ends with it on, the **session report** opens: whole-session
   percentiles, a histogram and Copy as Markdown (View ▸ Last Session Report
-  any time).
+  any time). Three of its rows are measured on the Mac alone: **Frame
+  transfer (est.)** is a frame's size over the rate its later records
+  arrived at (frames that fit one record, or that were already buffered,
+  are skipped), **Decrypt** is the time spent opening its records, and
+  **Input → sent** runs from the `NSEvent` timestamp to the socket.
+- **Show session report on disconnect**: on by default; uncheck it to keep the
+  report from opening by itself. Greyed out unless the latency overlay is on.
 - **Control the PC**: whether your keyboard and pointer go to the PC; off
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
   apply only while it is on.
@@ -440,10 +446,6 @@ output.
 
 ## Limitations
 
-- Receive → screen can enter a 20–35 ms state while decode keeps up. A
-  2026-10-17 investigation reproduced it in Control and Observe, including
-  Metal Direct presentation with Game Mode on. The cause and a fix remain
-  open; see the [measurements and diagnostic limits](LATENCY-INVESTIGATION.md).
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys.
 - With VSync off (the default) the picture can tear; **Enable VSync** (or
   `--metal-vsync`) trades a little latency for no tearing.

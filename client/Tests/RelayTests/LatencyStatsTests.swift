@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Relay
 
@@ -82,6 +83,17 @@ final class LatencyStatsTests: XCTestCase {
     private let second: UInt64 = 1_000_000_000
     private let stream = StreamInfo(host: "Gaming PC", codec: "HEVC", width: 3024, height: 1964, fps: 120,
                                     bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false)
+
+    @MainActor func testReportFitsTheWidestSummaryOnOneLine() {
+        // The screenshot's line, and the widest the app can produce.
+        let seen = StreamInfo(host: "", codec: "HEVC", width: 3024, height: 1964, fps: 120, bitrateMbps: 120,
+                              format: "4:4:4 · 10-bit · Fastest", link: "Ethernet", vsync: false)
+        let font = NSFont.preferredFont(forTextStyle: .callout)
+        func width(_ s: StreamInfo) -> CGFloat { (s.summary as NSString).size(withAttributes: [.font: font]).width }
+        XCTAssertGreaterThan(width(StreamInfo.widest), width(seen))
+        XCTAssertLessThanOrEqual(width(StreamInfo.widest), SessionReportView.width - 2 * Style.Space.margin)
+        XCTAssertGreaterThanOrEqual(SessionReportView.width, 520)
+    }
 
     func testHUDSnapshotCoversTheLastFewSeconds() {
         let stats = LatencyStats()
@@ -195,12 +207,15 @@ final class SessionReportTests: XCTestCase {
                                bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false),
             endedAt: Date(timeIntervalSince1970: 0), duration: 61, presentedFPS: 119.6,
             toScreen: toScreen, decode: LatencyHistogram(), host: LatencyHistogram(), network: LatencyHistogram(),
+            transfer: LatencyHistogram(), inputSent: LatencyHistogram(), decrypt: LatencyHistogram(),
+            linkBitsPerSecond: 2.5e9,
             counters: PresenterCounters(replaced: 3, late: 1, dropped: 0, unavailable: 0, gpuFailures: 0))
         let md = report.markdown
         XCTAssertTrue(md.contains("HEVC 3024×1964 @ 120 Hz · 120 Mbps · 4:4:4 · Balanced · Ethernet · VSync off"), md)
         XCTAssertTrue(md.contains("| Receive → screen | 5.0 | 9.0 | 9.0 | 9.0 | 100 |"), md)
         XCTAssertTrue(md.contains("| Receive → decode | – | – | – | – | 0 |"), md)
-        XCTAssertTrue(md.contains("replaced 3, late 1, dropped 0"), md)
+        XCTAssertTrue(md.contains("replaced 3, late 1, dropped 0 · Frame data arrived at 2.50 Gb/s"), md)
+        XCTAssertTrue(md.contains("| Input → sent | – | – | – | – | 0 |"), md)
         XCTAssertTrue(md.contains("1:01"), md)
         XCTAssertFalse(report.logLine.contains("\n"))
     }

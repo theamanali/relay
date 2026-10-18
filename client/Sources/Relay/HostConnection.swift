@@ -20,6 +20,16 @@ protocol HostConnectionDelegate: AnyObject {
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime)
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming)
     func connectionDidEnd(_ c: HostConnection, reason: String)
+    /// How the last FRAME arrived (Mac-side telemetry; see ReceiveTiming).
+    func connection(_ c: HostConnection, didMeasureFrameReceive timing: ReceiveTiming)
+    /// An input message reached the socket this long after macOS stamped
+    /// the event it came from.
+    func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double)
+}
+
+extension HostConnectionDelegate {
+    func connection(_ c: HostConnection, didMeasureFrameReceive timing: ReceiveTiming) {}
+    func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double) {}
 }
 
 /// Mutable transport state is confined to `queue`. Configure the delegate before
@@ -108,6 +118,7 @@ final class HostConnection: @unchecked Sendable {
     /// Every frame on the wire is a handshake message or one record, so none
     /// is longer than Noise's largest message.
     private var reader = FrameReader(maxFrame: SecureChannel.maxRecord)
+    private var receiveTimer = ReceiveTimer()
     /// Set while a receive is outstanding so drains never overlap.
     private var receiving = false
     /// The host answered UNPAIR, so the pairing is gone on both sides.
@@ -187,11 +198,17 @@ final class HostConnection: @unchecked Sendable {
         }
     }
 
-    /// Send a protocol message (already built by `Proto`) once the session is up.
-    func send(_ message: Data) {
+    /// Send a protocol message (already built by `Proto`) once the session is
+    /// up. `eventTime` (seconds of system uptime, as `NSEvent.timestamp`) is
+    /// the input event the message came from, for the Input → sent figure.
+    func send(_ message: Data, eventTime: TimeInterval? = nil) {
         queue.async { [self] in
             guard ready else { return }
             sendRaw(message)
+            if let eventTime {
+                let ms = (ProcessInfo.processInfo.systemUptime - eventTime) * 1_000
+                delegate?.connection(self, didSendInputAfter: ms)
+            }
         }
     }
 
@@ -244,6 +261,7 @@ final class HostConnection: @unchecked Sendable {
         localNetworkDenied = false
         nextFrameSequence = 0
         reader.reset()
+        receiveTimer.reset()
         receiving = false
         c.stateUpdateHandler = { [weak self] state in
             guard let self, self.isCurrent(c, attempt: thisAttempt) else { return }
@@ -564,6 +582,7 @@ final class HostConnection: @unchecked Sendable {
             }
             if let data, !data.isEmpty {
                 self.reader.append(data)
+                self.receiveTimer.didRead(data.count)
                 then()
             } else if isComplete {
                 // A PC on protocol v3 or older reads msg1, cannot parse it and
@@ -581,9 +600,18 @@ final class HostConnection: @unchecked Sendable {
         while isCurrent(c, attempt: attempt) {
             guard let receive else { return }
             do {
+                let startedAt = receiveTimer.bytesRead - reader.buffered
                 guard let record = try reader.next() else { break }
-                guard let (header, payload) = try receive.open(record) else { continue }
+                let decryptStart = DispatchTime.now().uptimeNanoseconds
+                let message = try receive.open(record)
+                let now = DispatchTime.now().uptimeNanoseconds
+                let timing = receiveTimer.opened(startedAt: startedAt, consumed: receiveTimer.bytesRead - reader.buffered,
+                                                 decryptNanos: now - decryptStart, complete: message != nil, now: now)
+                guard let (header, payload) = message else { continue }
                 handle(type: header.type, flags: header.flags, payload: payload)
+                if header.type == Proto.Msg.frame.rawValue, let timing {
+                    delegate?.connection(self, didMeasureFrameReceive: timing)
+                }
             } catch let failure as FrameReader.Failure {
                 finish("protocol error: \(failure)")
                 return

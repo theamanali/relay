@@ -7,7 +7,8 @@ import QuartzCore
 
 @MainActor
 protocol StreamViewDelegate: AnyObject {
-    func streamView(_ v: StreamView, send data: Data)
+    /// `eventTime` is the NSEvent's timestamp, nil for messages no event caused.
+    func streamView(_ v: StreamView, send data: Data, eventTime: TimeInterval?)
     func streamViewRequestedExit(_ v: StreamView)
 }
 
@@ -82,6 +83,27 @@ final class StreamView: NSView {
 
     // MARK: focus & tracking
 
+    /// A transparent pointer over the stream instead of `NSCursor.hide()`:
+    /// while the system cursor is hidden, every pointer move (on any display)
+    /// held VSync-off presentation to ~50 fps and ~25 ms to screen; this
+    /// cursor keeps 110 fps and 2.5 ms (2026-10-17, fakehost 3024×1964@120).
+    var hidesCursor = false {
+        didSet {
+            guard hidesCursor != oldValue else { return }
+            window?.invalidateCursorRects(for: self)
+            if hidesCursor { Self.blankCursor.set() } else { NSCursor.arrow.set() }
+        }
+    }
+
+    static let blankCursor = NSCursor(
+        image: NSImage(size: NSSize(width: 1, height: 1), flipped: false) { _ in true },
+        hotSpot: .zero
+    )
+
+    override func resetCursorRects() {
+        if hidesCursor { addCursorRect(bounds, cursor: Self.blankCursor) }
+    }
+
     override var acceptsFirstResponder: Bool { true }
     override func becomeFirstResponder() -> Bool { true }
 
@@ -102,11 +124,11 @@ final class StreamView: NSView {
     /// resigned, etc.) so nothing stays stuck on the Windows side.
     func releaseAllInput() {
         for usage in heldKeys {
-            delegate?.streamView(self, send: Proto.key(hidUsage: usage, down: false))
+            delegate?.streamView(self, send: Proto.key(hidUsage: usage, down: false), eventTime: nil)
         }
         heldKeys.removeAll()
         for button in heldButtons {
-            delegate?.streamView(self, send: Proto.mouseButton(button, down: false))
+            delegate?.streamView(self, send: Proto.mouseButton(button, down: false), eventTime: nil)
         }
         heldButtons.removeAll()
     }
@@ -135,7 +157,7 @@ final class StreamView: NSView {
 
     private func sendMove(_ event: NSEvent) {
         guard forwardInput, let (x, y) = normalized(convert(event.locationInWindow, from: nil)) else { return }
-        delegate?.streamView(self, send: Proto.mouseMove(x: x, y: y))
+        delegate?.streamView(self, send: Proto.mouseMove(x: x, y: y), eventTime: event.timestamp)
     }
 
     private func sendButton(_ event: NSEvent, down: Bool) {
@@ -145,7 +167,7 @@ final class StreamView: NSView {
         let button = UInt8(clamping: event.buttonNumber)
         guard button <= 4 else { return }
         if down { heldButtons.insert(button) } else { heldButtons.remove(button) }
-        delegate?.streamView(self, send: Proto.mouseButton(button, down: down))
+        delegate?.streamView(self, send: Proto.mouseButton(button, down: down), eventTime: event.timestamp)
     }
 
     override func mouseMoved(with event: NSEvent) { sendMove(event) }
@@ -175,7 +197,8 @@ final class StreamView: NSView {
         guard dx != 0 || dy != 0 else { return }
         delegate?.streamView(
             self,
-            send: Proto.mouseWheel(dx: Int16(clamping: Int(dx)), dy: Int16(clamping: Int(dy)))
+            send: Proto.mouseWheel(dx: Int16(clamping: Int(dx)), dy: Int16(clamping: Int(dy))),
+            eventTime: event.timestamp
         )
     }
 
@@ -225,10 +248,10 @@ final class StreamView: NSView {
         }
     }
 
-    private func sendKey(code: UInt16, down: Bool) {
+    private func sendKey(code: UInt16, down: Bool, eventTime: TimeInterval) {
         guard forwardInput, let usage = keyMap.hidUsage(forKeyCode: code) else { return }
         if down { heldKeys.insert(usage) } else { heldKeys.remove(usage) }
-        delegate?.streamView(self, send: Proto.key(hidUsage: usage, down: down))
+        delegate?.streamView(self, send: Proto.key(hidUsage: usage, down: down), eventTime: eventTime)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -239,11 +262,11 @@ final class StreamView: NSView {
         }
         // Auto-repeat is handled by Windows itself once the key is down.
         guard !event.isARepeat else { return }
-        sendKey(code: event.keyCode, down: true)
+        sendKey(code: event.keyCode, down: true, eventTime: event.timestamp)
     }
 
     override func keyUp(with event: NSEvent) {
-        sendKey(code: event.keyCode, down: false)
+        sendKey(code: event.keyCode, down: false, eventTime: event.timestamp)
     }
 
     override func flagsChanged(with event: NSEvent) {
@@ -251,8 +274,8 @@ final class StreamView: NSView {
         guard KeyMap.modifierKeyCodes.contains(code), let usage = keyMap.hidUsage(forKeyCode: code) else { return }
         if code == 57 {
             // macOS reports Caps Lock as a toggle; Windows toggles on key-down, so send a full tap.
-            sendKey(code: code, down: true)
-            sendKey(code: code, down: false)
+            sendKey(code: code, down: true, eventTime: event.timestamp)
+            sendKey(code: code, down: false, eventTime: event.timestamp)
             return
         }
         // flagsChanged fires once per physical modifier press or release and
@@ -261,7 +284,7 @@ final class StreamView: NSView {
         // turned on by ⌃⌥⌘K while those modifiers were still held), which
         // a record alone would forward as a press and leave stuck.
         let down = !heldKeys.contains(usage) && event.modifierFlags.contains(Self.flag(forModifierKeyCode: code))
-        sendKey(code: code, down: down)
+        sendKey(code: code, down: down, eventTime: event.timestamp)
     }
 
     /// Swallow ⌘-shortcuts so AppKit's menu handling doesn't eat them; they were

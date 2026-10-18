@@ -488,11 +488,11 @@ documented there. What follows is only the mechanics that are easy to break:
   shows there is more, scroller hidden unless it overflows;
   the window grows downward). Once any PC is known both sections are
   always listed: Paired shows "No paired devices yet" when empty, Available a
-  "Searching for PCs…" row with the spinner in the icon column (the title's
+  "Searching for other PCs…" row with the spinner in the icon column (the title's
   own spinner shows only when that row does not). Clicking a title folds
-  its section (`PickerModel.toggle`, in memory only); Paired folds only once
-  something is paired (no chevron, not a button before that) and reopens
-  when its last PC goes; a folded-away selection
+  its section (`PickerModel.toggle`, in memory only); a section folds only
+  while it lists two or more PCs (no chevron, not a button otherwise) and
+  reopens when it drops below two (2026-10-17, user request); a folded-away selection
   moves to the first visible PC, unfolding with none selects the first, and
   `preselect` unfolds its PC's section. The list is one `ForEach` over
   `PickerModel.listItems` with stable IDs (titles by section, PCs by section +
@@ -572,12 +572,24 @@ documented there. What follows is only the mechanics that are easy to break:
   while on); `MetalPresenter.setOverlay` uploads it as a new texture and
   `encode` blends it as a second quad in the same pass (premultiplied, nearest
   sampling, pixel margin). It refreshes only when a video frame arrives.
+  Clock sync and per-frame PC timestamps (end-to-end figures, input →
+  applied) are proposed for the PC session in `docs/TIMING-HANDOFF.md`
+  (2026-10-18, not started).
   The first 3 s after STREAM_START (`LatencyStats.warmUp`) are not recorded
   and the HUD stays hidden until they pass.
+  Mac-only stages (2026-10-18): `ReceiveTimer` (pure, in
+  `ReceiveTiming.swift`) follows the receive loop's reads; a FRAME's
+  transfer is estimated from bytes that arrived *after* its first record
+  over that time, scaled to the whole frame (single-record or already
+  buffered frames give none: buffered is the Mac reading late, not a fast
+  link). Decrypt is timed around `SecureChannel.open`. Input → sent is
+  `NSEvent.timestamp` → `sendRaw` on the connection queue (both
+  `systemUptime`). The read pattern is unchanged: no extra read per frame.
   `LatencyStats` records into fixed 0.1 ms histograms (per-second ring for the
   5 s HUD window, plus whole-session); `takeSessionReport` runs once per
   STREAM_START on the first end path, logs `Session report:` and opens the
-  report window when the HUD was on. Prefs keep `showLatency` and add
+  report window when the HUD was on and `showSessionReport` (settings: Show
+  session report on disconnect, default on, greyed out with the HUD off) is set. Prefs keep `showLatency` and add
   `latencyDetailed`; quitting mid-session also logs the report. Unit-tested
   (stats, HUD bitmap, overlay pixels) and checked live against
   `fakehost --clip` with an isolated `CFFIXED_USER_HOME`: HUD in the frame,
@@ -676,6 +688,11 @@ documented there. What follows is only the mechanics that are easy to break:
   isolates Relay's files but not its UserDefaults: a "fresh" test run still
   uses the real HUD/prefs settings, and fakehost writes `fakehost.key` into
   its working directory.
+- **Never `NSCursor.hide()` during a stream (2026-10-17).** With the cursor
+  hidden, any pointer motion, even on another display, held VSync-off
+  presentation to ~50 fps and ~25 ms to screen (idle: 111 fps, 2.5 ms).
+  `StreamView.hidesCursor` sets a transparent cursor rect instead
+  (`client/LATENCY-INVESTIGATION.md`).
 - `StreamView.flagsChanged` decides press vs release from its own held-key record
   **and** the event's flags: the record alone tells left from right, but forwards the
   release of a modifier it never sent down (control turned on by ⌃⌥⌘K with ⌃⌥⌘ still

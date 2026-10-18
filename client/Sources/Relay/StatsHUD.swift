@@ -116,10 +116,13 @@ enum StatsHUD {
             ("p99 to screen", ms(s.toScreen.p99), s.toScreen.p99.map { Level(value: $0, budget: budget).color } ?? primary),
             ("PC work p50 / p95", ms(s.host.p50) + " / " + ms(s.host.p95), primary),
             ("Network (RTT/2)", ms(s.networkHalfRTT), primary),
+            ("Frame transfer (est.)", ms(s.transfer.p50), primary),
             ("Receive → decode", ms(s.decode.p50), primary),
+            ("Input → sent", ms(s.inputSent.p50), primary),
             ("Decoded", String(format: "%.0f fps", s.decodedFPS), primary),
             ("Replaced · late · dropped", "\(s.counters.replaced) · \(s.counters.late) · \(s.counters.dropped)", primary),
         ]
+        assert(rows.count == detailRows, "height(for:mode:) counts detailRows")
         for (label, value, color) in rows {
             canvas.text(label, font: font(11), color: secondary, x: padding, baseline: y + 12)
             canvas.text(value, font: font(11, .medium), color: color, right: padding + inner, baseline: y + 12)
@@ -141,8 +144,11 @@ enum StatsHUD {
         let compact = padding + 32 + 18 + sparklineHeight + padding
         guard mode == .detailed else { return compact }
         let stream: CGFloat = s.stream == nil ? 0 : 12 + 2 * 14
-        return compact + 16 + 6 * rowHeight + stream
+        return compact + 16 + CGFloat(detailRows) * rowHeight + stream
     }
+
+    /// Rows in the detailed view, below the divider.
+    static let detailRows = 8
 
     private static func streamLines(_ s: StreamInfo) -> [String] {
         var second = s.format.isEmpty ? [] : [s.format]

@@ -131,6 +131,15 @@ struct StreamInfo: Equatable, Sendable {
         parts.append(vsync ? "VSync on" : "VSync off")
         return parts.joined(separator: " · ")
     }
+
+    /// The widest summary this app can produce, for sizing the report so it
+    /// stays on one line: the longest codec and link names, an 8K stream at
+    /// 240 Hz, the top bitrate and every picture option.
+    static let widest = StreamInfo(
+        host: "", codec: "H.264", width: 7680, height: 4320, fps: 240,
+        bitrateMbps: VideoBitrate.maximum,
+        format: "4:4:4 · 10-bit · \(EncoderQuality.best.title)", link: "This MacBook", vsync: false
+    )
 }
 
 /// The presenter's running totals for the session.
@@ -172,6 +181,10 @@ final class LatencyStats: @unchecked Sendable {
         /// Capture + encode + send on the PC.
         var host: Stage
         var networkHalfRTT: Double?
+        /// A whole frame's estimated time on the wire (ReceiveTiming).
+        var transfer: Stage
+        /// macOS input event → message handed to the socket.
+        var inputSent: Stage
         /// Receive → screen per frame, oldest first.
         var sparkline: [Double]
         /// One refresh interval of the stream, in ms.
@@ -197,10 +210,18 @@ final class LatencyStats: @unchecked Sendable {
     private var decode = LatencyWindow(seconds: windowSeconds)
     private var host = LatencyWindow(seconds: windowSeconds)
     private var network = LatencyWindow(seconds: windowSeconds)
+    private var transfer = LatencyWindow(seconds: windowSeconds)
+    private var inputSent = LatencyWindow(seconds: windowSeconds)
     private var sessionToScreen = LatencyHistogram()
     private var sessionDecode = LatencyHistogram()
     private var sessionHost = LatencyHistogram()
     private var sessionNetwork = LatencyHistogram()
+    private var sessionTransfer = LatencyHistogram()
+    private var sessionInputSent = LatencyHistogram()
+    private var sessionDecrypt = LatencyHistogram()
+    /// Bytes and time behind the transfer estimates, for the link's rate.
+    private var lateBytes = 0
+    private var lateNanos: UInt64 = 0
     private var sparkline = RecentSamples(capacity: sparklineFrames)
 
     static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
@@ -214,10 +235,17 @@ final class LatencyStats: @unchecked Sendable {
             decode = LatencyWindow(seconds: Self.windowSeconds)
             host = LatencyWindow(seconds: Self.windowSeconds)
             network = LatencyWindow(seconds: Self.windowSeconds)
+            transfer = LatencyWindow(seconds: Self.windowSeconds)
+            inputSent = LatencyWindow(seconds: Self.windowSeconds)
             sessionToScreen = LatencyHistogram()
             sessionDecode = LatencyHistogram()
             sessionHost = LatencyHistogram()
             sessionNetwork = LatencyHistogram()
+            sessionTransfer = LatencyHistogram()
+            sessionInputSent = LatencyHistogram()
+            sessionDecrypt = LatencyHistogram()
+            lateBytes = 0
+            lateNanos = 0
             sparkline = RecentSamples(capacity: Self.sparklineFrames)
         }
     }
@@ -263,6 +291,29 @@ final class LatencyStats: @unchecked Sendable {
         }
     }
 
+    /// One FRAME's arrival. Frames whose later records were already
+    /// buffered give no transfer estimate; decryption counts for every frame.
+    func record(_ timing: ReceiveTiming, at nanos: UInt64 = LatencyStats.now()) {
+        lock.withLock {
+            guard nanos >= measuringFrom else { return }
+            sessionDecrypt.record(timing.decryptMilliseconds)
+            guard let ms = timing.transferMilliseconds else { return }
+            transfer.record(ms, at: nanos)
+            sessionTransfer.record(ms)
+            lateBytes += timing.lateBytes
+            lateNanos += timing.lateNanos
+        }
+    }
+
+    func recordInputSent(milliseconds ms: Double, at nanos: UInt64 = LatencyStats.now()) {
+        guard ms.isFinite, ms >= 0 else { return }
+        lock.withLock {
+            guard nanos >= measuringFrom else { return }
+            inputSent.record(ms, at: nanos)
+            sessionInputSent.record(ms)
+        }
+    }
+
     func hudSnapshot(at nanos: UInt64 = LatencyStats.now()) -> HUDSnapshot {
         lock.withLock {
             let shown = toScreen.merged(at: nanos)
@@ -275,6 +326,8 @@ final class LatencyStats: @unchecked Sendable {
                 presentedFPS: rate(shown), decodedFPS: rate(decoded),
                 toScreen: Stage(shown), decode: Stage(decoded), host: Stage(host.merged(at: nanos)),
                 networkHalfRTT: network.merged(at: nanos).percentile(0.5),
+                transfer: Stage(transfer.merged(at: nanos)),
+                inputSent: Stage(inputSent.merged(at: nanos)),
                 sparkline: sparkline.ordered,
                 frameBudget: 1_000 / Double(max(stream?.fps ?? 60, 1)),
                 stream: stream,
@@ -291,7 +344,10 @@ final class LatencyStats: @unchecked Sendable {
             return SessionReport(stream: stream, endedAt: endedAt, duration: duration,
                                  presentedFPS: Double(sessionToScreen.count) / duration,
                                  toScreen: sessionToScreen, decode: sessionDecode, host: sessionHost,
-                                 network: sessionNetwork, counters: counters)
+                                 network: sessionNetwork, transfer: sessionTransfer,
+                                 inputSent: sessionInputSent, decrypt: sessionDecrypt,
+                                 linkBitsPerSecond: lateNanos > 0 ? Double(lateBytes) * 8 / (Double(lateNanos) / 1e9) : nil,
+                                 counters: counters)
         }
     }
 }
@@ -311,6 +367,11 @@ struct SessionReport: Sendable {
     let decode: LatencyHistogram
     let host: LatencyHistogram
     let network: LatencyHistogram
+    let transfer: LatencyHistogram
+    let inputSent: LatencyHistogram
+    let decrypt: LatencyHistogram
+    /// The rate frames' later records arrived at, over the whole session.
+    let linkBitsPerSecond: Double?
     let counters: PresenterCounters
 
     struct Row: Identifiable {
@@ -323,7 +384,15 @@ struct SessionReport: Sendable {
         [Row(name: "Receive → screen", histogram: toScreen),
          Row(name: "Receive → decode", histogram: decode),
          Row(name: "PC work", histogram: host),
-         Row(name: "Network (RTT/2 est.)", histogram: network)]
+         Row(name: "Network (RTT/2 est.)", histogram: network),
+         Row(name: "Frame transfer (est.)", histogram: transfer),
+         Row(name: "Decrypt", histogram: decrypt),
+         Row(name: "Input → sent", histogram: inputSent)]
+    }
+
+    /// "Frame data arrived at 2.31 Gb/s", or nil when no frame measured it.
+    var linkText: String? {
+        linkBitsPerSecond.map { String(format: "Frame data arrived at %.2f Gb/s", $0 / 1e9) }
     }
 
     var lengthText: String {
@@ -339,6 +408,9 @@ struct SessionReport: Sendable {
         return text
     }
 
+    static let footnote = "Receive starts after decryption. Frame transfer is estimated from the rate a frame's later "
+        + "records arrived; Input → sent ends at the Mac's socket. The stages do not add up to input-to-photon latency."
+
     static func ms(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "–" }
 
     /// Paste-ready for docs/LATENCY.md.
@@ -351,9 +423,10 @@ struct SessionReport: Sendable {
             "",
             stream.summary,
             "",
-            "Length \(lengthText) · \(String(format: "%.1f", presentedFPS)) fps shown · \(countersText)",
+            "Length \(lengthText) · \(String(format: "%.1f", presentedFPS)) fps shown · \(countersText)"
+                + (linkText.map { " · " + $0 } ?? ""),
             "",
-            "| stage (ms) | p50 | p95 | p99 | max | frames |",
+            "| stage (ms) | p50 | p95 | p99 | max | samples |",
             "|---|---|---|---|---|---|",
         ]
         for row in rows {
@@ -361,7 +434,7 @@ struct SessionReport: Sendable {
             lines.append("| \(row.name) | \(Self.ms(h.percentile(0.5))) | \(Self.ms(h.percentile(0.95))) | "
                 + "\(Self.ms(h.percentile(0.99))) | \(Self.ms(h.count > 0 ? h.max : nil)) | \(h.count) |")
         }
-        lines += ["", "Receive starts after decryption; the stages do not add up to input-to-photon latency."]
+        lines += ["", Self.footnote]
         return lines.joined(separator: "\n")
     }
 

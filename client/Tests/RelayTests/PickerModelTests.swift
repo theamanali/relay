@@ -119,12 +119,13 @@ final class PickerModelTests: XCTestCase {
 
     @MainActor func testCollapsingHidesASectionAndMovesTheSelectionOut() async {
         let model = PickerModel()
-        let a = host("A", key: 1), b = host("B", key: 2)
-        model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
-        model.selection = "B"
-        // Folding Paired hides B, so the selection moves to the first PC shown.
+        let a = host("A", key: 1), b = host("B", key: 2), c = host("C", key: 3), d = host("D", key: 4)
+        let known = [c.publicKey!: "C", d.publicKey!: "D"]
+        model.update(hosts: [a, b, c, d], known: known, nicknames: [:])
+        model.selection = "C"
+        // Folding Paired hides C, so the selection moves to the first PC shown.
         model.toggle(.paired)
-        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "title.available", "host.available.A"])
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "title.available", "host.available.A", "host.available.B"])
         XCTAssertEqual(model.selection, "A")
         // Folding Available too leaves nothing to select.
         model.toggle(.available)
@@ -136,11 +137,12 @@ final class PickerModelTests: XCTestCase {
         model.toggle(.available)
         XCTAssertNil(model.selection)
         // A PC asked for after a session unfolds its section.
-        model.preselect(key: b.publicKey, name: "B")
-        XCTAssertEqual(model.selection, "B")
+        model.preselect(key: c.publicKey, name: "C")
+        XCTAssertEqual(model.selection, "C")
         XCTAssertFalse(model.collapsed.contains(.paired))
         model.toggle(.available)
-        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.B", "title.available", "host.available.A"])
+        XCTAssertEqual(model.listItems.map(\.id),
+                       ["title.paired", "host.paired.C", "host.paired.D", "title.available", "host.available.A", "host.available.B"])
     }
 
     func testListIsAsTallAsItsRowsThenScrollsWithAPeek() {
@@ -152,7 +154,7 @@ final class PickerModelTests: XCTestCase {
         XCTAssertEqual(PickerLayout.listHeight(rows: 0), floor)
         // Both titles, "No paired devices yet" and one available PC.
         XCTAssertEqual(PickerLayout.listHeight(rows: titles + Style.noteRowHeight + row), floor)
-        // Both titles, one paired PC and "Searching for PCs…".
+        // Both titles, one paired PC and "Searching for other PCs…".
         XCTAssertEqual(PickerLayout.listHeight(rows: titles + 2 * row), floor)
         // Five PCs under both titles still fit exactly.
         let five = titles + 5 * row
@@ -221,25 +223,37 @@ final class PickerModelTests: XCTestCase {
         XCTAssertEqual(connects, 4)
     }
 
-    @MainActor func testPairedFoldsOnlyOnceSomethingIsPaired() async {
+    @MainActor func testSectionsFoldOnlyWithTwoOrMorePCs() async {
         let model = PickerModel()
-        let a = host("A", key: 1), b = host("B", key: 2)
-        model.update(hosts: [a, b], known: [:], nicknames: [:])
-        // Nothing paired: Paired cannot fold, and toggling it does nothing.
+        let a = host("A", key: 1), b = host("B", key: 2), c = host("C", key: 3)
+        // Nothing paired, one available PC: neither section folds, and
+        // toggling does nothing.
+        model.update(hosts: [a], known: [:], nicknames: [:])
         XCTAssertFalse(model.canCollapse(.paired))
+        XCTAssertFalse(model.canCollapse(.available))
         model.toggle(.paired)
-        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "no-paired"])
-        // Paired with B, folded, then B forgotten: Paired opens again to say
-        // nothing is paired, and stays open when the next PC pairs.
-        model.update(hosts: [a, b], known: [b.publicKey!: "B"], nicknames: [:])
-        XCTAssertTrue(model.canCollapse(.paired))
+        model.toggle(.available)
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "no-paired", "title.available", "host.available.A"])
+        guard case let .title(_, _, collapsible) = model.listItems[2] else { return XCTFail() }
+        XCTAssertFalse(collapsible)
+        // Two available PCs fold; one paired PC still does not.
+        model.update(hosts: [a, b, c], known: [c.publicKey!: "C"], nicknames: [:])
+        XCTAssertFalse(model.canCollapse(.paired))
+        XCTAssertTrue(model.canCollapse(.available))
+        // Folded with two, then one leaves: Available opens again.
+        model.toggle(.available)
+        XCTAssertTrue(model.collapsed.contains(.available))
+        model.update(hosts: [a, c], known: [c.publicKey!: "C"], nicknames: [:])
+        XCTAssertFalse(model.collapsed.contains(.available))
+        XCTAssertEqual(model.listItems.map(\.id), ["title.paired", "host.paired.C", "title.available", "host.available.A"])
+        // Same for Paired: two fold, forgetting one opens it.
+        let both = [b.publicKey!: "B", c.publicKey!: "C"]
+        model.update(hosts: [a, b, c], known: both, nicknames: [:])
         model.toggle(.paired)
         XCTAssertTrue(model.collapsed.contains(.paired))
-        model.update(hosts: [a, b], known: [:], nicknames: [:])
+        model.update(hosts: [a, b, c], known: [c.publicKey!: "C"], nicknames: [:])
         XCTAssertFalse(model.collapsed.contains(.paired))
-        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "no-paired"])
-        model.update(hosts: [a, b], known: [a.publicKey!: "A"], nicknames: [:])
-        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "host.paired.A"])
+        XCTAssertEqual(model.listItems.map(\.id).prefix(2), ["title.paired", "host.paired.C"])
     }
 
     @MainActor func testSettingsOpenRightThenBelow() async {
@@ -318,9 +332,13 @@ final class PickerModelTests: XCTestCase {
         var connects = 0
         let desk = host("Desk", key: 1), other = host("Other", key: 2)
         let known = [desk.publicKey!: "Desk", other.publicKey!: "Other"]
+        let x = host("X", key: 8), y = host("Y", key: 9)
         for action in [
             { (m: PickerModel) in m.showSettings() },
-            { (m: PickerModel) in m.toggle(.available) },
+            { (m: PickerModel) in
+                m.update(hosts: [other, x, y], known: known, nicknames: [:])
+                m.toggle(.available)
+            },
             { (m: PickerModel) in m.beginRename() },
             { (m: PickerModel) in m.forgetCandidate = m.selected },
         ] {

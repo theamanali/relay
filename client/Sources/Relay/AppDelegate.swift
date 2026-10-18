@@ -41,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     /// watching something on the PC). System sleep from the lid is unaffected.
     private var keepAwake: NSObjectProtocol?
     private var screenObserver: Any?
-    private var cursorHidden = false
     private var exitMonitor: Any?
     private let latencyStats = LatencyStats()
     /// Redraws the latency HUD four times a second; only while it is on.
@@ -617,10 +616,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         return true
     }
 
+    /// Not `NSCursor.hide()`: see `StreamView.hidesCursor`.
     private func setCursorHidden(_ hidden: Bool) {
-        guard hidden != cursorHidden else { return }
-        cursorHidden = hidden
-        if hidden { NSCursor.hide() } else { NSCursor.unhide() }
+        view?.hidesCursor = hidden
     }
 
     // MARK: Control events forwarded to the main actor by SessionPipeline
@@ -758,8 +756,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     // MARK: StreamViewDelegate
 
-    func streamView(_ v: StreamView, send data: Data) {
-        connection?.send(data)
+    func streamView(_ v: StreamView, send data: Data, eventTime: TimeInterval?) {
+        connection?.send(data, eventTime: eventTime)
     }
 
     func streamViewRequestedExit(_ v: StreamView) {
@@ -825,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
 
     /// Ends the session's measurement once: logs the report and keeps it for
     /// View ▸ Last Session Report. True when it should open by itself (the
-    /// HUD was on).
+    /// HUD was on and Show session report on disconnect is checked).
     private func takeSessionReport() -> Bool {
         guard sessionReportPending else { return false }
         sessionReportPending = false
@@ -833,7 +831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         guard let report = latencyStats.sessionReport(counters: renderer.presenterCounters) else { return false }
         NSLog("Session report: %@", report.logLine)
         pickerModel.sessionReport = report
-        return prefs.hudMode != .off
+        return prefs.hudMode != .off && prefs.showSessionReport
     }
 
     @objc func showSessionReport(_ sender: Any?) {

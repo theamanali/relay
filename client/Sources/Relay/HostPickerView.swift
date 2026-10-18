@@ -199,7 +199,9 @@ private struct SectionHeaderRow: View {
 }
 
 /// Stands in for PCs under Available while none is around: discovery keeps
-/// going, with the spinner where a PC's glyph would be.
+/// going, with the spinner where a PC's glyph would be. The list only shows
+/// it with at least one paired PC above (no PC at all is the empty state),
+/// hence "other".
 private struct SearchingRow: View {
     var body: some View {
         HStack(spacing: Style.Space.s) {
@@ -207,7 +209,7 @@ private struct SearchingRow: View {
                 .controlSize(.small)
                 .frame(width: 32)
                 .accessibilityHidden(true)
-            Text("Searching for PCs…")
+            Text("Searching for other PCs…")
                 .font(Style.Font.body)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
@@ -530,6 +532,12 @@ struct SessionSettingsView: View {
             }))
                 .toggleStyle(.checkbox)
                 .padding(.top, Style.Space.s)
+            // Only the HUD's sessions have a report worth opening by itself;
+            // View ▸ Last Session Report works either way.
+            Toggle("Show session report on disconnect", isOn: preference(\.showSessionReport))
+                .toggleStyle(.checkbox)
+                .padding(.top, Style.Space.s)
+                .disabled(model.prefs.hudMode == .off)
             // Keyboard and pointer: modifier keys, scrolling, and whether the
             // Mac controls the PC at all.
             Text("Input").font(Style.Font.section).foregroundStyle(.secondary)

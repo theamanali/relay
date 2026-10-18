@@ -109,7 +109,7 @@ final class PickerModel {
     var connectTitle: String { connecting ? "Cancel" : selected?.paired == false ? "Pair" : "Connect" }
     /// What the list shows, top to bottom. Plain rows rather than Section
     /// headers (the list's own headers float on a band). Once any PC is known
-    /// both sections are listed, each collapsible; with none at all the list
+    /// both sections are listed, collapsible once they hold two PCs; with none at all the list
     /// is empty and the picker shows a centered empty state over it instead.
     enum ListItem: Identifiable {
         case title(PickerSection, collapsed: Bool, collapsible: Bool)
@@ -145,10 +145,10 @@ final class PickerModel {
     /// Sections the user folded away by clicking their titles.
     var collapsed: Set<PickerSection> = []
 
-    /// Paired folds only once something is paired: "No paired devices yet"
-    /// is not worth hiding. Available always folds.
+    /// A section folds only while it lists two or more PCs: one row, "No
+    /// paired devices yet" or the searching row is not worth hiding.
     func canCollapse(_ section: PickerSection) -> Bool {
-        section == .available || !pairedRows.isEmpty
+        (section == .paired ? pairedRows : availableRows).count > 1
     }
 
     var listItems: [ListItem] {
@@ -157,7 +157,7 @@ final class PickerModel {
         if !collapsed.contains(.paired) {
             items += pairedRows.isEmpty ? [.noPaired] : pairedRows.map(ListItem.host)
         }
-        items.append(.title(.available, collapsed: collapsed.contains(.available), collapsible: true))
+        items.append(.title(.available, collapsed: collapsed.contains(.available), collapsible: canCollapse(.available)))
         if !collapsed.contains(.available) {
             items += availableRows.isEmpty ? [.searching] : availableRows.map(ListItem.host)
         }
@@ -201,7 +201,8 @@ final class PickerModel {
         }
         if let editing = renamingID, !next.contains(where: { $0.id == editing }) { finishRename() }
         rows = next
-        if pairedRows.isEmpty { collapsed.remove(.paired) }
+        // A section that drops below two PCs can no longer fold, so it opens.
+        collapsed = collapsed.filter(canCollapse)
         if let wanted, let row = rows.first(where: { ($0.host.publicKey != nil && $0.host.publicKey == wanted.key) || $0.id == wanted.name }) {
             reveal(row)
             self.wanted = nil

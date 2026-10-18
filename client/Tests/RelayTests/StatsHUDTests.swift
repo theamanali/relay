@@ -8,7 +8,8 @@ final class StatsHUDTests: XCTestCase {
         (0..<100).forEach { toScreen.record($0 < 90 ? 5.4 : 9.2); host.record(4.1) }
         return LatencyStats.HUDSnapshot(
             presentedFPS: 119.8, decodedFPS: 120.1, toScreen: .init(toScreen), decode: .init(LatencyHistogram()),
-            host: .init(host), networkHalfRTT: 0.21, sparkline: (0..<480).map { 5 + Double($0 % 9) / 3 },
+            host: .init(host), networkHalfRTT: 0.21,
+            transfer: .init(LatencyHistogram()), inputSent: .init(LatencyHistogram()), sparkline: (0..<480).map { 5 + Double($0 % 9) / 3 },
             frameBudget: 1_000 / 120,
             stream: StreamInfo(host: "Gaming PC", codec: "HEVC", width: 3024, height: 1964, fps: 120,
                                bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false),

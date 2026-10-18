@@ -55,6 +55,12 @@ final class SessionPipeline: HostConnectionDelegate, @unchecked Sendable {
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {
         withActive(c) { stats.record(timing) }
     }
+    func connection(_ c: HostConnection, didMeasureFrameReceive timing: ReceiveTiming) {
+        withActive(c) { stats.record(timing) }
+    }
+    func connection(_ c: HostConnection, didSendInputAfter milliseconds: Double) {
+        withActive(c) { stats.recordInputSent(milliseconds: milliseconds) }
+    }
     func connectionDidEnd(_ c: HostConnection, reason: String) {
         let outcome = ConnectionOutcome(c)
         withActive(c) { renderer.reset() }

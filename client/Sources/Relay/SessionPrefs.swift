@@ -28,6 +28,8 @@ struct SessionPrefs: Equatable {
     var forwardInput = true
     /// The latency HUD; ⌃⌥⌘L cycles it.
     var hudMode: HUDMode = .off
+    /// Open the session report when a session ends; only while the HUD is on.
+    var showSessionReport = true
     var bitrateMbps = VideoBitrate.defaultValue
     /// Follow the stream mode and link (`VideoBitrate.automatic`) until the
     /// user picks a bitrate.
@@ -62,6 +64,7 @@ struct SessionPrefs: Equatable {
     private static let forwardInputKey = "forwardInput"
     private static let showLatencyKey = "showLatency"
     private static let latencyDetailedKey = "latencyDetailed"
+    private static let showSessionReportKey = "showSessionReport"
     private static let bitrateKey = "videoBitrateMbps"
     private static let bitrateAutomaticKey = "bitrateAutomatic"
     private static let preventTearingKey = "preventTearing"
@@ -76,6 +79,7 @@ struct SessionPrefs: Equatable {
         if let raw = d.string(forKey: modifiersKey), let m = ModifierMapping(rawValue: raw) { p.modifiers = m }
         if d.object(forKey: forwardInputKey) != nil { p.forwardInput = d.bool(forKey: forwardInputKey) }
         if d.bool(forKey: showLatencyKey) { p.hudMode = d.bool(forKey: latencyDetailedKey) ? .detailed : .compact }
+        if d.object(forKey: showSessionReportKey) != nil { p.showSessionReport = d.bool(forKey: showSessionReportKey) }
         if d.object(forKey: bitrateKey) != nil {
             p.bitrateMbps = VideoBitrate.clamp(d.integer(forKey: bitrateKey))
         }
@@ -100,6 +104,7 @@ struct SessionPrefs: Equatable {
         d.set(forwardInput, forKey: Self.forwardInputKey)
         d.set(hudMode != .off, forKey: Self.showLatencyKey)
         d.set(hudMode == .detailed, forKey: Self.latencyDetailedKey)
+        d.set(showSessionReport, forKey: Self.showSessionReportKey)
         d.set(VideoBitrate.clamp(bitrateMbps), forKey: Self.bitrateKey)
         d.set(bitrateAutomatic, forKey: Self.bitrateAutomaticKey)
         d.set(preventTearing, forKey: Self.preventTearingKey)

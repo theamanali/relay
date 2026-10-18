@@ -1,8 +1,9 @@
 # Receive → screen spikes, 2026-10-17
 
-Status: reproduced and localized to the Mac presentation path; no performance
-fix made. Whether mouse movement contributes remains untested. The user reports
-no video/streaming tab open on the Mac, including paused video.
+Status: **cause found and fixed (2026-10-17, later the same night):** pointer
+motion while the app had the system cursor hidden with `NSCursor.hide()`. See
+[Pointer motion with a hidden cursor](#pointer-motion-with-a-hidden-cursor).
+The measurements below are the original, pre-fix investigation.
 
 Source `a2e90ef`, M3 Pro / macOS 27.0, real GAMING-PC, HEVC
 3024×1964 @ 120 Hz, 120 Mbps, Balanced, 4:2:0 8-bit, Ethernet,
@@ -70,3 +71,30 @@ to explain this post-decode delay.
 
 Local trace: `/tmp/relay-latency-20261017-baseline.trace`; extracted summary:
 `/tmp/relay-latency-trace-summary.txt`. Raw traces were not committed.
+
+## Pointer motion with a hidden cursor
+
+Reproduced on the Mac alone: bundled `Relay --host 127.0.0.1:8479` against
+`fakehost hang --paired --clip <testsrc2 3024×1964, 120 fps HEVC> --size
+3024x1964 --fps 120`, isolated `CFFIXED_USER_HOME`, VSync off. A small
+CGEvent tool posted `mouseMoved` at 125 Hz in a circle for 16 s, then ⌃⌥⌘Q
+(which logs the session report). 17 s sessions:
+
+| run | shown fps | receive → screen p50 / p95 |
+|---|---|---|
+| idle pointer, `NSCursor.hide()` | 111.1 | 2.5 / 17.5 ms |
+| moving pointer, `NSCursor.hide()` | 46.8–54.4 | 24.1–32.7 / 33.0–34.5 ms |
+| moving pointer on **another display** (the app gets no mouse events) | 54.4 | 24.1 / 33.0 ms |
+| moving, `--metal-vsync` (idle: 109.6 fps, 13.9 / 22.0) | 109.5 | 15.8 / 23.9 ms |
+| moving, `maximumDrawableCount` 3 | 115.5 | 19.3 / 27.0 ms |
+| moving, cursor not hidden | 101.7–110.3 | 2.5 / 16.3–31.9 ms |
+| moving, transparent cursor via cursor rect (the fix) | 107.0–111.6 | 2.5 / 11.3–25.1 ms |
+| idle, transparent cursor | 110.6 | 3.3 / 8.6 ms |
+
+Receive → decode stayed at 1.5–2.5 ms throughout. Input forwarding and the
+app's event handling are not involved (the other-display run); the system's
+handling of a moving hidden cursor stalls VSync-off drawable turnaround. The
+25.1 ms p95 run included a `screencapture -C` mid-session, which also showed
+no Mac cursor over the stream. `StreamView.hidesCursor` now installs a
+transparent 1×1 cursor over the view instead of hiding the cursor.
+Not yet checked on the real PC or with a physical trackpad.

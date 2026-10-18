@@ -19,7 +19,7 @@ struct SessionReportView: View {
                     .foregroundStyle(.secondary)
                 Text(verbatim: report.stream.summary)
                     .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
 
             HStack(spacing: Style.Space.m) {
@@ -33,7 +33,7 @@ struct SessionReportView: View {
             Grid(alignment: .trailing, horizontalSpacing: Style.Space.l, verticalSpacing: 6) {
                 GridRow {
                     Text("Stage (ms)").gridColumnAlignment(.leading)
-                    Text("p50"); Text("p95"); Text("p99"); Text("max"); Text("frames")
+                    Text("p50"); Text("p95"); Text("p99"); Text("max"); Text("samples")
                 }
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Divider()
@@ -51,8 +51,11 @@ struct SessionReportView: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text(verbatim: report.countersText.prefix(1).uppercased() + report.countersText.dropFirst())
-                    .font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: report.countersText.prefix(1).uppercased() + report.countersText.dropFirst())
+                    if let link = report.linkText { Text(verbatim: link) }
+                }
+                .font(.callout).foregroundStyle(.secondary)
                 Spacer()
                 Button(copied ? "Copied" : "Copy as Markdown") {
                     NSPasteboard.general.clearContents()
@@ -60,11 +63,19 @@ struct SessionReportView: View {
                     copied = true
                 }
             }
-            Text("Receive starts after decryption; the stages do not add up to input-to-photon latency.")
+            Text(verbatim: SessionReport.footnote)
                 .font(.caption).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(Style.Space.margin)
-        .frame(width: 520)
+        .frame(width: Self.width)
+    }
+
+    /// Wide enough for `StreamInfo.widest` on one line, never under 520.
+    static var width: CGFloat {
+        let font = NSFont.preferredFont(forTextStyle: .callout)
+        let text = (StreamInfo.widest.summary as NSString).size(withAttributes: [.font: font]).width
+        return max(520, ceil(text) + 2 * Style.Space.margin)
     }
 
     private func tile(_ title: String, value: Double?, unit: String, graded: Bool) -> some View {
