@@ -42,12 +42,7 @@ struct SessionReportView: View {
                     .lineLimit(1)
             }
 
-            HStack(spacing: Style.Space.m) {
-                tile(measure.prefix(1).uppercased() + measure.dropFirst() + ", median", value: summary.median, unit: "ms",
-                     graded: true)
-                tile("95% of frames within", value: summary.p95, unit: "ms", graded: true)
-                tile("Frames shown", value: report.presentedFPS, unit: "fps", graded: false)
-            }
+            header
 
             switch page {
             case .summary:
@@ -88,51 +83,120 @@ struct SessionReportView: View {
         Color(cgColor: StatsHUD.Level(value: value, budget: summary.budget).color)
     }
 
-    private func tile(_ title: String, value: Double?, unit: String, graded: Bool) -> some View {
-        let color: Color = graded ? value.map(level) ?? .primary : .primary
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(verbatim: value.map { String(format: "%.1f", $0) } ?? "–")
-                    .font(.title2.weight(.semibold)).monospacedDigit().foregroundStyle(color)
-                Text(verbatim: unit).font(.callout).foregroundStyle(.secondary)
+    /// The HUD's header at the report's size: the median, graded, with p95
+    /// under it; frames shown with the share skipped under that.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: Style.Space.tight) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(verbatim: summary.median.map { String(format: "%.1f", $0) } ?? "–")
+                        .font(.system(size: 34, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(summary.median.map(level) ?? .primary)
+                    Text(verbatim: "ms").font(.title3.weight(.medium)).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 0) {
+                    Text(verbatim: "p95: ").foregroundStyle(.secondary)
+                    Text(verbatim: Self.milliseconds(summary.p95)).fontWeight(.medium).monospacedDigit()
+                        .foregroundStyle(summary.p95.map(level) ?? .secondary)
+                }
+                .font(.callout)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: Style.Space.tight) {
+                Text(verbatim: String(format: "%.1f fps", report.presentedFPS))
+                    .font(.title3.weight(.semibold)).monospacedDigit()
+                if let skipped = skippedText {
+                    Text(verbatim: skipped).font(.callout.weight(.medium)).monospacedDigit()
+                        .foregroundStyle((report.skippedFraction ?? 0) >= 0.05
+                                         ? Color(cgColor: StatsHUD.Level.warning.color) : .secondary)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Style.Space.m)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    /// "1 frame (8.3 ms)" for the Mac's share, "3 frames (25.0 ms)" end to end.
-    private var budgetLabel: String {
-        let frames = Int((summary.budget / (1_000 / Double(max(report.stream.fps, 1)))).rounded())
-        return String(format: "%d frame%@ (%.1f ms)", frames, frames == 1 ? "" : "s", summary.budget)
+    /// "0.2% skipped"; nil before any frame was decoded.
+    private var skippedText: String? {
+        report.skippedFraction.map { f in
+            f > 0 && f < 0.001 ? "Under 0.1% skipped" : String(format: "%.1f%% skipped", f * 100)
+        }
+    }
+
+    /// The budget as the HUD labels it.
+    private var budgetLabel: String { String(format: "%.0f ms", summary.budget) }
+
+    /// The share of frames over the budget, for the histogram's budget line.
+    private var overBudget: Double? {
+        let h = report.headline
+        guard h.count > 0, let over = h.bars(width: summary.budget, upTo: summary.budget).last else { return nil }
+        return Double(over.count) / Double(h.count)
+    }
+
+    /// The timeline cut where it crosses the budget, so the part above can be
+    /// drawn red as in the HUD's sparkline.
+    private struct Run: Identifiable {
+        let id: Int
+        let over: Bool
+        var points: [(x: Double, y: Double)]
+    }
+
+    private func runs(_ points: [(second: Int, ms: Double)]) -> [Run] {
+        let budget = summary.budget
+        var runs: [Run] = []
+        for (a, b) in zip(points, points.dropFirst()) {
+            let p = (x: Double(a.second), y: a.ms), q = (x: Double(b.second), y: b.ms)
+            let aOver = p.y > budget, bOver = q.y > budget
+            if runs.isEmpty || runs[runs.count - 1].over != aOver { runs.append(Run(id: runs.count, over: aOver, points: [p])) }
+            if aOver != bOver {
+                let cross = (x: p.x + (q.x - p.x) * (budget - p.y) / (q.y - p.y), y: budget)
+                runs[runs.count - 1].points.append(cross)
+                runs.append(Run(id: runs.count, over: bOver, points: [cross]))
+            }
+            runs[runs.count - 1].points.append(q)
+        }
+        return runs
     }
 
     /// The median of each second, so a slow stretch shows where it happened.
     private var timeline: some View {
         let points = report.timeline.enumerated().compactMap { i, v in v.map { (second: i, ms: $0) } }
-        return VStack(alignment: .leading, spacing: Style.Space.xs) {
-            Text(verbatim: "Over the session, median per second").font(.caption).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: Style.Space.m) {
+            Text(verbatim: measure.prefix(1).uppercased() + measure.dropFirst() + ", median per second")
+                .foregroundStyle(.secondary)
             Chart {
                 ForEach(points, id: \.second) { p in
-                    LineMark(x: .value("Second", p.second), y: .value("ms", p.ms))
-                        .interpolationMethod(.monotone)
-                        .foregroundStyle(Color.accentColor)
+                    AreaMark(x: .value("Second", Double(p.second)), y: .value("ms", p.ms), series: .value("Run", "area"))
+                        .foregroundStyle(Color.primary.opacity(0.08))
+                }
+                // As in the HUD: the curve in the text color, red above the budget.
+                ForEach(runs(points)) { run in
+                    ForEach(Array(run.points.enumerated()), id: \.offset) { _, p in
+                        LineMark(x: .value("Second", p.x), y: .value("ms", p.y), series: .value("Run", run.id))
+                            .foregroundStyle(run.over ? Color(cgColor: StatsHUD.Level.bad.color) : Color.primary.opacity(0.85))
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                    }
                 }
                 RuleMark(y: .value("Budget", summary.budget))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                     .foregroundStyle(Color.secondary)
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text(verbatim: budgetLabel).font(.caption2).foregroundStyle(.secondary)
+                    }
             }
+            .chartXScale(domain: 0...Double(max(1, report.timeline.count - 1)))
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 6)) { value in
                     AxisGridLine()
                     AxisValueLabel {
-                        if let s = value.as(Int.self) { Text(verbatim: String(format: "%d:%02d", s / 60, s % 60)) }
+                        if let s = value.as(Double.self).map({ Int($0) }) { Text(verbatim: String(format: "%d:%02d", s / 60, s % 60)) }
                     }
                 }
             }
-            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                    AxisGridLine()
+                    AxisValueLabel { Self.msLabel(value) }
+                }
+            }
             .chartYScale(domain: 0...max(summary.budget * 1.2, (points.map(\.ms).max() ?? 0) * 1.1))
             .frame(height: 90)
         }
@@ -144,7 +208,11 @@ struct SessionReportView: View {
         let barWidth = summary.budget > 10 ? 1.0 : 0.5
         let limit = max(summary.budget * 2, (h.percentile(0.99) ?? 0) + barWidth).rounded(.up)
         let bars = h.bars(width: barWidth, upTo: limit)
-        return Chart {
+        // Captioned above, like the timeline and the breakdown.
+        return VStack(alignment: .leading, spacing: Style.Space.m) {
+            Text(verbatim: measure.prefix(1).uppercased() + measure.dropFirst() + ", every frame")
+                .foregroundStyle(.secondary)
+            Chart {
             ForEach(bars.filter { $0.count > 0 }, id: \.start) { bar in
                 RectangleMark(xStart: .value("ms", bar.start + barWidth * 0.08),
                               xEnd: .value("ms", bar.start + barWidth * 0.92),
@@ -155,22 +223,35 @@ struct SessionReportView: View {
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 .foregroundStyle(Color.secondary)
                 .annotation(position: .top, alignment: .leading) {
-                    Text(verbatim: budgetLabel).font(.caption2).foregroundStyle(.secondary)
+                    Text(verbatim: overBudget.map { String(format: "%@, %.1f%% of frames over", budgetLabel, $0 * 100) }
+                         ?? budgetLabel)
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
         }
         // Room for the budget label above the bars, clear of the timeline.
         .padding(.top, Style.Space.m)
         .chartXScale(domain: 0...(limit + barWidth))
-        .chartXAxisLabel(measure.prefix(1).uppercased() + measure.dropFirst() + " (ms)")
+        .chartXAxis {
+            AxisMarks { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel { Self.msLabel(value) }
+            }
+        }
         .chartYAxis(.hidden)
         .frame(height: 110)
+        }
     }
 
     /// Where the time went, as in the HUD: one bar, then each machine with
     /// its parts.
     private var breakdown: some View {
         VStack(alignment: .leading, spacing: Style.Space.s) {
-            Text("Where the time went, median").font(.caption).foregroundStyle(.secondary)
+            // Charts' first marks (axis label, budget note) sit a little
+            // above their frames; this evens the visible gap under each
+            // title (about 10 pt) with the bar's flat top.
+            Text("Latency split by stage, median").foregroundStyle(.secondary)
+                .padding(.bottom, 1.5)
             // The report's width is fixed, so the bar is sized directly: a
             // GeometryReader here fed back into the window's own sizing and
             // AppKit ended the app over an endless constraint pass.
@@ -201,23 +282,19 @@ struct SessionReportView: View {
                     }
                 }
                 Divider().gridCellUnsizedAxes(.horizontal)
+                // Label / value rows, as under the HUD's breakdown.
                 GridRow(alignment: .firstTextBaseline) {
                     Color.clear.frame(width: 8, height: 8)
-                    Text(verbatim: summary.inputLabel)
+                    Text(verbatim: summary.inputLabel).foregroundStyle(.secondary)
                     Text(verbatim: Self.milliseconds(summary.input)).monospacedDigit()
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                GridRow(alignment: .firstTextBaseline) {
-                    Color.clear.frame(width: 8, height: 8)
-                    Text(verbatim: report.skippedText)
-                        .gridCellColumns(2)
-                        .foregroundStyle((report.skippedFraction ?? 0) >= 0.05 ? Color(cgColor: StatsHUD.Level.warning.color)
-                                                                                : .primary)
-                }
-                if let data = report.dataText {
+                if let data = dataValue {
                     GridRow(alignment: .firstTextBaseline) {
                         Color.clear.frame(width: 8, height: 8)
-                        Text(verbatim: data).gridCellColumns(2)
+                        Text(verbatim: "Data").foregroundStyle(.secondary)
+                        Text(verbatim: data).monospacedDigit()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
             }
@@ -257,6 +334,21 @@ struct SessionReportView: View {
                 .font(.caption).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// "2.5 GB, 48 of 120 Mbps on average": the HUD's Data row over the session.
+    private var dataValue: String? {
+        guard report.receivedBytes > 0, report.duration > 0 else { return nil }
+        let bytes = Double(report.receivedBytes)
+        let size = bytes >= 1e9 ? String(format: "%.1f GB", bytes / 1e9) : String(format: "%.0f MB", bytes / 1e6)
+        return String(format: "%@, %.0f of %d Mbps on average", size, bytes * 8 / report.duration / 1e6,
+                      report.stream.bitrateMbps)
+    }
+
+    /// An axis value with its unit: "20 ms".
+    @ViewBuilder
+    private static func msLabel(_ value: AxisValue) -> some View {
+        if let v = value.as(Double.self) { Text(verbatim: String(format: "%g ms", v)) }
     }
 
     private static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "–" }

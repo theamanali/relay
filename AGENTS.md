@@ -651,9 +651,16 @@ documented there. What follows is only the mechanics that are easy to break:
   developer figures (offset, RTT/2, frame transfer, decrypt, p99, counters)
   live in the session report's Details page. The report (same day) uses
   `SessionReport.summary` (= `StatsHUD.Summary` over the session's
-  histograms) for its tiles, histogram and breakdown, plus
+  histograms) for its header, histogram and breakdown, plus
   `SecondMedians` (median per second of the headline measure) for a
-  timeline. Summary/Details is a segmented control that swaps content in
+  timeline. Summary mirrors the HUD (2026-10-18, user review): HUD-style
+  header instead of tiles (median + "p95:", fps + "% skipped"), the
+  timeline in the text color and red above the budget (`runs` cuts it at
+  the crossing), budget labelled "25 ms" on both charts (the histogram's
+  adds the share of frames over), "ms" on axis values, chart titles above
+  each chart at body size with ~10 pt measured to the first mark (the
+  breakdown title's 1.5 pt bottom padding evens it), "Latency split by
+  stage, median", then Input → PC / Data as label/value rows. Summary/Details is a segmented control that swaps content in
   place: a folding Details grew the window to 1,129 pt, taller than a
   MacBook screen. Never put a `GeometryReader` in the report: in the
   self-sizing window it looped constraint passes until AppKit crashed the

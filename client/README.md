@@ -145,11 +145,13 @@ The **Settings** gear in the footer opens:
   number, the session report's included.
   When a session ends with it on, the **session report** opens on the screen
   you streamed on (View ▸ Last Session Report any time). **Summary** leads
-  with the same measure as the HUD (PC → your screen: median, 95% of frames
-  within, frames shown), then the median per second over the session (so a
-  slow stretch shows when it happened), a histogram, where the time went
-  (PC, Network, Mac), input → PC, the share of frames skipped and the data received (total and
-  average rate). **Details**
+  with the HUD's header for the whole session (the median, p95 under it;
+  frames shown, the share skipped under that), then the median per second
+  over the session (red above the budget, as in the HUD, so a slow stretch
+  shows when it happened), every frame as a histogram with the share over
+  the budget, the latency split by stage (PC, Network, Mac), input → PC
+  and the data received (total, and average against the bitrate asked
+  for). **Details**
   swaps those for every stage's p50/p95/p99/max, the counters, the link rate
   and the clock estimate. Copy puts everything on the clipboard as Markdown. Three
   of its rows are measured on the Mac alone: **Frame
