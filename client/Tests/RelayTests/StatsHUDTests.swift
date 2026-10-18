@@ -13,7 +13,7 @@ final class StatsHUDTests: XCTestCase {
             transfer: .init(LatencyHistogram()), inputSent: .init(LatencyHistogram()), sparkline: (0..<480).map { 5 + Double($0 % 9) / 3 },
             frameBudget: 1_000 / 120,
             stream: StreamInfo(host: "Gaming PC", codec: "HEVC", width: 3024, height: 1964, fps: 120,
-                               bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false),
+                               bitrateMbps: 120, format: "4:4:4, Balanced", link: "Ethernet", vsync: false),
             counters: PresenterCounters(replaced: 3, late: 1, dropped: 0, unavailable: 0, gpuFailures: 0))
     }
 
@@ -62,7 +62,7 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(summary.groups.map(\.name), ["PC", "Network", "Mac"])
         // PC = image age + PC work; the network is measured one way.
         XCTAssertEqual(try XCTUnwrap(summary.groups[0].milliseconds), 3.3 + 4.1, accuracy: 0.1)
-        XCTAssertEqual(summary.groups[0].detail, "image age 3.3 · encode & send 4.1")
+        XCTAssertEqual(summary.groups[0].detail, "image age 3.3, encode & send 4.1")
         XCTAssertEqual(try XCTUnwrap(summary.groups[1].milliseconds), 0.4, accuracy: 0.05)
         XCTAssertEqual(summary.groups[1].detail, "one way, measured")
         XCTAssertEqual(summary.inputLabel, "Input → PC")
@@ -89,9 +89,9 @@ final class StatsHUDTests: XCTestCase {
 
     func testTheStreamFitsOnShortLines() {
         let lines = StatsHUD.streamLines(StreamInfo(host: "", codec: "HEVC", width: 3024, height: 1964, fps: 120,
-                                                    bitrateMbps: 120, format: "4:4:4 · 10-bit · Fastest",
+                                                    bitrateMbps: 120, format: "4:4:4, 10-bit, Fastest",
                                                     link: "Ethernet", vsync: false))
-        XCTAssertEqual(lines, ["HEVC 3024×1964 @ 120 Hz · 120 Mbps", "4:4:4 · 10-bit · Fastest", "Ethernet · VSync off"])
+        XCTAssertEqual(lines, ["HEVC 3024×1964 @ 120 Hz, 120 Mbps", "4:4:4, 10-bit, Fastest", "Ethernet, VSync off"])
         // Without picture options the link moves up: two lines.
         XCTAssertEqual(StatsHUD.streamLines(StreamInfo(host: "", codec: "HEVC", width: 1, height: 1, fps: 60,
                                                        bitrateMbps: 20, format: "", link: nil, vsync: true)).count, 2)

@@ -35,7 +35,7 @@ struct SessionReportView: View {
                     .labelsHidden()
                     .fixedSize()
                 }
-                Text(verbatim: "\(report.endedAt.formatted(date: .abbreviated, time: .shortened)) · \(report.lengthText)")
+                Text(verbatim: "\(report.endedAt.formatted(date: .abbreviated, time: .shortened)) for \(report.lengthText)")
                     .foregroundStyle(.secondary)
                 Text(verbatim: report.stream.summary)
                     .font(.callout).foregroundStyle(.secondary)

@@ -681,7 +681,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             host: options.fixedHost == nil ? SessionText.shortName(currentHost?.name ?? "PC") : "\(options.fixedHost!)",
             codec: stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
             width: stream.width, height: stream.height, fps: stream.fps, bitrateMbps: stream.bitrateMbps,
-            format: String(stream.formatNote.dropFirst(3)),
+            format: String(stream.formatNote.dropFirst(3)).replacingOccurrences(of: " · ", with: ", "),
             link: options.fixedHost == nil ? currentHost?.connectLink : nil,
             vsync: prefs.preventTearing))
         sessionReportPending = true

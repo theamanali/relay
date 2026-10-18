@@ -208,7 +208,7 @@ enum StatsHUD {
 
             let work = s.host.p50
             let pc: Double? = work.map { $0 + (s.contentAge.p50 ?? 0) }
-            let pcDetail = s.contentAge.p50.map { "image age \(StatsHUD.ms($0)) · encode & send \(StatsHUD.ms(work))" }
+            let pcDetail = s.contentAge.p50.map { "image age \(StatsHUD.ms($0)), encode & send \(StatsHUD.ms(work))" }
                 ?? "capture, encode & send"
             let measured = s.sentToReceived.p50
             let network = measured ?? s.networkHalfRTT
@@ -220,7 +220,7 @@ enum StatsHUD {
                       detail: measured != nil ? "one way, measured" : "half a ping round trip",
                       color: Self.networkColor),
                 Group(name: "Mac", milliseconds: mac,
-                      detail: "decode \(StatsHUD.ms(s.decode.p50)) · display \(StatsHUD.ms(display))",
+                      detail: "decode \(StatsHUD.ms(s.decode.p50)), display \(StatsHUD.ms(display))",
                       color: Self.macColor),
             ]
             let applied = s.inputApplied.p50
@@ -236,8 +236,8 @@ enum StatsHUD {
         var link = s.link.map { [$0] } ?? []
         link.append(s.vsync ? "VSync on" : "VSync off")
         if settings.isEmpty { settings = link; link = [] }
-        return ["\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz · \(s.bitrateMbps) Mbps",
-                settings.joined(separator: " · ")] + (link.isEmpty ? [] : [link.joined(separator: " · ")])
+        return ["\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz, \(s.bitrateMbps) Mbps",
+                settings.joined(separator: ", ")] + (link.isEmpty ? [] : [link.joined(separator: ", ")])
     }
 
     private static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "––" }

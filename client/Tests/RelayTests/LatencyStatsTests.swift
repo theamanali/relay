@@ -82,12 +82,12 @@ final class LatencyWindowTests: XCTestCase {
 final class LatencyStatsTests: XCTestCase {
     private let second: UInt64 = 1_000_000_000
     private let stream = StreamInfo(host: "Gaming PC", codec: "HEVC", width: 3024, height: 1964, fps: 120,
-                                    bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false)
+                                    bitrateMbps: 120, format: "4:4:4, Balanced", link: "Ethernet", vsync: false)
 
     @MainActor func testReportFitsTheWidestSummaryOnOneLine() {
         // The screenshot's line, and the widest the app can produce.
         let seen = StreamInfo(host: "", codec: "HEVC", width: 3024, height: 1964, fps: 120, bitrateMbps: 120,
-                              format: "4:4:4 · 10-bit · Fastest", link: "Ethernet", vsync: false)
+                              format: "4:4:4, 10-bit, Fastest", link: "Ethernet", vsync: false)
         let font = NSFont.preferredFont(forTextStyle: .callout)
         func width(_ s: StreamInfo) -> CGFloat { (s.summary as NSString).size(withAttributes: [.font: font]).width }
         XCTAssertGreaterThan(width(StreamInfo.widest), width(seen))
@@ -204,7 +204,7 @@ final class SessionReportTests: XCTestCase {
         (0..<100).forEach { toScreen.record($0 < 94 ? 5 : 9) }
         let report = SessionReport(
             stream: StreamInfo(host: "Gaming PC", codec: "HEVC", width: 3024, height: 1964, fps: 120,
-                               bitrateMbps: 120, format: "4:4:4 · Balanced", link: "Ethernet", vsync: false),
+                               bitrateMbps: 120, format: "4:4:4, Balanced", link: "Ethernet", vsync: false),
             endedAt: Date(timeIntervalSince1970: 0), duration: 61, presentedFPS: 119.6,
             toScreen: toScreen, decode: LatencyHistogram(), host: LatencyHistogram(), network: LatencyHistogram(),
             transfer: LatencyHistogram(), inputSent: LatencyHistogram(), decrypt: LatencyHistogram(),
@@ -214,10 +214,10 @@ final class SessionReportTests: XCTestCase {
             linkBitsPerSecond: 2.5e9,
             counters: PresenterCounters(replaced: 3, late: 1, dropped: 0, unavailable: 0, gpuFailures: 0))
         let md = report.markdown
-        XCTAssertTrue(md.contains("HEVC 3024×1964 @ 120 Hz · 120 Mbps · 4:4:4 · Balanced · Ethernet · VSync off"), md)
+        XCTAssertTrue(md.contains("HEVC 3024×1964 @ 120 Hz, 120 Mbps, 4:4:4, Balanced, Ethernet, VSync off"), md)
         XCTAssertTrue(md.contains("| Receive → screen | 5.0 | 9.0 | 9.0 | 9.0 | 100 |"), md)
         XCTAssertTrue(md.contains("| Receive → decode | – | – | – | – | 0 |"), md)
-        XCTAssertTrue(md.contains("replaced 3, late 1, dropped 0 · Frame data arrived at 2.50 Gb/s"), md)
+        XCTAssertTrue(md.contains("replaced 3, late 1, dropped 0. Frame data arrived at 2.50 Gb/s"), md)
         XCTAssertTrue(md.contains("| Input → sent | – | – | – | – | 0 |"), md)
         XCTAssertTrue(md.contains("PC clock +12.345 ms from this Mac (best delay 0.081 ms)"), md)
         XCTAssertTrue(md.contains("1:01"), md)
@@ -278,8 +278,8 @@ final class SessionReportSummaryTests: XCTestCase {
 
     func testMarkdownLeadsWithTheBreakdown() {
         let md = report(synced: true).markdown
-        XCTAssertTrue(md.contains("PC → your screen p50 14.9 p95 14.9 · PC 10.3 · Network 0.4 · Mac 4.4 · "
-            + "Input → PC 1.1 · skipped 0.5% of frames (ms)"), md)
+        XCTAssertTrue(md.contains("PC → your screen p50 14.9 p95 14.9, PC 10.3, Network 0.4, Mac 4.4, "
+            + "Input → PC 1.1, skipped 0.5% of frames (ms)"), md)
         XCTAssertTrue(md.contains("| Desktop → screen |"), "the full table is still there")
     }
 }

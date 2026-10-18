@@ -149,7 +149,7 @@ struct StreamInfo: Equatable, Sendable {
     var height: Int
     var fps: Int
     var bitrateMbps: Int
-    /// "4:4:4 · 10-bit · Balanced", or empty.
+    /// "4:4:4, 10-bit, Balanced", or empty.
     var format: String
     var link: String?
     var vsync: Bool
@@ -159,7 +159,7 @@ struct StreamInfo: Equatable, Sendable {
         if !format.isEmpty { parts.append(format) }
         if let link { parts.append(link) }
         parts.append(vsync ? "VSync on" : "VSync off")
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: ", ")
     }
 
     /// The widest summary this app can produce, for sizing the report so it
@@ -168,7 +168,7 @@ struct StreamInfo: Equatable, Sendable {
     static let widest = StreamInfo(
         host: "", codec: "H.264", width: 7680, height: 4320, fps: 240,
         bitrateMbps: VideoBitrate.maximum,
-        format: "4:4:4 · 10-bit · \(EncoderQuality.best.title)", link: "This MacBook", vsync: false
+        format: "4:4:4, 10-bit, \(EncoderQuality.best.title)", link: "This MacBook", vsync: false
     )
 }
 
@@ -584,7 +584,7 @@ struct SessionReport: Sendable {
         parts += s.groups.map { "\($0.name) \(Self.ms($0.milliseconds))" }
         parts.append("\(s.inputLabel) \(Self.ms(s.input))")
         parts.append(skippedText.lowercased())
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: ", ")
     }
 
     /// "PC clock +12.345 ms from this Mac (best delay 0.081 ms)", or nil.
@@ -629,8 +629,8 @@ struct SessionReport: Sendable {
             "",
             summaryLine + " (ms)",
             "",
-            "Length \(lengthText) · \(String(format: "%.1f", presentedFPS)) fps shown · \(countersText)"
-                + (linkText.map { " · " + $0 } ?? "") + (clockText.map { " · " + $0 } ?? ""),
+            "Length \(lengthText), \(String(format: "%.1f", presentedFPS)) fps shown, \(countersText)"
+                + (linkText.map { ". " + $0 } ?? "") + (clockText.map { ". " + $0 } ?? ""),
             "",
             "| stage (ms) | p50 | p95 | p99 | max | samples |",
             "|---|---|---|---|---|---|",
