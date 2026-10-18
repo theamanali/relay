@@ -58,7 +58,7 @@ struct SessionReportView: View {
 
             HStack {
                 Spacer()
-                Button(copied ? "Copied" : "Copy as Markdown") {
+                Button(copied ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(report.markdown, forType: .string)
                     copied = true

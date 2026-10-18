@@ -147,7 +147,7 @@ The **Settings** gear in the footer opens:
   slow stretch shows when it happened), a histogram, where the time went
   (PC, Network, Mac), input → PC and the share of frames skipped. **Details**
   swaps those for every stage's p50/p95/p99/max, the counters, the link rate
-  and the clock estimate. Copy as Markdown always includes everything. Three
+  and the clock estimate. Copy puts everything on the clipboard as Markdown. Three
   of its rows are measured on the Mac alone: **Frame
   transfer (est.)** is a frame's size over the rate its later records
   arrived at (frames that fit one record, or that were already buffered,
