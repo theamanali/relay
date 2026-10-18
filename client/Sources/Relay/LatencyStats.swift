@@ -190,6 +190,8 @@ final class LatencyStats: @unchecked Sendable {
         var contentAge = Stage(LatencyHistogram())
         var sentToReceived = Stage(LatencyHistogram())
         var inputApplied = Stage(LatencyHistogram())
+        /// Desktop → screen per frame, oldest first; empty without clock sync.
+        var desktopSparkline: [Double] = []
         /// PC minus Mac, and the delay of the exchange it came from.
         var clockOffsetMs: Double?
         var clockDelayMs: Double?
@@ -229,6 +231,7 @@ final class LatencyStats: @unchecked Sendable {
     private var sessionSentToReceived = LatencyHistogram()
     private var sessionInputApplied = LatencyHistogram()
     private var clock: ClockSync.Sample?
+    private var desktopSparkline = RecentSamples(capacity: sparklineFrames)
     /// A frame's PC present (Mac µs) and its Metal presentation meet here,
     /// whichever arrives first; keyed by the Mac's FRAME sequence.
     private var pendingShown: [UInt64: (present: Int64?, shown: Int64?)] = [:]
@@ -266,6 +269,7 @@ final class LatencyStats: @unchecked Sendable {
             sessionSentToReceived = LatencyHistogram()
             sessionInputApplied = LatencyHistogram()
             clock = nil
+            desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
             pendingShown = [:]
             sessionToScreen = LatencyHistogram()
             sessionDecode = LatencyHistogram()
@@ -377,6 +381,7 @@ final class LatencyStats: @unchecked Sendable {
             let ms = Double(s - p) / 1_000
             desktopToScreen.record(ms, at: nanos)
             sessionDesktopToScreen.record(ms)
+            desktopSparkline.append(ms)
             return
         }
         pendingShown[sequence] = entry
@@ -414,6 +419,7 @@ final class LatencyStats: @unchecked Sendable {
                 contentAge: Stage(contentAge.merged(at: nanos)),
                 sentToReceived: Stage(sentToReceived.merged(at: nanos)),
                 inputApplied: Stage(inputApplied.merged(at: nanos)),
+                desktopSparkline: desktopSparkline.ordered,
                 clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
                 clockDelayMs: clock.map { Double($0.delay) / 1_000 },
                 sparkline: sparkline.ordered,

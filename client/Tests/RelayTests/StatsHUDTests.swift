@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import XCTest
 @testable import Relay
@@ -39,6 +40,74 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(StatsHUD.Level(value: 5, budget: 8.33), .good)
         XCTAssertEqual(StatsHUD.Level(value: 7, budget: 8.33), .warning)
         XCTAssertEqual(StatsHUD.Level(value: 9, budget: 8.33), .bad)
+    }
+
+    private func synced(_ base: LatencyStats.HUDSnapshot) -> LatencyStats.HUDSnapshot {
+        var s = base
+        func stage(_ v: Double) -> LatencyStats.Stage { var h = LatencyHistogram(); h.record(v); return .init(h) }
+        s.desktopToScreen = stage(16.2)
+        s.contentAge = stage(3.3)
+        s.sentToReceived = stage(0.4)
+        s.inputApplied = stage(1.1)
+        s.desktopSparkline = [15, 16, 17]
+        return s
+    }
+
+    func testTheHeadlineIsPCToScreenOnceSynced() throws {
+        let summary = StatsHUD.Summary(synced(snapshot()))
+        XCTAssertEqual(summary.label, "PC → your screen, median")
+        XCTAssertEqual(try XCTUnwrap(summary.median), 16.2, accuracy: 0.05)
+        XCTAssertEqual(summary.sparkline, [15, 16, 17])
+        XCTAssertEqual(summary.budget, 3 * 1_000 / 120, accuracy: 1e-9)
+        XCTAssertEqual(summary.groups.map(\.name), ["PC", "Network", "Mac"])
+        // PC = image age + PC work; the network is measured one way.
+        XCTAssertEqual(try XCTUnwrap(summary.groups[0].milliseconds), 3.3 + 4.1, accuracy: 0.1)
+        XCTAssertEqual(summary.groups[0].detail, "image age 3.3 · encode & send 4.1")
+        XCTAssertEqual(try XCTUnwrap(summary.groups[1].milliseconds), 0.4, accuracy: 0.05)
+        XCTAssertEqual(summary.groups[1].detail, "one way, measured")
+        XCTAssertEqual(summary.inputLabel, "Input → PC")
+        XCTAssertEqual(try XCTUnwrap(summary.input), 1.1, accuracy: 0.05)
+    }
+
+    func testAnOlderPCFallsBackToTheMacsShare() throws {
+        let summary = StatsHUD.Summary(snapshot())
+        XCTAssertEqual(summary.label, "receive → screen, median")
+        XCTAssertEqual(try XCTUnwrap(summary.median), 5.4, accuracy: 0.05)
+        XCTAssertEqual(summary.budget, 1_000 / 120, accuracy: 1e-9)
+        XCTAssertEqual(summary.groups[0].detail, "capture, encode & send")
+        XCTAssertEqual(try XCTUnwrap(summary.groups[1].milliseconds), 0.21, accuracy: 1e-9)
+        XCTAssertEqual(summary.groups[1].detail, "half a ping round trip")
+        XCTAssertEqual(summary.inputLabel, "Input → sent")
+    }
+
+    func testSkippedFramesArePerSecondNotCumulative() {
+        var s = snapshot()
+        XCTAssertEqual(StatsHUD.Summary(s).skippedPerSecond, 0) // 120.1 decoded, 119.8 shown
+        s.presentedFPS = 52
+        XCTAssertEqual(StatsHUD.Summary(s).skippedPerSecond, 68)
+    }
+
+    func testTheStreamFitsOnShortLines() {
+        let lines = StatsHUD.streamLines(StreamInfo(host: "", codec: "HEVC", width: 3024, height: 1964, fps: 120,
+                                                    bitrateMbps: 120, format: "4:4:4 · 10-bit · Fastest",
+                                                    link: "Ethernet", vsync: false))
+        XCTAssertEqual(lines, ["HEVC 3024×1964 @ 120 Hz · 120 Mbps", "4:4:4 · 10-bit · Fastest", "Ethernet · VSync off"])
+        // Without picture options the link moves up: two lines.
+        XCTAssertEqual(StatsHUD.streamLines(StreamInfo(host: "", codec: "HEVC", width: 1, height: 1, fps: 60,
+                                                       bitrateMbps: 20, format: "", link: nil, vsync: true)).count, 2)
+        // Even the widest stream the app can produce is never cut off.
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        for line in StatsHUD.streamLines(StreamInfo.widest) {
+            let width = (line as NSString).size(withAttributes: [.font: font]).width
+            XCTAssertLessThanOrEqual(width, StatsHUD.width - 24, line)
+        }
+    }
+
+    func testDetailedHeightMatchesWhatIsDrawn() throws {
+        let image = try XCTUnwrap(StatsHUD.render(synced(snapshot()), mode: .detailed, scale: 1))
+        XCTAssertEqual(CGFloat(image.height), StatsHUD.height(for: snapshot(), mode: .detailed).rounded(.up))
+        // The bottom padding stays clear of text: the last rows are inside.
+        XCTAssertLessThan(StatsHUD.height(for: snapshot(), mode: .detailed), 400)
     }
 
     func testModeCycles() {

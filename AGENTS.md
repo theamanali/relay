@@ -635,9 +635,16 @@ documented there. What follows is only the mechanics that are easy to break:
   while on); `MetalPresenter.setOverlay` uploads it as a new texture and
   `encode` blends it as a second quad in the same pass (premultiplied, nearest
   sampling, pixel margin). It refreshes only when a video frame arrives.
-  With a CAP_TIMING PC the detailed HUD adds Desktop → screen, Content
-  age, Sent → received, Input → applied and the clock offset (13 rows);
-  see Status, "Clock sync + frame timing".
+  HUD layout (2026-10-18, user request): the headline is Desktop → screen
+  ("PC → your screen", colored against three refresh intervals) once
+  synced, else receive → screen (one interval). Detailed = a bar and three
+  groups (PC = content age + PC work, Network = sent → received or RTT/2,
+  Mac = receive → screen split into decode and display), then input → PC,
+  skipped frames/s (decoded − shown) and the stream on up to three lines
+  that always fit. What to show is `StatsHUD.Summary` (pure, tested); the
+  developer figures (offset, RTT/2, frame transfer, decrypt, p99, counters)
+  live in the session report. Panel alpha 0.9 so bright content behind it
+  does not show through. Clock sync: see Status, "Clock sync + frame timing".
   The first 3 s after STREAM_START (`LatencyStats.warmUp`) are not recorded
   and the HUD stays hidden until they pass.
   Mac-only stages (2026-10-18): `ReceiveTimer` (pure, in

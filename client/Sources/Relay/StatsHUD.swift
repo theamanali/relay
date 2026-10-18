@@ -78,92 +78,193 @@ enum StatsHUD {
         let panel = CGPath(roundedRect: CGRect(x: 0.5, y: 0.5, width: width - 1, height: height - 1),
                            cornerWidth: 11, cornerHeight: 11, transform: nil)
         ctx.addPath(panel)
-        ctx.setFillColor(CGColor(gray: 0.07, alpha: 0.78))
+        ctx.setFillColor(CGColor(gray: 0.07, alpha: 0.9))
         ctx.fillPath()
         ctx.addPath(panel)
         ctx.setStrokeColor(hairline)
         ctx.setLineWidth(1)
         ctx.strokePath()
 
-        let budget = s.frameBudget
+        let summary = Summary(s)
         let inner = width - 2 * padding
         var y = padding
 
-        // Headline: median time to screen, colored against the budget.
-        let level = s.toScreen.p50.map { Level(value: $0, budget: budget) }
-        let big = canvas.text(s.toScreen.p50.map { String(format: "%.1f", $0) } ?? "––",
+        // Headline: PC → this screen when the clocks are synced, else the
+        // Mac's own share; colored against its budget.
+        let level = summary.median.map { Level(value: $0, budget: summary.budget) }
+        let big = canvas.text(summary.median.map { String(format: "%.1f", $0) } ?? "––",
                               font: font(26, .semibold), color: level?.color ?? primary, x: padding, baseline: y + 25)
         canvas.text("ms", font: font(13, .medium), color: secondary, x: padding + big + 3, baseline: y + 25)
         canvas.text(String(format: "%.0f fps", s.presentedFPS), font: font(13, .semibold), color: primary,
                     right: padding + inner, baseline: y + 14)
-        let p95Level = s.toScreen.p95.map { Level(value: $0, budget: budget) }
-        canvas.text("p95 " + ms(s.toScreen.p95), font: font(11, .medium), color: p95Level?.color ?? secondary,
+        let p95Level = summary.p95.map { Level(value: $0, budget: summary.budget) }
+        canvas.text("p95 " + ms(summary.p95), font: font(11, .medium), color: p95Level?.color ?? secondary,
                     right: padding + inner, baseline: y + 29)
         y += 32
-        canvas.text("receive → screen, median", font: font(10), color: secondary, x: padding, baseline: y + 9)
+        canvas.text(summary.label, font: font(10), color: secondary, x: padding, baseline: y + 9)
         y += 18
 
-        sparkline(ctx: ctx, canvas: canvas, values: s.sparkline, budget: budget,
+        sparkline(ctx: ctx, canvas: canvas, values: summary.sparkline, budget: summary.budget,
                   frame: CGRect(x: padding, y: y, width: inner, height: sparklineHeight))
         y += sparklineHeight
 
         guard mode == .detailed else { return ctx.makeImage() }
 
-        y += 10
+        y += gap
         divider(ctx, y: y)
-        y += 6
-        let rows: [(String, String, CGColor)] = [
-            ("p99 to screen", ms(s.toScreen.p99), s.toScreen.p99.map { Level(value: $0, budget: budget).color } ?? primary),
-            ("Desktop → screen", ms(s.desktopToScreen.p50), primary),
-            ("Content age", ms(s.contentAge.p50), primary),
-            ("PC work p50 / p95", ms(s.host.p50) + " / " + ms(s.host.p95), primary),
-            ("Sent → received", ms(s.sentToReceived.p50), primary),
-            ("Network (RTT/2)", ms(s.networkHalfRTT), primary),
-            ("Frame transfer (est.)", ms(s.transfer.p50), primary),
-            ("Receive → decode", ms(s.decode.p50), primary),
-            ("Input → sent", ms(s.inputSent.p50), primary),
-            ("Input → applied", ms(s.inputApplied.p50), primary),
-            ("Clock offset", s.clockOffsetMs.map { String(format: "%+.2f", $0) } ?? "––", primary),
-            ("Decoded", String(format: "%.0f fps", s.decodedFPS), primary),
-            ("Replaced · late · dropped", "\(s.counters.replaced) · \(s.counters.late) · \(s.counters.dropped)", primary),
-        ]
-        assert(rows.count == detailRows, "height(for:mode:) counts detailRows")
-        for (label, value, color) in rows {
-            canvas.text(label, font: font(11), color: secondary, x: padding, baseline: y + 12)
-            canvas.text(value, font: font(11, .medium), color: color, right: padding + inner, baseline: y + 12)
+        y += gap
+
+        // Where the time goes: one bar, then one block per machine.
+        bar(ctx, segments: summary.groups.map { ($0.milliseconds ?? 0, $0.color) },
+            frame: CGRect(x: padding, y: y, width: inner, height: barHeight))
+        y += barHeight + gap
+        for group in summary.groups {
+            ctx.setFillColor(group.color)
+            ctx.fillEllipse(in: CGRect(x: padding, y: y + 4.5, width: 7, height: 7))
+            canvas.text(group.name, font: font(11, .medium), color: primary, x: padding + 12, baseline: y + 12)
+            canvas.text(milliseconds(group.milliseconds), font: font(11, .medium), color: primary,
+                        right: padding + inner, baseline: y + 12)
             y += rowHeight
+            canvas.text(group.detail, font: font(10), color: secondary, x: padding + 12, baseline: y + 10,
+                        maxWidth: inner - 12)
+            y += detailHeight
         }
+
+        y += gap - 4
+        divider(ctx, y: y)
+        y += gap - 2
+        canvas.text(summary.inputLabel, font: font(11), color: secondary, x: padding, baseline: y + 12)
+        canvas.text(milliseconds(summary.input), font: font(11, .medium), color: primary,
+                    right: padding + inner, baseline: y + 12)
+        y += rowHeight
+        canvas.text("Skipped frames", font: font(11), color: secondary, x: padding, baseline: y + 12)
+        canvas.text(String(format: "%.0f/s", summary.skippedPerSecond), font: font(11, .medium),
+                    color: summary.skippedPerSecond >= max(1, s.decodedFPS * 0.05) ? Level.warning.color : primary,
+                    right: padding + inner, baseline: y + 12)
+        y += rowHeight
+
         if let stream = s.stream {
-            y += 6
+            y += gap - 4
             divider(ctx, y: y)
-            y += 6
+            y += gap - 2
             for line in streamLines(stream) {
                 canvas.text(line, font: font(10), color: secondary, x: padding, baseline: y + 11, maxWidth: inner)
-                y += 14
+                y += streamLineHeight
             }
         }
         return ctx.makeImage()
     }
 
+    private static let gap: CGFloat = 10
+    private static let barHeight: CGFloat = 6
+    private static let detailHeight: CGFloat = 15
+    private static let streamLineHeight: CGFloat = 14
+
     static func height(for s: LatencyStats.HUDSnapshot, mode: HUDMode) -> CGFloat {
         let compact = padding + 32 + 18 + sparklineHeight + padding
         guard mode == .detailed else { return compact }
-        let stream: CGFloat = s.stream == nil ? 0 : 12 + 2 * 14
-        return compact + 16 + CGFloat(detailRows) * rowHeight + stream
+        let breakdown = 2 * gap + barHeight + gap + 3 * (rowHeight + detailHeight)
+        let footer = (gap - 4) + (gap - 2) + 2 * rowHeight
+        let stream = s.stream.map { (gap - 4) + (gap - 2) + CGFloat(streamLines($0).count) * streamLineHeight } ?? 0
+        return compact + breakdown + footer + stream
     }
 
-    /// Rows in the detailed view, below the divider.
-    static let detailRows = 13
+    /// What the HUD shows, decided apart from the drawing so it can be
+    /// tested: the headline, the per-machine breakdown and the fallbacks for
+    /// a PC without clock sync.
+    struct Summary: Equatable {
+        struct Group: Equatable {
+            let name: String
+            let milliseconds: Double?
+            let detail: String
+            let color: CGColor
+        }
 
-    private static func streamLines(_ s: StreamInfo) -> [String] {
-        var second = s.format.isEmpty ? [] : [s.format]
-        if let link = s.link { second.append(link) }
-        second.append(s.vsync ? "VSync on" : "VSync off")
+        /// The headline and its sparkline: desktop → screen once synced.
+        let label: String
+        let median: Double?
+        let p95: Double?
+        let sparkline: [Double]
+        /// The budget the headline is colored against: one refresh for the
+        /// Mac's share, three for PC → screen, which spans capture, encode,
+        /// the network and display.
+        let budget: Double
+        let groups: [Group]
+        let inputLabel: String
+        let input: Double?
+        let skippedPerSecond: Double
+
+        static let pcColor = CGColor(srgbRed: 0.39, green: 0.62, blue: 1, alpha: 1)
+        static let networkColor = CGColor(srgbRed: 0.75, green: 0.55, blue: 1, alpha: 1)
+        static let macColor = CGColor(srgbRed: 0.3, green: 0.84, blue: 0.74, alpha: 1)
+
+        init(_ s: LatencyStats.HUDSnapshot) {
+            let endToEnd = s.desktopToScreen.p50 != nil
+            label = endToEnd ? "PC → your screen, median" : "receive → screen, median"
+            median = endToEnd ? s.desktopToScreen.p50 : s.toScreen.p50
+            p95 = endToEnd ? s.desktopToScreen.p95 : s.toScreen.p95
+            sparkline = endToEnd ? s.desktopSparkline : s.sparkline
+            budget = s.frameBudget * (endToEnd ? 3 : 1)
+
+            let work = s.host.p50
+            let pc: Double? = work.map { $0 + (s.contentAge.p50 ?? 0) }
+            let pcDetail = s.contentAge.p50.map { "image age \(StatsHUD.ms($0)) · encode & send \(StatsHUD.ms(work))" }
+                ?? "capture, encode & send"
+            let measured = s.sentToReceived.p50
+            let network = measured ?? s.networkHalfRTT
+            let mac = s.toScreen.p50
+            let display = mac.flatMap { m in s.decode.p50.map { max(0, m - $0) } }
+            groups = [
+                Group(name: "PC", milliseconds: pc, detail: pcDetail, color: Self.pcColor),
+                Group(name: "Network", milliseconds: network,
+                      detail: measured != nil ? "one way, measured" : "half a ping round trip",
+                      color: Self.networkColor),
+                Group(name: "Mac", milliseconds: mac,
+                      detail: "decode \(StatsHUD.ms(s.decode.p50)) · display \(StatsHUD.ms(display))",
+                      color: Self.macColor),
+            ]
+            let applied = s.inputApplied.p50
+            inputLabel = applied != nil || endToEnd ? "Input → PC" : "Input → sent"
+            input = applied ?? (endToEnd ? nil : s.inputSent.p50)
+            skippedPerSecond = max(0, (s.decodedFPS - s.presentedFPS).rounded())
+        }
+    }
+
+    /// Up to three short lines, so nothing is cut off.
+    static func streamLines(_ s: StreamInfo) -> [String] {
+        var settings = s.format.isEmpty ? [] : [s.format]
+        var link = s.link.map { [$0] } ?? []
+        link.append(s.vsync ? "VSync on" : "VSync off")
+        if settings.isEmpty { settings = link; link = [] }
         return ["\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz · \(s.bitrateMbps) Mbps",
-                second.joined(separator: " · ")]
+                settings.joined(separator: " · ")] + (link.isEmpty ? [] : [link.joined(separator: " · ")])
     }
 
-    private static func ms(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "––" }
+    private static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "––" }
+
+    /// Proportional segments with a sliver of space between them; empty
+    /// segments are left out.
+    private static func bar(_ ctx: CGContext, segments: [(Double, CGColor)], frame: CGRect) {
+        ctx.saveGState()
+        ctx.addPath(CGPath(roundedRect: frame, cornerWidth: frame.height / 2, cornerHeight: frame.height / 2,
+                           transform: nil))
+        ctx.clip()
+        ctx.setFillColor(CGColor(gray: 1, alpha: 0.08))
+        ctx.fill(frame)
+        let total = segments.reduce(0) { $0 + max(0, $1.0) }
+        if total > 0 {
+            var x = frame.minX
+            for (value, color) in segments where value > 0 {
+                let w = frame.width * CGFloat(value / total)
+                ctx.setFillColor(color)
+                ctx.fill(CGRect(x: x, y: frame.minY, width: max(1, w - 1.5), height: frame.height))
+                x += w
+            }
+        }
+        ctx.restoreGState()
+    }
+
+    fileprivate static func ms(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "––" }
 
     private static func divider(_ ctx: CGContext, y: CGFloat) {
         ctx.setFillColor(hairline)

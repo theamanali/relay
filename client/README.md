@@ -127,10 +127,16 @@ The **Settings** gear in the footer opens:
   why.
 - **Enable VSync**: prevents tearing but adds up to a frame of delay.
   Off by default and switchable mid-session.
-- **Show latency overlay**: a small HUD drawn into the stream's corner: time
-  to screen, frame rate and a sparkline against one refresh interval.
-  ⌃⌥⌘L cycles Off → Compact → Detailed (PC work, network, estimated frame
-  transfer, decode, input → sent, dropped frames and the stream's settings); also View ▸ Latency Overlay. It does
+- **Show latency overlay**: a small HUD drawn into the stream's corner. Its
+  headline is how far behind the PC your screen is (PC → your screen, measured
+  across both machines; a PC without clock sync shows the Mac's own share,
+  receive → screen), with frame rate, p95 and a sparkline.
+  ⌃⌥⌘L cycles Off → Compact → Detailed; Detailed adds where the time goes: a
+  bar split into PC, Network and Mac, each with its parts (image age and
+  encode & send; one-way network; decode and display), then input → PC,
+  skipped frames per second and the stream's settings. Also View ▸ Latency
+  Overlay. Clock offset, ping estimate, frame transfer, decrypt and the
+  counters are in the session report, not the HUD. It does
   not slow the stream: it is part of the video frame, not a window over it.
   It appears 3 seconds into a session: start-up frames are left out of every
   number, the session report's included.
