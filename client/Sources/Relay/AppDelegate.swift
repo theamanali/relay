@@ -242,9 +242,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             prefs.save()
             self.applyPrefs()
         }
-        // Before the first update, which may already list the last PC.
-        pickerModel.lastHostKey = UserDefaults.standard.data(forKey: Self.lastHostKey)
-        pickerModel.storedName = { key in ClientState.nicknames()[key] ?? ClientState.knownHosts()[key] }
         p.update(hosts: latestHosts)
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -514,7 +511,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     /// the socket at all: a pinned attempt on the cable plus its unpinned
     /// retry, each with a 5 s SYN timeout, and some room for resolution.
     static let pickerDialTimeout: TimeInterval = 12
-    static let lastHostKey = "lastHostKey"
 
     private func startSession(_ base: HostConnection.Options, screen: NSScreen, mode: StreamMode) {
         var opts = base
@@ -600,8 +596,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     func windowDidBecomeKey(_ notification: Notification) {
         if (notification.object as? NSWindow) === picker?.window {
             pickerModel.pickerActive = true
-            // The last PC may have been found while another app was in front.
-            pickerModel.autoConnectIfReady()
         }
         guard (notification.object as? NSWindow) === window else { return }
         pickerModel.pickerActive = false
@@ -667,11 +661,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         NSLog("Stream: %@ %d×%d @ %d fps, %d Mbps%@", stream.codec == .hevc ? "HEVC" : stream.codec == .h264 ? "H.264" : "AV1",
               stream.width, stream.height, stream.fps, stream.bitrateMbps,
               stream.formatSettings.map { ", " + $0 }.joined())
-        // The PC "Connect when Relay opens" goes back to.
-        if options.fixedHost == nil, let key = currentHost?.publicKey {
-            UserDefaults.standard.set(key, forKey: Self.lastHostKey)
-            pickerModel.lastHostKey = key
-        }
         if let pending = self.pendingSession, !self.kioskActive {
             self.window.setFrame(pending.screen.frame, display: false)
             self.picker?.status = SessionText.starting(width: stream.width, height: stream.height, fps: stream.fps,

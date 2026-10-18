@@ -39,8 +39,6 @@ struct SessionPrefs: Equatable {
     /// Metal VSync: no tearing, up to a frame more delay.
     var preventTearing = false
     var scrollDirection: ScrollDirection = .system
-    /// Connect to the last PC used once it is found after launch.
-    var connectAtLaunch = false
     /// Asked of PCs that offer them (TXT `enc`); others ignore them.
     var encoderQuality: EncoderQuality = .fastest
     var fullColor = false
@@ -71,7 +69,6 @@ struct SessionPrefs: Equatable {
     private static let bitrateAutomaticKey = "bitrateAutomatic"
     private static let preventTearingKey = "preventTearing"
     private static let scrollDirectionKey = "scrollDirection"
-    private static let connectAtLaunchKey = "connectAtLaunch"
     private static let encoderQualityKey = "encoderQuality"
     private static let fullColorKey = "fullColor"
     private static let tenBitKey = "tenBit"
@@ -94,7 +91,6 @@ struct SessionPrefs: Equatable {
         }
         if d.object(forKey: preventTearingKey) != nil { p.preventTearing = d.bool(forKey: preventTearingKey) }
         if let raw = d.string(forKey: scrollDirectionKey), let s = ScrollDirection(rawValue: raw) { p.scrollDirection = s }
-        if d.object(forKey: connectAtLaunchKey) != nil { p.connectAtLaunch = d.bool(forKey: connectAtLaunchKey) }
         if let q = EncoderQuality(rawValue: d.integer(forKey: encoderQualityKey)) { p.encoderQuality = q }
         p.fullColor = d.bool(forKey: fullColorKey)
         p.tenBit = d.bool(forKey: tenBitKey)
@@ -111,7 +107,6 @@ struct SessionPrefs: Equatable {
         d.set(bitrateAutomatic, forKey: Self.bitrateAutomaticKey)
         d.set(preventTearing, forKey: Self.preventTearingKey)
         d.set(scrollDirection.rawValue, forKey: Self.scrollDirectionKey)
-        d.set(connectAtLaunch, forKey: Self.connectAtLaunchKey)
         d.set(encoderQuality.rawValue, forKey: Self.encoderQualityKey)
         d.set(fullColor, forKey: Self.fullColorKey)
         d.set(tenBit, forKey: Self.tenBitKey)

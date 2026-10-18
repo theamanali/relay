@@ -105,11 +105,7 @@ private struct HostList: View {
     var body: some View {
         // One ForEach over stably identified items, so rows are never matched
         // by position (that cross-faded the Paired and Available titles).
-        // Choosing a row, by click or arrow keys, cancels connecting at launch.
-        List(selection: Binding(get: { model.selection }, set: {
-            model.disarmAutoConnect()
-            model.selection = $0
-        })) {
+        List(selection: $model.selection) {
             ForEach(model.listItems) { item in
                 switch item {
                 case let .title(section, collapsed, collapsible):
@@ -288,7 +284,6 @@ private struct HostRow: View {
         }
         .simultaneousGesture(TapGesture().onEnded {
             if model.renamingID != row.id { model.finishRename() }
-            model.disarmAutoConnect()
             model.selection = row.id
         })
         .contextMenu { contextMenu }
@@ -454,12 +449,6 @@ struct SessionSettingsView: View {
     // the left, its control on the right, details as a subtitle.
     var body: some View {
         Form {
-            Section("General") {
-                SettingSwitch("Connect when Relay opens",
-                              detail: model.lastHostName.map { "Reconnects to \(SessionText.shortName($0)) once found." }
-                                  ?? "Reconnects to the last PC you used.",
-                              isOn: preference(\.connectAtLaunch))
-            }
             Section("Video") {
                 // Automatic follows the resolution, refresh rate and link;
                 // the Bitrate row below shows its value, greyed out, until

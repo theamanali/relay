@@ -102,14 +102,9 @@ The footer has a resolution popup (native, 75% or 50% of the screen the window
 is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
 rate). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
-The **Settings** gear in the footer opens a grouped pane (General, Video,
-Latency, Input) of switches, laid out like System Settings:
+The **Settings** gear in the footer opens a grouped pane (Video, Latency,
+Input) of switches, laid out like System Settings:
 
-- **Connect when Relay opens**: off by default. Once the last PC you streamed
-  from shows up paired, Relay connects to it as if you had pressed Connect
-  (the Wi-Fi warning still applies; Cancel stops it). Only once per launch,
-  only while the picker window is in front, and not after you have done
-  anything in the picker.
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
   for less (20–200 Mbps), capped at 80 Mbps over Wi-Fi. Over a gigabit cable

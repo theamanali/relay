@@ -42,17 +42,6 @@ final class SessionPrefsTests: XCTestCase {
         XCTAssertFalse(SessionPrefs.load(from: defaults).preventTearing)
     }
 
-    @MainActor func testConnectAtLaunchIsOffUntilChosen() async {
-        let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertFalse(SessionPrefs.load(from: defaults).connectAtLaunch)
-        var saved = SessionPrefs()
-        saved.connectAtLaunch = true
-        saved.save(to: defaults)
-        XCTAssertTrue(SessionPrefs.load(from: defaults).connectAtLaunch)
-    }
-
     @MainActor func testSessionReportStaysClosedUntilTurnedOn() async {
         let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

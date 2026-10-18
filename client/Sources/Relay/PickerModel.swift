@@ -54,9 +54,7 @@ final class PickerModel {
     var renameDraft = ""
     var pinPrompt: PINPrompt?
     var notice: Notice?
-    var forgetCandidate: Row? {
-        didSet { if forgetCandidate != nil { disarmAutoConnect() } }
-    }
+    var forgetCandidate: Row?
     /// A paired PC about to be connected over Wi-Fi: the picker asks first.
     var wifiCandidate: Row?
     var pickerActive = true
@@ -72,7 +70,6 @@ final class PickerModel {
     /// sits too close to the screen's right edge. Chosen here because
     /// AppKit's own fallback for a popover would try the left side next.
     func showSettings() {
-        disarmAutoConnect()
         settingsEdge = settingsFitsRight() ? .trailing : .bottom
         settingsPresented = true
     }
@@ -86,7 +83,6 @@ final class PickerModel {
     /// paired PC reached that way gets a warning first, unless the user has
     /// turned it off. Cancel and Pair pass straight through.
     func requestConnect() {
-        disarmAutoConnect()
         finishRename()
         if !connecting, let row = selected, row.paired, connectsOverWiFi(row.host),
            !UserDefaults.standard.bool(forKey: Self.wifiWarningSuppressedKey) {
@@ -174,7 +170,6 @@ final class PickerModel {
     /// nothing selected selects the first PC, as the list does elsewhere.
     func toggle(_ section: PickerSection) {
         guard canCollapse(section) else { return }
-        disarmAutoConnect()
         if collapsed.remove(section) == nil { collapsed.insert(section) }
         if selection.map({ !visibleRowIDs.contains($0) }) ?? true { selection = visibleRowIDs.first }
     }
@@ -211,42 +206,6 @@ final class PickerModel {
         } else if selection == nil {
             selection = visibleRowIDs.first
         }
-        autoConnectIfReady()
-    }
-
-    // MARK: connect when Relay opens
-
-    /// The last PC streamed from (AppDelegate keeps it current), the one
-    /// "Connect when Relay opens" connects to.
-    @ObservationIgnored var lastHostKey: Data?
-    /// Its nickname or remembered name while it is not in the list.
-    @ObservationIgnored var storedName: (Data) -> String? = { _ in nil }
-    /// Until the first connect or any picker action. Never re-armed: a
-    /// session that ends returns to the picker and stays there.
-    @ObservationIgnored private(set) var autoConnectArmed = true
-    /// A PC that turns up while another app is in front never takes over
-    /// the screen; HostPickerWindowController reports the window's key state.
-    @ObservationIgnored var isPickerKey: () -> Bool = { true }
-
-    func disarmAutoConnect() { autoConnectArmed = false }
-
-    /// Connect to the last PC once it shows up paired, as if Connect were
-    /// pressed (so the Wi-Fi warning still applies). Called on every list
-    /// update and when the picker window becomes key.
-    func autoConnectIfReady() {
-        guard autoConnectArmed, prefs.connectAtLaunch, let key = lastHostKey,
-              pickerActive, !connecting, renamingID == nil, pinPrompt == nil,
-              forgetCandidate == nil, wifiCandidate == nil, isPickerKey(),
-              let row = pairedRows.first(where: { $0.host.publicKey == key }) else { return }
-        disarmAutoConnect()
-        reveal(row)
-        requestConnect()
-    }
-
-    /// For the setting's note: the name the list shows, else the stored one.
-    var lastHostName: String? {
-        guard let key = lastHostKey else { return nil }
-        return rows.first(where: { $0.host.publicKey == key })?.name ?? storedName(key)
     }
 
     func preselect(key: Data?, name: String) {
@@ -338,7 +297,6 @@ final class PickerModel {
 
     func beginRename(_ row: Row? = nil) {
         guard let row = row ?? selected, row.host.publicKey != nil, !connecting else { return }
-        disarmAutoConnect()
         finishRename()
         selection = row.id
         renameDraft = row.name

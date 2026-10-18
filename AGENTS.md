@@ -582,7 +582,7 @@ documented there. What follows is only the mechanics that are easy to break:
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
   clears it once when the popover becomes key. Since 2026-10-18 (user
   review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
-  Form like a System Settings pane: General / Video / Latency / Input
+  Form like a System Settings pane: Video / Latency / Input
   sections, mini switches (`SettingSwitch`) with the detail as the toggle
   label's second Text (the form draws it as a subtitle; it dims a disabled
   switch but not its label, so `SettingSwitch` dims both Texts from
@@ -598,15 +598,9 @@ documented there. What follows is only the mechanics that are easy to break:
   live layer; Natural scrolling follows the Mac (`com.apple.swipescrolldirection`)
   until chosen, and the sign is decided per event from
   `isDirectionInvertedFromDevice`, since AppKit's deltas already follow the Mac.
-  Connect when Relay opens (General, off by default): `lastHostKey` in
-  UserDefaults is saved on STREAM_START (picker sessions only);
-  `PickerModel.autoConnectIfReady` runs on every list update and when the
-  picker becomes key, and fires once per launch through `requestConnect`
-  (so the Wi-Fi alert applies) when that PC is paired, the picker window is
-  key and nothing else is in progress. Any picker action disarms it
-  (selection, Connect, settings, rename, Forget, folding); it never re-arms,
-  so a session that ends stays in the picker. Keeping the Mac awake needs no
-  setting: `enterKiosk` holds a display/system idle-sleep activity.
+  Connect when Relay opens (auto-connect to the last PC) was removed on
+  2026-10-18 at the user's request, with its General section. Keeping the
+  Mac awake needs no setting: `enterKiosk` holds a display/system idle-sleep activity.
   `--codec h264|hevc` (hidden, for measurements) narrows CLIENT_HELLO's
   codec mask; the PC already falls back to whatever the Mac offers.
   Picture options (2026-10-10, Mac side ahead of the host by user decision;
