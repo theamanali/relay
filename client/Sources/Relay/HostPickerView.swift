@@ -502,7 +502,9 @@ struct SessionSettingsView: View {
                     ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
                 } label: {
                     Text("Encoder")
+                        .foregroundStyle(quality == .available ? .primary : .tertiary)
                     Text(quality.reason ?? "Better quality takes the PC longer per frame.")
+                        .foregroundStyle(quality == .available ? .secondary : .tertiary)
                 }
                 .disabled(quality != .available)
                 pictureOption("Full color (4:4:4)", detail: "Sharper colored text; needs more bitrate.",
@@ -564,6 +566,7 @@ private struct SettingSwitch: View {
     let title: String
     let detail: String?
     @Binding var isOn: Bool
+    @Environment(\.isEnabled) private var isEnabled
 
     init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) {
         self.title = title
@@ -572,9 +575,15 @@ private struct SettingSwitch: View {
     }
 
     var body: some View {
+        // The grouped form dims a disabled switch but not its label; dim
+        // the text too, or the row still reads as live.
         Toggle(isOn: $isOn) {
             Text(verbatim: title)
-            if let detail { Text(verbatim: detail) }
+                .foregroundStyle(isEnabled ? .primary : .tertiary)
+            if let detail {
+                Text(verbatim: detail)
+                    .foregroundStyle(isEnabled ? .secondary : .tertiary)
+            }
         }
         .toggleStyle(.switch)
         .controlSize(.mini)

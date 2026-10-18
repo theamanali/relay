@@ -584,8 +584,9 @@ documented there. What follows is only the mechanics that are easy to break:
   review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
   Form like a System Settings pane: General / Video / Latency / Input
   sections, mini switches (`SettingSwitch`) with the detail as the toggle
-  label's second Text (the form draws it as a subtitle and dims it when
-  disabled), Encoder as a form Picker, Bitrate as a LabeledContent row
+  label's second Text (the form draws it as a subtitle; it dims a disabled
+  switch but not its label, so `SettingSwitch` dims both Texts from
+  `isEnabled`), Encoder as a form Picker, Bitrate as a LabeledContent row
   (slider + rounded-border field: a grouped form draws fields borderless;
   disabled while Automatic bitrate is on, user request),
   380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
