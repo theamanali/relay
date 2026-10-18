@@ -641,7 +641,9 @@ documented there. What follows is only the mechanics that are easy to break:
   review): median + fps on one line, then "p95:" under the median and
   "N skipped/s" (decoded − shown, only past 1/s or 5 %) under the fps; no
   description line (the report still uses `Summary.label`), no divider
-  before the sparkline. The sparkline plots each point column's worst
+  before the sparkline; only without clock sync a 10 pt caption
+  ("Receive → screen, clock not synced", `Summary.unsyncedNote`) sits
+  under the p95 line, since nothing else names the measure. The sparkline plots each point column's worst
   frame (`columnMaxima`) and labels the budget "25 ms" on a chip. Detailed
   = a proportional bar (PC/Network/Mac split, not budget-scaled: user
   decision; short segments get 4 pt) and three groups (PC = content age +

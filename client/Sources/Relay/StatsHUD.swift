@@ -109,6 +109,12 @@ enum StatsHUD {
                         color: Level.warning.color, right: padding + inner, baseline: y + 10)
         }
         y += headerSecondLine
+        // Without clock sync the headline is the Mac's share alone; say so,
+        // since nothing else on the HUD names its measure.
+        if let note = summary.unsyncedNote {
+            canvas.text(note, font: font(10), color: secondary, x: padding, baseline: y + 10)
+            y += unsyncedLine
+        }
         y += headerToSparkline
 
         sparkline(ctx: ctx, canvas: canvas, values: summary.sparkline, budget: summary.budget,
@@ -165,6 +171,7 @@ enum StatsHUD {
     private static let gap: CGFloat = 10
     private static let headerSecondLine: CGFloat = 15
     private static let headerToSparkline: CGFloat = 6
+    private static let unsyncedLine: CGFloat = 14
     private static let barHeight: CGFloat = 6
     private static let detailHeight: CGFloat = 15
     private static let streamLineHeight: CGFloat = 15
@@ -172,7 +179,8 @@ enum StatsHUD {
     static let streamLabelWidth: CGFloat = 52
 
     static func height(for s: LatencyStats.HUDSnapshot, mode: HUDMode) -> CGFloat {
-        let compact = padding + 32 + headerSecondLine + headerToSparkline + sparklineHeight + padding
+        let compact = padding + 32 + headerSecondLine + (Summary(s).unsyncedNote == nil ? 0 : unsyncedLine)
+            + headerToSparkline + sparklineHeight + padding
         guard mode == .detailed else { return compact }
         let breakdown = 2 * gap + barHeight + gap + 3 * (rowHeight + detailHeight)
         let footer = (gap - 4) + (gap - 2) + rowHeight
@@ -196,6 +204,8 @@ enum StatsHUD {
         /// The headline and its sparkline: desktop → screen once synced.
         /// The HUD leaves the label out; the session report names its measure with it.
         let label: String
+        /// Shown under the header only without clock sync.
+        let unsyncedNote: String?
         let median: Double?
         let p95: Double?
         let sparkline: [Double]
@@ -217,6 +227,7 @@ enum StatsHUD {
         init(_ s: LatencyStats.HUDSnapshot) {
             let endToEnd = s.desktopToScreen.p50 != nil
             label = endToEnd ? "PC → your screen, median" : "receive → screen, median"
+            unsyncedNote = endToEnd ? nil : "Receive → screen, clock not synced"
             median = endToEnd ? s.desktopToScreen.p50 : s.toScreen.p50
             p95 = endToEnd ? s.desktopToScreen.p95 : s.toScreen.p95
             sparkline = endToEnd ? s.desktopSparkline : s.sparkline

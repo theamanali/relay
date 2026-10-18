@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # swift-tools-version 6.0 needs Xcode 16+. macos-14 still defaults to
       # Xcode 15 but ships 16.x beside it; the minimum-OS job keeps that OS

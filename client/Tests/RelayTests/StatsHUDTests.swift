@@ -116,7 +116,7 @@ final class StatsHUDTests: XCTestCase {
 
     func testDetailedHeightMatchesWhatIsDrawn() throws {
         let image = try XCTUnwrap(StatsHUD.render(synced(snapshot()), mode: .detailed, scale: 1))
-        XCTAssertEqual(CGFloat(image.height), StatsHUD.height(for: snapshot(), mode: .detailed).rounded(.up))
+        XCTAssertEqual(CGFloat(image.height), StatsHUD.height(for: synced(snapshot()), mode: .detailed).rounded(.up))
         // The bottom padding stays clear of text: the last rows are inside.
         XCTAssertLessThan(StatsHUD.height(for: snapshot(), mode: .detailed), 400)
     }
@@ -138,6 +138,18 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertFalse(short.isEmpty)
         XCTAssertLessThanOrEqual(short.count, 3)
         XCTAssertEqual(short.last, 9)
+    }
+
+    func testOnlyAnUnsyncedHUDNamesItsMeasure() throws {
+        XCTAssertEqual(StatsHUD.Summary(snapshot()).unsyncedNote, "Receive → screen, clock not synced")
+        XCTAssertNil(StatsHUD.Summary(synced(snapshot())).unsyncedNote)
+        let unsynced = try XCTUnwrap(StatsHUD.render(snapshot(), mode: .compact, scale: 1))
+        let synced = try XCTUnwrap(StatsHUD.render(synced(snapshot()), mode: .compact, scale: 1))
+        XCTAssertGreaterThan(unsynced.height, synced.height)
+        XCTAssertEqual(CGFloat(unsynced.height), StatsHUD.height(for: snapshot(), mode: .compact).rounded(.up))
+        let width = ("Receive → screen, clock not synced" as NSString)
+            .size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)]).width
+        XCTAssertLessThanOrEqual(width, StatsHUD.width - 24)
     }
 
     func testModeCycles() {
