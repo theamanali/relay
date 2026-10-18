@@ -18,11 +18,12 @@ packages.
 
 ## Requirements
 
-- An Apple silicon Mac (M1 or later) on macOS 14 or later. The minimum comes
-  from Observation, used by the SwiftUI interface. Intel Macs are not supported.
+- An Apple silicon Mac (M1 or later) on macOS 26 or later. Every Apple silicon
+  Mac can run it (raised from 14 on 2026-10-18, so the floor is a release that
+  can actually be tested). Intel Macs are not supported.
 - Metal and hardware H.264 or HEVC decoding are required; there is no software
   decoder or AVSampleBufferDisplayLayer fallback.
-- The Swift 6.0 toolchain or later (Xcode or the Command Line Tools).
+- The Swift 6.2 toolchain or later (Xcode 26 or its Command Line Tools).
 - Optional: Xcode's `actool`, which `bundle.sh` uses to compile the layered app
   icon. Without it the bundle gets the flat `Relay.icns`.
 
@@ -46,7 +47,7 @@ Application identity and optionally `RELAY_NOTARY_PROFILE` to an existing
 `notarytool` keychain profile. Signing and notarization errors fail the build.
 Without these variables the reproducible local build is ad-hoc signed, arm64
 only, and is not notarized. The binary declares the installed SDK separately
-from its macOS 14 runtime minimum. Bundle ID and persisted pairings are unchanged.
+from its macOS 26 runtime minimum. Bundle ID and persisted pairings are unchanged.
 
 ## Using it
 
@@ -475,7 +476,7 @@ output.
   SwiftUI migration still needs a real-PC streaming/latency comparison and
   qualification on a 60 Hz Air, 120 Hz Pro and external display.
 - Development/testing currently uses macOS 27.0. Latest stable 27.0.1 and the
-  macOS 14 runtime floor still need qualification; declaring a deployment target
+  macOS 26 runtime floor still need qualification; declaring a deployment target
   does not establish that those hardware/OS combinations have been tested.
 - The PC must run protocol v4 too. An older PC hangs up during the handshake,
   and the Mac says it may need the latest Relay.

@@ -13,7 +13,7 @@ piece of ceremony and it is intentional.
 | `host/` | Rust host: driver control, NVIDIA-only GPU selection, native DXGI → NVENC capture/encode, display topology, TCP + mDNS, input, crypto | **Windows PC only** (`cargo build --release`, `cargo test`, `cargo clippy --all-targets`) |
 | `host/src/bin/probe.rs` | fake client in Rust; the way to test the host without a Mac | Windows |
 | `host/src/bin/browse.rs` | prints what Relay hosts advertise over mDNS, TXT included (`browse --seconds 5`); Windows has no `dns-sd` and its resolver does not answer mDNS TXT | Windows |
-| `client/` | Swift 6 package, Apple silicon/macOS 14+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
+| `client/` | Swift 6 package, Apple silicon/macOS 26+: Bonjour, handshake/pairing, VideoToolbox decode, kiosk window, input | **Mac only** (`swift build`, `swift run Relay`, `./bundle.sh` for a .app) |
 | `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host; `--clip <file.hevc> --size WxH --fps <n>` streams a looped clip on a fixed schedule (60 fps by default; 120 for 120 Hz checks); `--no-frames` sends STREAM_START and then nothing | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
@@ -731,7 +731,9 @@ documented there. What follows is only the mechanics that are easy to break:
   stream at 2560×1440@144 to an external monitor worked on the real PC;
   165 Hz has not been streamed. `--max-fps` picks the highest offered rate
   at or under it.
-- Build arm64 only, minimum macOS 14 (Observation). Latest stable OS is the
+- Build arm64 only, minimum macOS 26 (raised from 14 on 2026-10-18, user
+  decision: 14 was never tested, and every Apple silicon Mac runs 26;
+  swift-tools-version 6.2). Latest stable OS is the
   qualification target, not automatically the deployment floor. Never claim
   qualification from compiling with that deployment target. Metal and hardware
   VideoToolbox decoding are required; no AVSampleBufferDisplayLayer fallback.

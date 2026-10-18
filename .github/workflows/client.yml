@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-latest]
+        os: [macos-26, macos-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -35,14 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # swift-tools-version 6.0 needs Xcode 16+. macos-14 still defaults to
-      # Xcode 15 but ships 16.x beside it; the minimum-OS job keeps that OS
-      # and only swaps the toolchain.
-      - name: Select Xcode 16 or later
+      # swift-tools-version 6.2 and .macOS(.v26) need Xcode 26+. If a runner
+      # defaults to an older Xcode, the minimum-OS job keeps that OS and only
+      # swaps the toolchain.
+      - name: Select Xcode 26 or later
         run: |
           major=$(xcodebuild -version | awk 'NR==1 { split($2, v, "."); print v[1] }')
-          if [ "$major" -lt 16 ]; then
-            latest=$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_(1[6-9]|[2-9][0-9])' | sort -V | tail -1)
+          if [ "$major" -lt 26 ]; then
+            latest=$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_(2[6-9]|[3-9][0-9])' | sort -V | tail -1)
             test -n "$latest"
             sudo xcode-select -s "$latest"
           fi
@@ -67,7 +67,7 @@ jobs:
         run: |
           ./bundle.sh
           test "$(lipo -archs Relay.app/Contents/MacOS/Relay)" = arm64
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Relay.app/Contents/Info.plist)" = 14.0
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Relay.app/Contents/Info.plist)" = 26.0
           codesign --verify --deep --strict Relay.app
-          test "$(xcrun vtool -show-build Relay.app/Contents/MacOS/Relay | awk '/minos/{print $2}')" = 14.0
+          test "$(xcrun vtool -show-build Relay.app/Contents/MacOS/Relay | awk '/minos/{print $2}')" = 26.0
           test "$(xcrun vtool -show-build Relay.app/Contents/MacOS/Relay | awk '/sdk /{print $2}')" = "$(xcrun --sdk macosx --show-sdk-version)"

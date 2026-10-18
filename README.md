@@ -160,7 +160,7 @@ known clock offsets; host side as in the [timing handoff](docs/TIMING-HANDOFF.md
 
 **Platform migration (2026-10-10):** the Mac now uses SwiftUI for the picker,
 settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
-bundle with a macOS 14 minimum (Observation). Metal and hardware decoding are
+bundle with a macOS 14 minimum (Observation; raised to macOS 26 on 2026-10-18). Metal and hardware decoding are
 required. All 107 Mac unit tests, isolated fakehost checks and the signed local
 release bundle pass on macOS 27.0. The Windows side of the migration is done
 (2026-10-17, below; see the [Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md)):
@@ -168,7 +168,7 @@ NVIDIA-only encoding with a preflight (phase A), the failure/recovery gate on
 the real Mac and PC (phase B), and a single native backend with ffmpeg, AMF,
 Quick Sync, software encoding and Parsec removed (phase C), installed as the
 service and measured on the real Mac with no latency regression. Still pending:
-qualification on the minimum (macOS 14) and latest stable macOS, and Developer
+qualification on the minimum (macOS 26) and latest stable macOS, and Developer
 ID notarization. Older hardware streaming results below predate this migration.
 
 **NVIDIA enforcement, host phase A (2026-10-17):** the host only selects NVIDIA
@@ -345,7 +345,7 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 ## Getting started
 
 You need a Windows 11 PC with an NVIDIA GPU (the supported target), a
-Apple silicon Mac on macOS 14 or later, and an Ethernet cable (a USB-C Ethernet adapter on the
+Apple silicon Mac on macOS 26 or later, and an Ethernet cable (a USB-C Ethernet adapter on the
 Mac is fine; no crossover cable or switch needed).
 
 **Windows** (Rust with the MSVC toolchain), from the repo root:

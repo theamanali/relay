@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version)
 # SwiftPM may otherwise stamp its deployment floor as the linked SDK too.
 # The floor stays 14; opt into the behavior of the SDK actually used to build.
-swift build -c release --arch arm64 -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$SDK_VERSION"
+swift build -c release --arch arm64 -Xlinker -platform_version -Xlinker macos -Xlinker 26.0 -Xlinker "$SDK_VERSION"
 BIN_DIR=$(swift build -c release --arch arm64 --show-bin-path)
 APP=Relay.app
 rm -rf "$APP"
@@ -18,7 +18,7 @@ cp Info.plist "$APP/Contents/Info.plist"
 # the layers it renders light, dark, clear and tinted from (macOS 26);
 # without Xcode, the flattened Relay.icns.
 if xcrun --find actool >/dev/null 2>&1 && xcrun actool Assets/AppIcon.icon --compile "$APP/Contents/Resources" \
-        --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon \
+        --platform macosx --minimum-deployment-target 26.0 --app-icon AppIcon \
         --output-partial-info-plist "$APP/icon.plist" >/dev/null 2>&1 \
         && [ -f "$APP/Contents/Resources/Assets.car" ]; then
     plutil -replace CFBundleIconFile -string AppIcon "$APP/Contents/Info.plist"
