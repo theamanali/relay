@@ -232,6 +232,18 @@ Balanced, static desktop) it matches the baseline: PC work 18.5 ms p50 against
 18.7, decode 2.2 against 2.2, time to screen 3.5–3.8 against 3.5 ms, 107 fps shown
 against 102 ([details](docs/LATENCY.md#the-nvidia-only-host-against-that-baseline-2026-10-17)).
 
+**Clock sync and per-frame timing, host half (2026-10-18):** a host with
+capability `0x04` answers TIME_REQUEST with NTP-style receive/send stamps on
+its QPC clock and, for a client that asked, sends FRAME_TIMING_EXT after every
+frame: DWM's present time, encoder submit, socket send, and an input counter
+with the time of the last input applied. With these the Mac can measure desktop
+→ its screen and input → `SendInput` end to end
+([spec](docs/PROTOCOL.md#clock-sync-and-frame-timing)). Unit-tested, strict
+clippy, release build; `probe --timing` against a `--no-vdd` dev host on
+loopback measured a clock offset of 0–4 µs, no fresh frame out of order, every
+input counted, and input → applied 0.13 ms p50. Installed as the service. The
+Mac side is next ([handoff](docs/TIMING-HANDOFF.md)).
+
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
 and NVENC encode at 3024×1964 @ 120 in exclusive-fullscreen games; pairing,

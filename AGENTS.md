@@ -156,6 +156,40 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   desktop was mostly static (1–4% fresh frames in host.log), not moving as that
   section had said; corrected there.
 
+- Clock sync + frame timing, host + probe + spec (2026-10-18;
+  `docs/TIMING-HANDOFF.md`, now PROTOCOL.md "Clock sync and frame timing").
+  SERVER_HELLO caps `0x07` (`CAP_TIMING` 0x04). `clock.rs`: QPC µs
+  (u128 math), the `LastPresentTime` base; never `SystemTime` (PING still
+  is). `read_loop` stamps TIME_REQUEST 0x88 and queues it in
+  `SessionTiming` (≤ 16); `pump` writes TIME_REPLY 0x09 before the next FRAME
+  (and in the recovery loop), and from its first reply sends
+  FRAME_TIMING_EXT 0x0A (68 bytes) after every FRAME instead of FRAME_TIMING
+  (every 4th, unchanged for other clients). `present_us`/`submit_us` ride
+  `CaptureInfo` → `EncoderTiming`; `present_us` is `u64::MAX` when
+  `pending_present_qpc` is None (re-encode or cursor only); `submit_us` is
+  after NvEncEncodePicture returns; `copy_gpu_us` always 0xffffffff.
+  `inputs_applied` counts every 0x90–0x93 after the first request (Observe
+  and short payloads too) under one mutex with its time. `network_rtt` moved
+  into `SessionTiming`. New payloads parse as ">= N bytes". Verified on
+  Windows: fmt, 223 unit tests + 2 probe tests + the probe integration test,
+  clippy `-D warnings` on 1.98 and 1.99, release build. Elevated `--no-vdd`
+  dev host (port 18468, service stopped, 2560×1440@144 primary) with
+  `probe --timing`: offset 0–4 µs, min delay 35–66 µs, 0 fresh frames out of
+  order over ~3,000 (present→submit p50 0.8 ms, submit→sent 2.8–4.6 ms,
+  sent→received 7–39 µs), re-encoded/cursor-only ticks `u64::MAX` (81 of
+  1,068 with `--wiggle`), inputs 357 sent / 356 reported at the end with one
+  in flight, input → applied p50 0.13 ms; without `--timing` FRAME_TIMING
+  still every 4th frame; 4:4:4 10-bit fine. The first run lost Desktop
+  Duplication twice ~2 s into sessions (`no DXGI output is named
+  \\.\DISPLAY2`); a rerun of the old (`e5300ab`) and new builds side by side
+  had no losses on either, with the same fps and PC work (130.6 / 4.37 ms
+  vs 130.9 / 4.41). The desktop was never fully static (on-screen
+  animation: 597–600 of 600 fresh), so the `u64::MAX` case is from
+  re-encoded and cursor-only ticks. Installed with `install-host.ps1
+  -SkipDriver`: hash `107FDB553A7F0FA1AA02973795E1034330FB326381E0C2B1C8D631521C8B84F3`
+  (= release), service Running, `probe --pair-only` sees caps `0x07`.
+  Not yet run: a streaming `probe --timing` against the service (it takes
+  the display and blacks out the monitors). The Mac side is next.
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
   `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup

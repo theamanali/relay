@@ -1,7 +1,20 @@
 # Handoff for the PC session: clock sync and per-frame timing
 
-**Status (2026-10-18): proposal; nothing implemented on either side.** The
-Mac already measures what it can alone (frame transfer estimate, decrypt,
+**Status (2026-10-18): host, `probe` and `docs/PROTOCOL.md` done and
+installed; the Mac side is next.** Every byte, value and name below shipped
+as written; three details were pinned down while implementing and are
+marked *(as built)*. The spec is now PROTOCOL.md "Clock sync and frame
+timing". Verified on Windows: fmt, 223 unit tests + the probe integration
+test, clippy `-D warnings` on 1.98 and 1.99, release build; `probe --timing`
+against an elevated `--no-vdd` dev host on loopback (offset 0–4 µs, min
+delay 35–66 µs, no fresh frame out of order, re-encoded and cursor-only
+ticks `u64::MAX`, inputs counted 1:1, input → applied p50 0.13 ms); installed
+with `install-host.ps1 -SkipDriver`, hash `107FDB55…1C8B84F3`, and the
+service advertises capabilities `0x07`. A streaming `probe --timing` against
+the service (which blacks out the monitors) has not been run yet. Evidence:
+`AGENTS.md` Status.
+
+The Mac already measures what it can alone (frame transfer estimate, decrypt,
 input → sent; `AGENTS.md`, Latency HUD). This handoff is the part that needs
 the PC's clock. Order as AGENTS.md says: host and `probe` first, then
 `docs/PROTOCOL.md`, then the Mac. If you change a byte, a value or a name,
@@ -61,6 +74,9 @@ opaque to the Mac: only differences and the offset matter.
   time.
 - Send replies before the next FRAME, so a long frame write does not delay
   them more than necessary.
+- *(as built)* The host keeps at most 16 unanswered requests and drops the
+  rest. While capture is recovering (no frames), replies go out at the
+  recovery loop's pace, about once a second; the stamps make that harmless.
 
 The Mac does the math (described under Mac side), sending a few requests at
 stream start, then one a second.
@@ -73,13 +89,15 @@ stream start, then one a second.
 
 Once the client has sent a TIME_REQUEST, send this **after every FRAME, in
 place of FRAME_TIMING**, which keeps its current meaning for other clients.
+*(as built)* The switch happens when the host writes its first TIME_REPLY,
+so that reply always arrives before the first FRAME_TIMING_EXT.
 Payload, 68 bytes, big-endian:
 
 | field | type | meaning |
 |---|---|---|
 | `sequence` | u64 | the same counter FRAME_TIMING uses |
 | `present_us` | u64 | DWM's `LastPresentTime` of the newest desktop frame folded into this picture, host clock; `u64::MAX` when the tick re-encoded an unchanged image (or only the cursor moved) |
-| `submit_us` | u64 | host clock at `NvEncEncodePicture` |
+| `submit_us` | u64 | host clock when `NvEncEncodePicture` returned *(as built)* |
 | `sent_us` | u64 | host clock after `send_nals(FRAME)` returned |
 | `capture_us` | u32 | as FRAME_TIMING |
 | `encode_us` | u32 | as FRAME_TIMING |
