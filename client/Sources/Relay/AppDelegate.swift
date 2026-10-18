@@ -733,6 +733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
                 // mDNSResponder re-check it, so it leaves the list now
                 // rather than when its TTL runs out.
                 BonjourReconfirm.reconfirm(host)
+                self.browser.dialFailed(host)
             }
             if outcome.pinRejected, self.options.pin == nil, let host = self.currentHost {
                 // The host closes after a refusal, so trying again is a new

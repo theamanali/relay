@@ -181,8 +181,8 @@ enum PairingClassifier {
 /// (cache-flush, TTL 0) lands a beat before the PTR removal, so NWBrowser
 /// briefly reports the service with no TXT record. A host that advertised a
 /// `pk` and now has no TXT at all is only ever that stale cache entry — never
-/// a real unpaired PC — so it is dropped at once rather than re-filed under
-/// Available for the length of the hold.
+/// a real unpaired PC — so its old identity is held through grace rather
+/// than re-filed under Available, then removed if TXT has not returned.
 ///
 /// A TXT-less report has a second cause, told apart by the interfaces the
 /// host is seen on changing in the same update: a link went away. When the
@@ -263,6 +263,9 @@ final class HostBrowser {
     private var flush: DispatchWorkItem?
     private var generation = 0
     private var publishedNames: [String] = []
+    private var publishedHosts: [DiscoveredHost] = []
+    private var recovery = BrowseRecovery()
+    private var recoveryWork: DispatchWorkItem?
 
     func start() {
         generation += 1
@@ -291,6 +294,7 @@ final class HostBrowser {
             Task { @MainActor [weak self] in
                 guard let self, self.generation == attempt else { return }
                 self.latest = results.compactMap(Self.host(from:))
+                self.recovery.observed(Set(self.latest.filter { $0.hasTXT && $0.publicKey != nil }.map(\.name)))
                 let summary = self.latest.map {
                     "\($0.name){txt=\($0.hasTXT),key=\($0.publicKey != nil),links=\($0.links.sorted().joined(separator: ","))}"
                 }.sorted().joined(separator: " ")
@@ -315,6 +319,9 @@ final class HostBrowser {
 
     func stop() {
         generation += 1
+        recoveryWork?.cancel()
+        recoveryWork = nil
+        recovery = BrowseRecovery()
         flush?.cancel()
         flush = nil
         browser?.cancel()
@@ -323,11 +330,48 @@ final class HostBrowser {
         paths = nil
     }
 
+    func dialFailed(_ host: DiscoveredHost) {
+        guard browser != nil else { return }
+        NSLog("HostBrowser: scheduling rediscovery after failed dial to %@", host.name)
+        recovery.dialFailed(host.name, now: Date())
+        scheduleRecovery()
+    }
+
+    private func scheduleRecovery() {
+        recoveryWork?.cancel()
+        recoveryWork = nil
+        guard browser != nil, let deadline = recovery.nextDeadline else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.browser != nil else { return }
+                let due = self.recovery.takeDue(now: Date())
+                if !due.isEmpty {
+                    NSLog("HostBrowser: restarting browse for missing PCs [%@]", due.joined(separator: ","))
+                    // Keep the debouncer and latest snapshot. A new browse's
+                    // initial partial results get the same removal grace as
+                    // any other brief discovery interruption.
+                    self.start()
+                }
+                self.scheduleRecovery()
+            }
+        }
+        recoveryWork = work
+        queue.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow), execute: work)
+    }
+
     /// Run the debouncer over the latest results and, while it is holding a
     /// vanished host, come back after the grace period to let it go.
     private func publish() {
-        let hosts = debouncer.update(seen: latest, now: Date())
+        let now = Date()
+        let hosts = debouncer.update(seen: latest, now: now)
         let names = hosts.map(\.name)
+        let visible = Set(names)
+        for host in publishedHosts where host.publicKey != nil && !visible.contains(host.name) {
+            NSLog("HostBrowser: scheduling rediscovery after removal of %@", host.name)
+            recovery.missing(host.name, now: now)
+        }
+        publishedHosts = hosts
+        scheduleRecovery()
         if names != publishedNames {
             NSLog("HostBrowser: picker hosts [%@] (removal pending=%@)", names.joined(separator: ","), String(debouncer.hasPendingRemovals))
             publishedNames = names
