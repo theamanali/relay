@@ -124,6 +124,25 @@ struct SecondMedians: Sendable {
     }
 }
 
+/// Bytes per wall-clock second over the last few seconds, for a data rate.
+struct ByteWindow: Sendable {
+    private var slots: [(second: UInt64, bytes: Int)]
+
+    init(seconds: Int) { slots = Array(repeating: (UInt64.max, 0), count: seconds) }
+
+    mutating func add(_ bytes: Int, at nanos: UInt64) {
+        let second = nanos / 1_000_000_000
+        let i = Int(second % UInt64(slots.count))
+        if slots[i].second != second { slots[i] = (second, 0) }
+        slots[i].bytes += bytes
+    }
+
+    func total(at nanos: UInt64) -> Int {
+        let now = nanos / 1_000_000_000
+        return slots.filter { $0.second <= now && $0.second + UInt64(slots.count) > now }.reduce(0) { $0 + $1.bytes }
+    }
+}
+
 /// The newest `capacity` values, oldest first when read.
 struct RecentSamples: Sendable {
     private var values: [Double]
@@ -220,6 +239,8 @@ final class LatencyStats: @unchecked Sendable {
         var contentAge = Stage(LatencyHistogram())
         var sentToReceived = Stage(LatencyHistogram())
         var inputApplied = Stage(LatencyHistogram())
+        /// Video data arriving, in Mbps, and the bitrate the PC was asked for.
+        var receivedMbps: Double?
         /// Desktop → screen per frame, oldest first; empty without clock sync.
         var desktopSparkline: [Double] = []
         /// PC minus Mac, and the delay of the exchange it came from.
@@ -276,6 +297,8 @@ final class LatencyStats: @unchecked Sendable {
     private var sessionDecrypt = LatencyHistogram()
     /// Bytes and time behind the transfer estimates, for the link's rate.
     private var lateBytes = 0
+    private var received = ByteWindow(seconds: windowSeconds)
+    private var sessionBytes = 0
     private var lateNanos: UInt64 = 0
     private var sparkline = RecentSamples(capacity: sparklineFrames)
 
@@ -313,6 +336,8 @@ final class LatencyStats: @unchecked Sendable {
             sessionInputSent = LatencyHistogram()
             sessionDecrypt = LatencyHistogram()
             lateBytes = 0
+            received = ByteWindow(seconds: Self.windowSeconds)
+            sessionBytes = 0
             lateNanos = 0
             sparkline = RecentSamples(capacity: Self.sparklineFrames)
         }
@@ -365,6 +390,8 @@ final class LatencyStats: @unchecked Sendable {
     func record(_ timing: ReceiveTiming, at nanos: UInt64 = LatencyStats.now()) {
         lock.withLock {
             guard nanos >= measuringFrom else { return }
+            received.add(timing.wireBytes, at: nanos)
+            sessionBytes += timing.wireBytes
             sessionDecrypt.record(timing.decryptMilliseconds)
             guard let ms = timing.transferMilliseconds else { return }
             transfer.record(ms, at: nanos)
@@ -460,6 +487,7 @@ final class LatencyStats: @unchecked Sendable {
                 contentAge: Stage(contentAge.merged(at: nanos)),
                 sentToReceived: Stage(sentToReceived.merged(at: nanos)),
                 inputApplied: Stage(inputApplied.merged(at: nanos)),
+                receivedMbps: elapsed > 0.05 ? Double(received.total(at: nanos)) * 8 / elapsed / 1e6 : nil,
                 desktopSparkline: desktopSparkline.ordered,
                 clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
                 clockDelayMs: clock.map { Double($0.delay) / 1_000 },
@@ -486,6 +514,7 @@ final class LatencyStats: @unchecked Sendable {
                                  clock: clock,
                                  linkBitsPerSecond: lateNanos > 0 ? Double(lateBytes) * 8 / (Double(lateNanos) / 1e9) : nil,
                                  counters: counters,
+                                 receivedBytes: sessionBytes,
                                  timeline: sessionDesktopToScreen.count > 0 ? desktopTimeline.all : toScreenTimeline.all)
         }
     }
@@ -519,6 +548,8 @@ struct SessionReport: Sendable {
     /// The rate frames' later records arrived at, over the whole session.
     let linkBitsPerSecond: Double?
     let counters: PresenterCounters
+    /// Video data received after the warm-up (wire bytes of FRAMEs).
+    var receivedBytes = 0
     /// The headline measure's median per second (desktop → screen once
     /// synced, else receive → screen); nil for seconds with no frame.
     var timeline: [Double?] = []
@@ -569,6 +600,14 @@ struct SessionReport: Sendable {
     var skippedFraction: Double? {
         guard decode.count > 0 else { return nil }
         return min(1, Double(counters.replaced + counters.dropped) / Double(decode.count))
+    }
+
+    /// "Received 1.2 GB, 48 Mbps on average", or nil before any data.
+    var dataText: String? {
+        guard receivedBytes > 0, duration > 0 else { return nil }
+        let gb = Double(receivedBytes) / 1e9
+        let size = gb >= 1 ? String(format: "%.1f GB", gb) : String(format: "%.0f MB", Double(receivedBytes) / 1e6)
+        return String(format: "Received %@, %.0f Mbps on average", size, Double(receivedBytes) * 8 / duration / 1e6)
     }
 
     /// "Skipped 0.4% of frames".
@@ -627,7 +666,7 @@ struct SessionReport: Sendable {
             "",
             stream.summary,
             "",
-            summaryLine + " (ms)",
+            summaryLine + " (ms)" + (dataText.map { ". " + $0 } ?? ""),
             "",
             "Length \(lengthText), \(String(format: "%.1f", presentedFPS)) fps shown, \(countersText)"
                 + (linkText.map { ". " + $0 } ?? "") + (clockText.map { ". " + $0 } ?? ""),

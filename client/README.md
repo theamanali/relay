@@ -134,7 +134,9 @@ The **Settings** gear in the footer opens:
   ⌃⌥⌘L cycles Off → Compact → Detailed; Detailed adds where the time goes: a
   bar split into PC, Network and Mac, each with its parts (image age and
   encode & send; one-way network; decode and display), then input → PC,
-  skipped frames per second and the stream's settings. Also View ▸ Latency
+  skipped frames per second and the stream as rows (Video, Picture, Display,
+  Link, and Data: the video actually arriving against the bitrate asked for,
+  e.g. 48 of 120 Mbps). Also View ▸ Latency
   Overlay. Clock offset, ping estimate, frame transfer, decrypt and the
   counters are in the session report, not the HUD. It does
   not slow the stream: it is part of the video frame, not a window over it.
@@ -145,7 +147,8 @@ The **Settings** gear in the footer opens:
   with the same measure as the HUD (PC → your screen: median, 95% of frames
   within, frames shown), then the median per second over the session (so a
   slow stretch shows when it happened), a histogram, where the time went
-  (PC, Network, Mac), input → PC and the share of frames skipped. **Details**
+  (PC, Network, Mac), input → PC, the share of frames skipped and the data received (total and
+  average rate). **Details**
   swaps those for every stage's p50/p95/p99/max, the counters, the link rate
   and the clock estimate. Copy puts everything on the clipboard as Markdown. Three
   of its rows are measured on the Mac alone: **Frame

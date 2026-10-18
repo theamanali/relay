@@ -282,5 +282,26 @@ final class SessionReportSummaryTests: XCTestCase {
             + "Input → PC 1.1, skipped 0.5% of frames (ms)"), md)
         XCTAssertTrue(md.contains("| Desktop → screen |"), "the full table is still there")
     }
-}
 
+    func testDataRateAndTotal() throws {
+        var w = ByteWindow(seconds: 5)
+        let second: UInt64 = 1_000_000_000
+        w.add(6_000_000, at: 10 * second)
+        w.add(6_000_000, at: 11 * second)
+        XCTAssertEqual(w.total(at: 11 * second), 12_000_000)
+        XCTAssertEqual(w.total(at: 16 * second), 0, "aged out")
+        let stats = LatencyStats()
+        stats.reset(at: 0)
+        stats.record(ReceiveTiming(wireBytes: 3_000_000, lateBytes: 0, lateNanos: 0, decryptNanos: 0), at: 4 * second)
+        stats.record(ReceiveTiming(wireBytes: 3_000_000, lateBytes: 0, lateNanos: 0, decryptNanos: 0), at: 5 * second)
+        // 6 MB over the two seconds since measuring began (3 s warm-up): 24 Mbps.
+        XCTAssertEqual(try XCTUnwrap(stats.hudSnapshot(at: 5 * second).receivedMbps), 24, accuracy: 0.5)
+        var r = report(synced: true)
+        XCTAssertNil(r.dataText)
+        r.receivedBytes = 1_250_000_000 // 10 s
+        XCTAssertEqual(r.dataText, "Received 1.2 GB, 1000 Mbps on average")
+        r.receivedBytes = 60_000_000
+        XCTAssertEqual(r.dataText, "Received 60 MB, 48 Mbps on average")
+        XCTAssertTrue(r.markdown.contains("(ms). Received 60 MB, 48 Mbps on average"), r.markdown)
+    }
+}

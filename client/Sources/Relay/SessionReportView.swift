@@ -214,6 +214,12 @@ struct SessionReportView: View {
                         .foregroundStyle((report.skippedFraction ?? 0) >= 0.05 ? Color(cgColor: StatsHUD.Level.warning.color)
                                                                                 : .primary)
                 }
+                if let data = report.dataText {
+                    GridRow(alignment: .firstTextBaseline) {
+                        Color.clear.frame(width: 8, height: 8)
+                        Text(verbatim: data).gridCellColumns(2)
+                    }
+                }
             }
         }
     }

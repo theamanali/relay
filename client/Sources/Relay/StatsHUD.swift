@@ -147,8 +147,11 @@ enum StatsHUD {
             y += gap - 4
             divider(ctx, y: y)
             y += gap - 2
-            for line in streamLines(stream) {
-                canvas.text(line, font: font(10), color: secondary, x: padding, baseline: y + 11, maxWidth: inner)
+            // Label / value rows, like the rows above, instead of loose lines.
+            for (label, value) in streamRows(stream, receivedMbps: s.receivedMbps) {
+                canvas.text(label, font: font(10), color: secondary, x: padding, baseline: y + 11)
+                canvas.text(value, font: font(10, .medium), color: CGColor(gray: 1, alpha: 0.8),
+                            right: padding + inner, baseline: y + 11, maxWidth: inner - streamLabelWidth)
                 y += streamLineHeight
             }
         }
@@ -158,14 +161,18 @@ enum StatsHUD {
     private static let gap: CGFloat = 10
     private static let barHeight: CGFloat = 6
     private static let detailHeight: CGFloat = 15
-    private static let streamLineHeight: CGFloat = 14
+    private static let streamLineHeight: CGFloat = 15
+    /// Room kept for the widest label ("Picture") left of a value.
+    static let streamLabelWidth: CGFloat = 52
 
     static func height(for s: LatencyStats.HUDSnapshot, mode: HUDMode) -> CGFloat {
         let compact = padding + 32 + 18 + sparklineHeight + padding
         guard mode == .detailed else { return compact }
         let breakdown = 2 * gap + barHeight + gap + 3 * (rowHeight + detailHeight)
         let footer = (gap - 4) + (gap - 2) + 2 * rowHeight
-        let stream = s.stream.map { (gap - 4) + (gap - 2) + CGFloat(streamLines($0).count) * streamLineHeight } ?? 0
+        let stream = s.stream.map {
+            (gap - 4) + (gap - 2) + CGFloat(streamRows($0, receivedMbps: s.receivedMbps).count) * streamLineHeight
+        } ?? 0
         return compact + breakdown + footer + stream
     }
 
@@ -232,14 +239,15 @@ enum StatsHUD {
         }
     }
 
-    /// Up to three short lines, so nothing is cut off.
-    static func streamLines(_ s: StreamInfo) -> [String] {
-        var settings = s.format.isEmpty ? [] : [s.format]
-        var link = s.link.map { [$0] } ?? []
-        link.append(s.vsync ? "VSync on" : "VSync off")
-        if settings.isEmpty { settings = link; link = [] }
-        return ["\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz, \(s.bitrateMbps) Mbps",
-                settings.joined(separator: ", ")] + (link.isEmpty ? [] : [link.joined(separator: ", ")])
+    /// The stream as label / value rows. Data is the video actually
+    /// arriving against the bitrate asked for ("48 of 120 Mbps").
+    static func streamRows(_ s: StreamInfo, receivedMbps: Double?) -> [(String, String)] {
+        var rows = [("Video", "\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz")]
+        if !s.format.isEmpty { rows.append(("Picture", s.format)) }
+        rows.append(("Display", s.vsync ? "VSync on" : "VSync off"))
+        if let link = s.link { rows.append(("Link", link)) }
+        rows.append(("Data", "\(receivedMbps.map { String(format: "%.0f", $0) } ?? "––") of \(s.bitrateMbps) Mbps"))
+        return rows
     }
 
     private static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.1f ms", $0) } ?? "––" }
