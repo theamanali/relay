@@ -440,6 +440,10 @@ output.
 
 ## Limitations
 
+- Receive → screen can enter a 20–35 ms state while decode keeps up. A
+  2026-10-17 investigation reproduced it in Control and Observe, including
+  Metal Direct presentation with Game Mode on. The cause and a fix remain
+  open; see the [measurements and diagnostic limits](LATENCY-INVESTIGATION.md).
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys.
 - With VSync off (the default) the picture can tear; **Enable VSync** (or
   `--metal-vsync`) trades a little latency for no tearing.
