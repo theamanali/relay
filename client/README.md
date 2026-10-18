@@ -99,8 +99,10 @@ A row's context menu, and the **PC** menu for the selected row, have:
 ### Picture settings
 
 The footer has a resolution popup (native, 75% or 50% of the screen the window
-is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
-rate). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
+is on, shown in pixels) and a refresh control with that screen's top rate and
+60 Hz (120/60 on a ProMotion MacBook, 144/60 or 165/60 on such a monitor;
+hidden on a 60 Hz screen). Both follow the window when it moves to another
+display. The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
 The **Settings** gear in the footer opens a grouped pane (Video, Latency,
 Input) of switches, laid out like System Settings:
@@ -218,7 +220,7 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--host <addr[:port]>` | Skip the list and Bonjour and connect straight to this address. Re-dials when the connection drops: after 1 s, or 5 s if the PC was busy. |
 | `--pin <digits>` | PIN to pair with (otherwise Relay asks). |
 | `--scale <f>` | Ask for `f` × the native pixel size; 0.75 and 0.5 keep the aspect ratio. |
-| `--max-fps <n>` | Cap the refresh rate asked for (default 120). |
+| `--max-fps <n>` | Cap the refresh rate asked for (default: the screen's top rate). |
 | `--bitrate <1…1000>` | Video bitrate in Mbps (default 120). |
 | `--modifiers mac\|physical` | Keyboard mapping (above). |
 | `--no-input` | Observe only. |

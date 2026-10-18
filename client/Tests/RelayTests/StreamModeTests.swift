@@ -24,6 +24,9 @@ final class StreamModeTests: XCTestCase {
 
     func testRefreshRatesFollowThePanel() {
         XCTAssertEqual(StreamMode.refreshRates(max: 120), [120, 60])
+        XCTAssertEqual(StreamMode.refreshRates(max: 144), [144, 60], "external monitors offer their own top rate")
+        XCTAssertEqual(StreamMode.refreshRates(max: 165), [165, 60])
+        XCTAssertEqual(StreamMode.refreshRates(max: 75), [75, 60])
         XCTAssertEqual(StreamMode.refreshRates(max: 60), [60])
         XCTAssertEqual(StreamMode.refreshRates(max: 0), [60], "unknown max falls back to 60")
         XCTAssertEqual(StreamMode.refreshRates(max: 48), [48], "odd panels still get one entry")
@@ -34,6 +37,9 @@ final class StreamModeTests: XCTestCase {
         let saved = StreamMode(scale: 0.75, refresh: 120)
         XCTAssertEqual(saved.clamped(toMaxRefresh: 60), StreamMode(scale: 0.75, refresh: 60))
         XCTAssertEqual(saved.clamped(toMaxRefresh: 120), saved)
+        XCTAssertEqual(saved.clamped(toMaxRefresh: 144), StreamMode(scale: 0.75, refresh: 144))
+        XCTAssertEqual(StreamMode(scale: 1, refresh: 144).clamped(toMaxRefresh: 120), StreamMode(scale: 1, refresh: 120))
+        XCTAssertEqual(StreamMode(scale: 1, refresh: 60).clamped(toMaxRefresh: 165), StreamMode(scale: 1, refresh: 60))
         XCTAssertEqual(StreamMode(scale: 0.6, refresh: 90).clamped(toMaxRefresh: 120), StreamMode(scale: 1.0, refresh: 120))
     }
 

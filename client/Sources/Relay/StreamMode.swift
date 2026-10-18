@@ -9,7 +9,6 @@ struct StreamMode: Equatable {
     var refresh: Int
 
     static let scales: [Double] = [1.0, 0.75, 0.5]
-    static let refreshCandidates = [120, 60]
 
     /// Pixel size at `scale`, rounded to even numbers for 4:2:0 chroma.
     static func size(native: CGSize, scale: Double) -> (width: Int, height: Int) {
@@ -24,15 +23,17 @@ struct StreamMode: Equatable {
         }
     }
 
-    /// Refresh rates to offer on a panel whose maximum is `max`, highest first.
+    /// Refresh rates to offer on a screen whose maximum is `max`, highest
+    /// first: its top rate and 60 Hz (165/60 on a 165 Hz monitor, 120/60 on
+    /// a ProMotion panel). Two, so the footer's segmented control always
+    /// fits; rates in between are not offered (user decision).
     static func refreshRates(max: Int) -> [Int] {
         let cap = max > 0 ? max : 60
-        let offered = refreshCandidates.filter { $0 <= cap }
-        return offered.isEmpty ? [cap] : offered
+        return cap > 60 ? [cap, 60] : [cap]
     }
 
-    /// The nearest offered mode for a panel (a saved 120 on a 60 Hz Air becomes 60;
-    /// an unknown scale becomes native).
+    /// The nearest offered mode for a screen (a saved 120 on a 60 Hz Air
+    /// becomes 60, on a 144 Hz monitor 144; an unknown scale becomes native).
     func clamped(toMaxRefresh max: Int) -> StreamMode {
         let rates = Self.refreshRates(max: max)
         let refresh = rates.contains(refresh) ? refresh : rates.first!

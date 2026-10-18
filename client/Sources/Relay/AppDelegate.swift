@@ -209,7 +209,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         let max = Self.maxRefresh(of: screen)
         var mode = StreamMode.load() ?? StreamMode(scale: 1.0, refresh: max)
         if options.scaleGiven { mode.scale = options.scale }
-        if options.maxFPSGiven { mode.refresh = min(options.maxFPS, max) }
+        // A cap: the highest offered rate at or under it, never rounded up.
+        if options.maxFPSGiven {
+            let rates = StreamMode.refreshRates(max: max)
+            mode.refresh = rates.first { $0 <= options.maxFPS } ?? rates.last!
+        }
         return mode.clamped(toMaxRefresh: max)
     }
 
