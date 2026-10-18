@@ -845,10 +845,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             w.title = "Session Report"
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
-            w.center()
             reportWindow = w
         }
-        reportWindow?.makeKeyAndOrderFront(nil)
+        guard let reportWindow else { return }
+        reportWindow.setContentSize(hosting.view.fittingSize)
+        // On the screen the session was on, where the picker comes back.
+        // `center()` left the choice to AppKit, which picked another display.
+        let screen = picker?.window?.screen ?? window.flatMap { stream in
+            NSScreen.screens.first { $0.frame.contains(CGPoint(x: stream.frame.midX, y: stream.frame.midY)) }
+        } ?? NSScreen.main
+        if let area = screen?.visibleFrame {
+            let size = reportWindow.frame.size
+            reportWindow.setFrameOrigin(CGPoint(x: area.midX - size.width / 2,
+                                                y: max(area.minY, area.midY - size.height / 2)))
+        }
+        reportWindow.makeKeyAndOrderFront(nil)
     }
 }
 
