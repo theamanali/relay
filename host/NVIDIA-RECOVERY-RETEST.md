@@ -260,7 +260,7 @@ restart, that is a `--no-vdd` session of the primary monitor: disconnect.
 
 F6a results, 2026-10-18 00:37–00:45 UTC, old (installed, pre-fix) build
 only, the Mac reaching the PC over the home LAN (client address
-`2601:…:a49f`), not the cable: **not reproduced.**
+`2601:…:a49f`), as in U6: **not reproduced.**
 - Gap 5 s, Connect at the kill: the dial did not fail. It was still within
   the picker's 12 s wait when host 2 came up and connected 0.1 s after
   host 2's `listening`. This shows nothing about finding 6.
@@ -269,8 +269,12 @@ only, the Mac reaching the PC over the home LAN (client address
 - `-Gap 20`, a session at the kill and Connect during the gap: the Mac
   showed "couldn't reach the PC", the row stayed, and a second Connect
   after host 2 started worked.
-The record was reachable over several links here (LAN IPv4/IPv6, Tailscale),
-while in U6 the PC was found over the cable. The new build was not run.
+U6 also ran on the home LAN (the user confirmed; "Ethernet" there is the
+PC's adapter, not a direct cable), so the network path is not the
+difference. What remains different from U6: the real SYSTEM worker
+respawned by the service instead of a dev host, a session 24 minutes old,
+and whatever the Mac did between the drop and the user's look at the
+picker. The new build was not run; F6b is the next check.
 
 **F6b, real worker (after `install-host.ps1 -SkipDriver` with this build).**
 1. Mac picker open, PC listed, no session. Kill the worker with U6's
