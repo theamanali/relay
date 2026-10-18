@@ -580,10 +580,18 @@ documented there. What follows is only the mechanics that are easy to break:
   would try the left side next). Opening it focuses nothing: AppKit makes the
   popover's first control (the bitrate field) first responder, which
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
-  clears it once when the popover becomes key. Its captions stay on one
-  line (user request; ⌘⌥⌃ glyphs render wider than they look, measure).
+  clears it once when the popover becomes key. Since 2026-10-18 (user
+  review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
+  Form like a System Settings pane: General / Video / Latency / Input
+  sections, mini switches (`SettingSwitch`) with the detail as the toggle
+  label's second Text (the form draws it as a subtitle and dims it when
+  disabled), Encoder as a form Picker, Bitrate as a LabeledContent row
+  (slider + rounded-border field: a grouped form draws fields borderless),
+  380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
+  rows (~730 pt tall). Subtitles stay on one line at that width (user
+  request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
-  matter while forwarding. Enable VSync flips `displaySyncEnabled` on the
+  matter while forwarding. VSync flips `displaySyncEnabled` on the
   live layer; Natural scrolling follows the Mac (`com.apple.swipescrolldirection`)
   until chosen, and the sign is decided per event from
   `isDirectionInvertedFromDevice`, since AppKit's deltas already follow the Mac.

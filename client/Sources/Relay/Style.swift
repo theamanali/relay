@@ -33,7 +33,7 @@ enum Style {
     /// follows the list (`PickerLayout`).
     static let windowWidth: CGFloat = 410
     /// The settings popover's content width.
-    static let settingsWidth: CGFloat = 312
+    static let settingsWidth: CGFloat = 380
     static let rowHeight: CGFloat = 52
     static let sectionRowHeight: CGFloat = 28
     /// A one-line note under a section title ("No paired devices yet").

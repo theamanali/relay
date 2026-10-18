@@ -102,19 +102,20 @@ The footer has a resolution popup (native, 75% or 50% of the screen the window
 is on, shown in pixels) and a 120/60 Hz control (hidden on a screen with one
 rate). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
-The **Settings** gear in the footer opens:
+The **Settings** gear in the footer opens a grouped pane (General, Video,
+Latency, Input) of switches, laid out like System Settings:
 
 - **Connect when Relay opens**: off by default. Once the last PC you streamed
   from shows up paired, Relay connects to it as if you had pressed Connect
   (the Wi-Fi warning still applies; Cancel stops it). Only once per launch,
   only while the picker window is in front, and not after you have done
   anything in the picker.
-- **Bitrate**: **Automatic** by default: each frame gets the share 120 Mbps gave
+- **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
   for less (20–200 Mbps), capped at 80 Mbps over Wi-Fi. Over a gigabit cable
   every 120 Mbps costs about 1 ms of transfer per frame. The logarithmic slider
   (1–1000 Mbps) or the field sets a value of your own and turns Automatic off;
-  ticking it again goes back. A value chosen before Automatic existed is kept.
+  switching it on again goes back. A value chosen before Automatic existed is kept.
 - **Encoder**: Fastest (default), Balanced or Best quality, the PC's NVENC
   preset (P1 / P4 / P6). Better quality takes the PC longer per frame.
 - **Full color (4:4:4)**: full color resolution, so colored text and thin
@@ -125,7 +126,7 @@ The **Settings** gear in the footer opens:
   updated, see `docs/VIDEO-OPTIONS-HANDOFF.md`) and, for the color options,
   this Mac to decode them in hardware; otherwise they are greyed out and say
   why.
-- **Enable VSync**: prevents tearing but adds up to a frame of delay.
+- **VSync**: prevents tearing but adds up to a frame of delay.
   Off by default and switchable mid-session.
 - **Show latency overlay**: a small HUD drawn into the stream's corner. Its
   headline is how far behind the PC your screen is (PC → your screen, measured
@@ -467,7 +468,7 @@ output.
 ## Limitations
 
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys.
-- With VSync off (the default) the picture can tear; **Enable VSync** (or
+- With VSync off (the default) the picture can tear; **VSync** (or
   `--metal-vsync`) trades a little latency for no tearing.
 - Earlier hardware runs verified Metal colour, orientation and streaming. The
   SwiftUI migration still needs a real-PC streaming/latency comparison and

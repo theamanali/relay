@@ -444,145 +444,122 @@ struct SessionSettingsView: View {
     private func pictureOption(_ title: String, detail: String, feature: VideoFeatures,
                                key: WritableKeyPath<SessionPrefs, Bool>) -> some View {
         let availability = model.availability(feature)
-        return DescribedCheckbox(title, detail: availability.reason ?? detail,
-                                 isOn: Binding(get: { availability == .available && model.prefs[keyPath: key] },
-                                               set: { var prefs = model.prefs; prefs[keyPath: key] = $0; model.setPrefs(prefs) }))
+        return SettingSwitch(title, detail: availability.reason ?? detail,
+                             isOn: Binding(get: { availability == .available && model.prefs[keyPath: key] },
+                                           set: { var prefs = model.prefs; prefs[keyPath: key] = $0; model.setPrefs(prefs) }))
             .disabled(availability != .available)
-            .padding(.top, Style.Space.s)
     }
 
+    // Laid out like a System Settings pane: grouped sections, the label on
+    // the left, its control on the right, details as a subtitle.
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("General").font(Style.Font.section).foregroundStyle(.secondary)
-            DescribedCheckbox("Connect when Relay opens",
+        Form {
+            Section("General") {
+                SettingSwitch("Connect when Relay opens",
                               detail: model.lastHostName.map { "Reconnects to \(SessionText.shortName($0)) once found." }
                                   ?? "Reconnects to the last PC you used.",
                               isOn: preference(\.connectAtLaunch))
-                .padding(.top, Style.Space.xs)
-            Text("Video").font(Style.Font.section).foregroundStyle(.secondary)
-                .padding(.top, Style.Space.l)
-            VStack(alignment: .leading, spacing: Style.Space.tight) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Bitrate")
-                    Spacer(minLength: Style.Space.s)
-                    // Automatic follows the resolution, refresh rate and
-                    // link; picking a value below turns it off.
-                    Toggle("Automatic", isOn: Binding(get: { model.prefs.bitrateAutomatic },
-                                                      set: { model.setBitrateAutomatic($0) }))
-                        .toggleStyle(.checkbox)
-                }
-                Text(model.prefs.bitrateAutomatic
-                     ? "Set for the resolution, refresh rate and connection."
-                     : "Higher looks sharper but needs a faster connection.")
-                    .font(Style.Font.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
-            .padding(.top, Style.Space.xs)
-            HStack(spacing: Style.Space.s) {
-                Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
-                    model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
-                }), in: 0...1)
-                .frame(width: 160)
-                .accessibilityLabel("Video bitrate")
-                .accessibilityValue("\(model.effectiveBitrate) Mbps")
-                .help("Video bitrate from 1 to 1,000 Mbps")
-                TextField("", value: Binding(get: { model.effectiveBitrate }, set: { model.setBitrate($0) }),
-                          format: .number.grouping(.never))
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 58)
-                    .accessibilityLabel("Video bitrate in megabits per second")
-                Text("Mbps").font(Style.Font.body)
-            }
-            .padding(.top, Style.Space.xs)
-            // Applied by the PC when it offers them (TXT `enc`); otherwise
-            // disabled, with the reason where the description would be.
-            let quality = model.availability(.encoderQuality)
-            VStack(alignment: .leading, spacing: Style.Space.tight) {
-                HStack(alignment: .firstTextBaseline) {
-                    // Text ignores .disabled; dim it like a disabled checkbox's.
-                    Text("Encoder")
-                        .foregroundStyle(quality == .available ? .primary : .tertiary)
-                    Spacer(minLength: Style.Space.s)
-                    Picker("Encoder", selection: preference(\.encoderQuality)) {
-                        ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+            Section("Video") {
+                // Automatic follows the resolution, refresh rate and link;
+                // moving the slider or typing a value turns it off.
+                SettingSwitch("Automatic bitrate",
+                              detail: "Set for the resolution, refresh rate and connection.",
+                              isOn: Binding(get: { model.prefs.bitrateAutomatic },
+                                            set: { model.setBitrateAutomatic($0) }))
+                LabeledContent("Bitrate") {
+                    HStack(spacing: Style.Space.s) {
+                        Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
+                            model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
+                        }), in: 0...1)
+                        .controlSize(.small)
+                        .frame(width: 104)
+                        .accessibilityLabel("Video bitrate")
+                        .accessibilityValue("\(model.effectiveBitrate) Mbps")
+                        .help("Video bitrate from 1 to 1,000 Mbps")
+                        TextField("", value: Binding(get: { model.effectiveBitrate }, set: { model.setBitrate($0) }),
+                                  format: .number.grouping(.never))
+                            .labelsHidden()
+                            // A grouped form draws fields borderless; the
+                            // border says the value can be typed.
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 48)
+                            .accessibilityLabel("Video bitrate in megabits per second")
+                        Text("Mbps").foregroundStyle(.secondary)
                     }
-                    .labelsHidden()
-                    .fixedSize()
                 }
-                Text(quality.reason ?? "Better quality takes the PC longer per frame.")
-                    .font(Style.Font.caption)
-                    .foregroundStyle(quality == .available ? .secondary : .tertiary)
-                    .lineLimit(1)
-            }
-            .disabled(quality != .available)
-            .padding(.top, Style.Space.s)
-            pictureOption("Full color (4:4:4)", detail: "Sharper colored text; needs more bitrate.",
-                          feature: .fullColor, key: \.fullColor)
-            pictureOption("10-bit color", detail: "Smoother gradients with less banding.",
-                          feature: .tenBit, key: \.tenBit)
-            DescribedCheckbox("Enable VSync",
-                              detail: "Prevents tearing but adds up to a frame of delay.",
+                // Applied by the PC when it offers them (TXT `enc`); otherwise
+                // disabled, with the reason where the description would be.
+                let quality = model.availability(.encoderQuality)
+                Picker(selection: preference(\.encoderQuality)) {
+                    ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+                } label: {
+                    Text("Encoder")
+                    Text(quality.reason ?? "Better quality takes the PC longer per frame.")
+                }
+                .disabled(quality != .available)
+                pictureOption("Full color (4:4:4)", detail: "Sharper colored text; needs more bitrate.",
+                              feature: .fullColor, key: \.fullColor)
+                pictureOption("10-bit color", detail: "Smoother gradients with less banding.",
+                              feature: .tenBit, key: \.tenBit)
+                SettingSwitch("VSync", detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))
-                .padding(.top, Style.Space.s)
-            Toggle("Show latency overlay", isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
-                var prefs = model.prefs
-                prefs.hudMode = on ? .compact : .off
-                model.setPrefs(prefs)
-            }))
-                .toggleStyle(.checkbox)
-                .padding(.top, Style.Space.s)
-            // Only the HUD's sessions have a report worth opening by itself;
-            // View ▸ Last Session Report works either way.
-            Toggle("Show session report on disconnect", isOn: preference(\.showSessionReport))
-                .toggleStyle(.checkbox)
-                .padding(.top, Style.Space.s)
-                .disabled(model.prefs.hudMode == .off)
-            // Keyboard and pointer: modifier keys, scrolling, and whether the
-            // Mac controls the PC at all.
-            Text("Input").font(Style.Font.section).foregroundStyle(.secondary)
-                .padding(.top, Style.Space.l)
-            // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
-            // matter while the Mac controls the PC; they keep their values.
-            Toggle("Control the PC", isOn: preference(\.forwardInput))
-                .toggleStyle(.checkbox)
-                .padding(.top, Style.Space.xs)
-            Group {
-                // Off sends keys by their physical position instead. The note
-                // describes the current mapping, in the same key order.
-                DescribedCheckbox("Mac-style modifier keys",
+            }
+            Section("Latency") {
+                SettingSwitch("Show latency overlay",
+                              isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
+                                  var prefs = model.prefs
+                                  prefs.hudMode = on ? .compact : .off
+                                  model.setPrefs(prefs)
+                              }))
+                // Only the HUD's sessions have a report worth opening by itself;
+                // View ▸ Last Session Report works either way.
+                SettingSwitch("Show session report on disconnect", isOn: preference(\.showSessionReport))
+                    .disabled(model.prefs.hudMode == .off)
+            }
+            Section("Input") {
+                // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
+                // matter while the Mac controls the PC; they keep their values.
+                SettingSwitch("Control the PC", detail: "Off to watch without sending keys or clicks.",
+                              isOn: preference(\.forwardInput))
+                Group {
+                    // Off sends keys by their physical position instead. The note
+                    // describes the current mapping, in the same key order.
+                    SettingSwitch("Mac-style modifier keys",
                                   detail: model.prefs.modifiers == .mac
-                                      ? "⌘ is Ctrl, ⌥ is Alt, ⌃ is the Windows key."
-                                      : "⌘ is Alt, ⌥ is the Windows key, ⌃ is Ctrl.",
+                                      ? "\u{2318} is Ctrl, \u{2325} is Alt, \u{2303} is the Windows key."
+                                      : "\u{2318} is Alt, \u{2325} is the Windows key, \u{2303} is Ctrl.",
                                   isOn: Binding(get: { model.prefs.modifiers == .mac }, set: {
                                       var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
                                   }))
-                    .padding(.top, Style.Space.s)
-                Toggle("Natural scrolling", isOn: Binding(get: {
-                    model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
-                }, set: {
-                    var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
-                }))
-                .toggleStyle(.checkbox)
-                .padding(.top, Style.Space.s)
+                    SettingSwitch("Natural scrolling", isOn: Binding(get: {
+                        model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
+                    }, set: {
+                        var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
+                    }))
+                }
+                .disabled(!model.prefs.forwardInput)
             }
-            .disabled(!model.prefs.forwardInput)
         }
-        .padding(Style.Space.l)
-        .frame(width: Style.settingsWidth, alignment: .leading)
+        .formStyle(.grouped)
+        .scrollDisabled(true)
+        .frame(width: Style.settingsWidth)
+        .fixedSize(horizontal: false, vertical: true)
         // The popover would otherwise make the bitrate field first responder,
         // and the first keystroke would change the bitrate. Click to edit it.
         .background(NoInitialFocus())
     }
 }
 
-/// A settings checkbox with a line of explanation under its title.
-private struct DescribedCheckbox: View {
+/// A settings switch with an optional line of explanation under its title,
+/// drawn by the grouped form as a subtitle.
+private struct SettingSwitch: View {
     let title: String
-    let detail: String
+    let detail: String?
     @Binding var isOn: Bool
 
-    init(_ title: String, detail: String, isOn: Binding<Bool>) {
+    init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) {
         self.title = title
         self.detail = detail
         _isOn = isOn
@@ -590,16 +567,11 @@ private struct DescribedCheckbox: View {
 
     var body: some View {
         Toggle(isOn: $isOn) {
-            VStack(alignment: .leading, spacing: Style.Space.tight) {
-                Text(verbatim: title)
-                // One line: the popover is narrow, so keep details short.
-                Text(verbatim: detail)
-                    .font(Style.Font.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Text(verbatim: title)
+            if let detail { Text(verbatim: detail) }
         }
-        .toggleStyle(.checkbox)
+        .toggleStyle(.switch)
+        .controlSize(.mini)
     }
 }
 
