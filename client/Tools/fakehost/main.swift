@@ -58,6 +58,15 @@
 //   ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -c:v libx265 -pix_fmt yuv444p -f hevc clip.hevc
 //   ./fakehost 8471 hang --paired --clip clip.hevc --format 4 --enc q,444,10
 //
+// Clock sync (PROTOCOL.md "Clock sync and frame timing") is on unless
+// `--no-timing`: SERVER_HELLO advertises CAP_TIMING, TIME_REQUESTs get
+// TIME_REPLYs (written before the next FRAME, like the real host), and from
+// the first reply on every FRAME is followed by FRAME_TIMING_EXT. Its clock
+// is this Mac's uptime in µs plus `--clock-offset-ms <n>` (may be negative),
+// so the app's estimate can be checked against a known answer. It pretends
+// DWM presented each picture 0.8 ms before the tick and encoding took 0.2 ms;
+// every fifth tick is a re-encode (present unknown).
+//
 // Messages this fake reads fit one record; FRAMEs it streams are split into
 // records as the spec says (the app reassembles them; CryptoTests covers that).
 import CryptoKit
@@ -110,6 +119,36 @@ let videoFormat = argument("--format").flatMap { UInt8($0) } ?? 0
 let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { UInt16($0) } } ?? [1280, 720]
 // `--no-frames`: STREAM_START, then nothing (a PC that can't capture).
 let noFrames = args.contains("--no-frames")
+let timing = !args.contains("--no-timing")
+let clockOffsetMicros = Int64((Double(argument("--clock-offset-ms") ?? "0") ?? 0) * 1_000)
+/// The fake PC's clock: this Mac's uptime shifted by the offset.
+func hostMicros() -> UInt64 {
+    UInt64(max(0, Int64(DispatchTime.now().uptimeNanoseconds / 1_000) + clockOffsetMicros))
+}
+
+/// Shared between the reader thread (requests, inputs) and the streaming
+/// thread (replies, FRAME_TIMING_EXT).
+final class TimingState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queued: [(client: UInt64, received: UInt64)] = []
+    private var started = false
+    private(set) var replied = false
+    private var inputs: UInt64 = 0
+    private var lastInput = UInt64.max
+
+    func request(client: UInt64) {
+        lock.withLock {
+            started = true
+            if queued.count < 16 { queued.append((client, hostMicros())) }
+        }
+    }
+    func input() { lock.withLock { if started { inputs += 1; lastInput = hostMicros() } } }
+    func takeQueued() -> [(client: UInt64, received: UInt64)] {
+        lock.withLock { defer { queued = [] }; if !queued.isEmpty { replied = true }; return queued }
+    }
+    var isReplied: Bool { lock.withLock { replied } }
+    var inputCounts: (UInt64, UInt64) { lock.withLock { (inputs, lastInput) } }
+}
 let streamFPS = argument("--fps").flatMap { UInt16($0) }.map { min(max($0, 1), 240) } ?? 60
 print("pk=\(pkHex) pg=\(pgHex) PIN \(pin)")
 print("advertise: dns-sd -R 'Fake PC' _relay._tcp . \(port) v=4 pk=\(pkHex) pg=\(pgHex)\(enc.map { " enc=\($0)" } ?? "")")
@@ -252,7 +291,9 @@ func serve(_ fd: Int32) {
     }
     var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     hello.append(claimPaired ? 1 : 0)
-    if !legacyPair { hello.append(Proto.capPairName | (enc != nil ? Proto.capVideoOptions : 0)) }
+    if !legacyPair {
+        hello.append(Proto.capPairName | (enc != nil ? Proto.capVideoOptions : 0) | (timing ? Proto.capTiming : 0))
+    }
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
     /// CPace as the responder (B), after the Mac's PAIR. Returns whether it confirmed.
@@ -294,7 +335,16 @@ func serve(_ fd: Int32) {
         if noFrames { print("-- STREAM_START sent; withholding frames"); _ = readFrame(fd); return }
         guard writeAll(fd, tx.sealChunked(type: 0x03, payload: config)) else { return }
         let closed = Flag()
-        Thread.detachNewThread { while readFrame(fd) != nil {}; closed.set() } // PONGs and input
+        let clock = TimingState()
+        // PONGs, input and TIME_REQUESTs. rx is this thread's alone from here.
+        Thread.detachNewThread {
+            while let body = readFrame(fd) {
+                guard let (type, payload) = rx.open(body) else { continue }
+                if type == 0x88, timing, payload.count >= 8 { clock.request(client: payload.be64(at: 0)) }
+                if (0x90...0x93).contains(type) { clock.input() }
+            }
+            closed.set()
+        }
         var sent = 0, lastPing = Date.distantPast
         let interval = 1_000_000_000 / UInt64(streamFPS)
         let began = DispatchTime.now().uptimeNanoseconds
@@ -303,7 +353,26 @@ func serve(_ fd: Int32) {
             let unit = clip.units[sent % clip.units.count]
             var body = Data()
             for nal in unit.nals { body.appendBE32(UInt32(nal.count)); body.append(nal) }
+            for request in clock.takeQueued() {
+                var reply = Data()
+                reply.appendBE64(request.client); reply.appendBE64(request.received); reply.appendBE64(hostMicros())
+                writeAll(fd, tx.seal(type: 0x09, payload: reply))
+            }
+            let tick = hostMicros()
             guard writeAll(fd, tx.sealChunked(type: 0x04, flags: unit.keyframe ? 0x01 : 0, payload: body)) else { break }
+            let sentAt = hostMicros()
+            if clock.isReplied {
+                let (inputs, lastInput) = clock.inputCounts
+                var ext = Data()
+                ext.appendBE64(UInt64(sent))
+                ext.appendBE64(sent % 5 == 4 ? .max : tick - 800)
+                ext.appendBE64(tick + 200)
+                ext.appendBE64(sentAt)
+                for field: UInt32 in [300, 200, UInt32(min(sentAt - tick, 1_000_000)), .max, .max] { ext.appendBE32(field) }
+                ext.appendBE64(inputs)
+                ext.appendBE64(lastInput)
+                writeAll(fd, tx.seal(type: 0x0A, payload: ext))
+            }
             sent += 1
             if Date().timeIntervalSince(lastPing) >= 1 {
                 lastPing = Date()
