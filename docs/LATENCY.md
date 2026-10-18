@@ -395,4 +395,5 @@ swift run -c release Relay --latency-stats
 ```
 
 Stream for at least a minute, leave with ⌃⌥⌘Q and copy the session report
-(it opens by itself when the HUD was on).
+(View ▸ Last Session Report, or by itself with Show session report on
+disconnect turned on).

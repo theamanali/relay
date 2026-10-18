@@ -521,10 +521,9 @@ struct SessionSettingsView: View {
                                   prefs.hudMode = on ? .compact : .off
                                   model.setPrefs(prefs)
                               }))
-                // Only the HUD's sessions have a report worth opening by itself;
-                // View ▸ Last Session Report works either way.
+                // Latency is measured with or without the HUD, so the report
+                // is there either way (also View ▸ Last Session Report).
                 SettingSwitch("Show session report on disconnect", isOn: preference(\.showSessionReport))
-                    .disabled(model.prefs.hudMode == .off)
             }
             Section("Input") {
                 // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only

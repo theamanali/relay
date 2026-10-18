@@ -53,15 +53,15 @@ final class SessionPrefsTests: XCTestCase {
         XCTAssertTrue(SessionPrefs.load(from: defaults).connectAtLaunch)
     }
 
-    @MainActor func testSessionReportOpensUntilTurnedOff() async {
+    @MainActor func testSessionReportStaysClosedUntilTurnedOn() async {
         let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertTrue(SessionPrefs.load(from: defaults).showSessionReport)
-        var saved = SessionPrefs()
-        saved.showSessionReport = false
-        saved.save(to: defaults)
         XCTAssertFalse(SessionPrefs.load(from: defaults).showSessionReport)
+        var saved = SessionPrefs()
+        saved.showSessionReport = true
+        saved.save(to: defaults)
+        XCTAssertTrue(SessionPrefs.load(from: defaults).showSessionReport)
     }
 
     @MainActor func testCodecFlagOffersOneCodec() async {

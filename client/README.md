@@ -163,8 +163,10 @@ Latency, Input) of switches, laid out like System Settings:
   arrived at (frames that fit one record, or that were already buffered,
   are skipped), **Decrypt** is the time spent opening its records, and
   **Input → sent** runs from the `NSEvent` timestamp to the socket.
-- **Show session report on disconnect**: on by default; uncheck it to keep the
-  report from opening by itself. Greyed out unless the latency overlay is on.
+- **Show session report on disconnect**: off by default; turn it on to open
+  the report by itself when a session ends, whether or not the latency
+  overlay was on (latency is measured either way). View ▸ Last Session
+  Report opens it any time.
 - **Control the PC**: whether your keyboard and pointer go to the PC; off
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
   apply only while it is on.

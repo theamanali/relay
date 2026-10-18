@@ -824,8 +824,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     }
 
     /// Ends the session's measurement once: logs the report and keeps it for
-    /// View ▸ Last Session Report. True when it should open by itself (the
-    /// HUD was on and Show session report on disconnect is checked).
+    /// View ▸ Last Session Report. True when it should open by itself (Show
+    /// session report on disconnect is on; the HUD does not matter).
     private func takeSessionReport() -> Bool {
         guard sessionReportPending else { return false }
         sessionReportPending = false
@@ -833,7 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         guard let report = latencyStats.sessionReport(counters: renderer.presenterCounters) else { return false }
         NSLog("Session report: %@", report.logLine)
         pickerModel.sessionReport = report
-        return prefs.hudMode != .off && prefs.showSessionReport
+        return prefs.showSessionReport
     }
 
     @objc func showSessionReport(_ sender: Any?) {

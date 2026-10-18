@@ -28,8 +28,10 @@ struct SessionPrefs: Equatable {
     var forwardInput = true
     /// The latency HUD; ⌃⌥⌘L cycles it.
     var hudMode: HUDMode = .off
-    /// Open the session report when a session ends; only while the HUD is on.
-    var showSessionReport = true
+    /// Open the session report when a session ends, HUD or not (latency is
+    /// measured either way). Off by default: a window after every session is
+    /// for people who asked for it.
+    var showSessionReport = false
     var bitrateMbps = VideoBitrate.defaultValue
     /// Follow the stream mode and link (`VideoBitrate.automatic`) until the
     /// user picks a bitrate.

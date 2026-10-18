@@ -698,8 +698,9 @@ documented there. What follows is only the mechanics that are easy to break:
   `LatencyStats` records into fixed 0.1 ms histograms (per-second ring for the
   5 s HUD window, plus whole-session); `takeSessionReport` runs once per
   STREAM_START on the first end path, logs `Session report:` and opens the
-  report window when the HUD was on and `showSessionReport` (settings: Show
-  session report on disconnect, default on, greyed out with the HUD off) is set. Prefs keep `showLatency` and add
+  report window when `showSessionReport` is set (settings: Show session
+  report on disconnect; default off and independent of the HUD since
+  2026-10-18, user request: latency is measured either way). Prefs keep `showLatency` and add
   `latencyDetailed`; quitting mid-session also logs the report. Unit-tested
   (stats, HUD bitmap, overlay pixels) and checked live against
   `fakehost --clip` with an isolated `CFFIXED_USER_HOME`: HUD in the frame,
