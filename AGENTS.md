@@ -188,8 +188,13 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   re-encoded and cursor-only ticks. Installed with `install-host.ps1
   -SkipDriver`: hash `107FDB553A7F0FA1AA02973795E1034330FB326381E0C2B1C8D631521C8B84F3`
   (= release), service Running, `probe --pair-only` sees caps `0x07`.
-  Not yet run: a streaming `probe --timing` against the service (it takes
-  the display and blacks out the monitors). The Mac side is next.
+  Then, with the user's go-ahead, `probe --timing --wiggle` against the
+  service at 3024×1964@120 (virtual display `\\.\DISPLAY75`, monitors dark
+  ~9 s): 93.6 fps over 8 s (first frame after 1.8 s), offset 5 µs, min
+  delay 42 µs, 534 fresh frames 0 out of order, 214 `u64::MAX`,
+  present→submit p50 0.9 ms, submit→sent 5.2 ms, sent→received 31 µs,
+  input → applied p50 0.14 ms (p95 1.1), inputs 369 sent / 368 reported;
+  host.log: physical monitors and layout restored. The Mac side is next.
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
   decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
   `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup

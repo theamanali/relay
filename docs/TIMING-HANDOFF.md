@@ -10,8 +10,10 @@ against an elevated `--no-vdd` dev host on loopback (offset 0–4 µs, min
 delay 35–66 µs, no fresh frame out of order, re-encoded and cursor-only
 ticks `u64::MAX`, inputs counted 1:1, input → applied p50 0.13 ms); installed
 with `install-host.ps1 -SkipDriver`, hash `107FDB55…1C8B84F3`, and the
-service advertises capabilities `0x07`. A streaming `probe --timing` against
-the service (which blacks out the monitors) has not been run yet. Evidence:
+service advertises capabilities `0x07`. A streaming `probe --timing --wiggle`
+against the service at 3024×1964@120 (virtual display) gave the same picture:
+offset 5 µs, min delay 42 µs, 534 fresh frames all in order, 214 `u64::MAX`,
+inputs 369 sent / 368 reported with one in flight, layout restored. Evidence:
 `AGENTS.md` Status.
 
 The Mac already measures what it can alone (frame transfer estimate, decrypt,

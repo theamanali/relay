@@ -241,8 +241,10 @@ with the time of the last input applied. With these the Mac can measure desktop
 ([spec](docs/PROTOCOL.md#clock-sync-and-frame-timing)). Unit-tested, strict
 clippy, release build; `probe --timing` against a `--no-vdd` dev host on
 loopback measured a clock offset of 0–4 µs, no fresh frame out of order, every
-input counted, and input → applied 0.13 ms p50. Installed as the service. The
-Mac side is next ([handoff](docs/TIMING-HANDOFF.md)).
+input counted, and input → applied 0.13 ms p50. Installed as the service, where
+a 3024×1964@120 probe session on the virtual display measured the same (offset
+5 µs, frames in order, inputs counted) and restored the layout. The Mac side is
+next ([handoff](docs/TIMING-HANDOFF.md)).
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
