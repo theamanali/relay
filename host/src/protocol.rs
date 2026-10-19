@@ -16,6 +16,8 @@ pub const CAP_VIDEO_OPTIONS: u8 = 0x02;
 /// The host answers TIME_REQUEST, and sends FRAME_TIMING_EXT instead of
 /// FRAME_TIMING once the client has sent one.
 pub const CAP_TIMING: u8 = 0x04;
+/// The host reads CLIENT_HELLO's `display_scale` after the picture options.
+pub const CAP_DISPLAY_SCALE: u8 = 0x08;
 
 /// CLIENT_HELLO extension `encoder_quality`: 0 = the host's default, then
 /// fastest / balanced / best (NVENC P1 / P4 / P6). STREAM_START reports the
@@ -330,6 +332,10 @@ pub struct ClientHello {
     /// advertise `CAP_VIDEO_OPTIONS`; `None` when absent (means 0).
     pub encoder_quality: Option<u8>,
     pub video_flags: Option<u8>,
+    /// Windows display scale for the virtual monitor in percent, after the
+    /// picture options; sent only to hosts with `CAP_DISPLAY_SCALE`. `None`
+    /// when absent; 0 means leave Windows' own choice.
+    pub display_scale: Option<u16>,
 }
 
 impl ClientHello {
@@ -356,6 +362,9 @@ impl ClientHello {
             // Anything after the extension is ignored, as before it existed.
             encoder_quality: p.get(name_end).copied(),
             video_flags: p.get(name_end + 1).copied(),
+            display_scale: p
+                .get(name_end + 2..name_end + 4)
+                .map(|b| u16::from_be_bytes([b[0], b[1]])),
         })
     }
 }
@@ -407,7 +416,7 @@ pub fn server_hello(name: &str, paired: bool) -> Vec<u8> {
 /// Keep server_hello() as the legacy form for the original v4 test vector.
 pub fn server_hello_with_capabilities(name: &str, paired: bool) -> Vec<u8> {
     let mut p = server_hello(name, paired);
-    p.push(CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING);
+    p.push(CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING | CAP_DISPLAY_SCALE);
     p
 }
 
@@ -492,9 +501,9 @@ mod timing_tests {
         assert_eq!(extended.len(), legacy.len() + 1);
         assert_eq!(
             extended[legacy.len()],
-            CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING
+            CAP_PAIR_NAME | CAP_VIDEO_OPTIONS | CAP_TIMING | CAP_DISPLAY_SCALE
         );
-        assert_eq!(extended[legacy.len()], 0x07);
+        assert_eq!(extended[legacy.len()], 0x0f);
     }
 
     #[test]
@@ -669,6 +678,30 @@ mod timing_tests {
         assert_eq!(
             (parsed.encoder_quality, parsed.video_flags),
             (Some(2), Some(3))
+        );
+    }
+
+    #[test]
+    fn client_hello_reads_the_display_scale_after_the_picture_options() {
+        let mut payload = hello(120);
+        payload.extend_from_slice(&[encoder_quality::DEFAULT, 0]);
+        assert_eq!(ClientHello::parse(&payload).unwrap().display_scale, None);
+        // One byte of a u16 is not a value.
+        payload.push(0);
+        assert_eq!(ClientHello::parse(&payload).unwrap().display_scale, None);
+        payload.push(200);
+        let parsed = ClientHello::parse(&payload).unwrap();
+        assert_eq!(parsed.display_scale, Some(200));
+        assert_eq!(
+            (parsed.encoder_quality, parsed.video_flags),
+            (Some(0), Some(0))
+        );
+        // Big-endian, and later bytes stay ignored.
+        payload.truncate(payload.len() - 2);
+        payload.extend_from_slice(&[0x01, 0x2c, 0xaa, 0xbb]);
+        assert_eq!(
+            ClientHello::parse(&payload).unwrap().display_scale,
+            Some(300)
         );
     }
 

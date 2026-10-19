@@ -7,7 +7,7 @@
 #![windows_subsystem = "windows"]
 
 use relay_host::{
-    crypto, discovery, display, driver, encoder, gpu, nvenc_caps, protocol, server, service,
+    crypto, discovery, display, driver, encoder, gpu, nvenc_caps, protocol, scale, server, service,
     status, topology, tray,
 };
 
@@ -91,6 +91,20 @@ enum Command {
         hz: u32,
         /// How long to keep the display, in seconds
         #[arg(long, default_value_t = 10)]
+        seconds: u64,
+        /// Windows display scale for the virtual display, in percent (as a
+        /// Mac's CLIENT_HELLO `display_scale` would ask)
+        #[arg(long)]
+        scale: Option<u16>,
+    },
+    /// Show every active display's Windows scale. With --try, set one
+    /// display to a scale, show it, and restore it the way a session does
+    DisplayScale {
+        /// `\\.\DISPLAYn` and a percentage, e.g. --try \\.\DISPLAY1 125
+        #[arg(long = "try", num_args = 2, value_names = ["DISPLAY", "PERCENT"])]
+        try_scale: Option<Vec<String>>,
+        /// Seconds to hold the trial scale before restoring it
+        #[arg(long, default_value_t = 2)]
         seconds: u64,
     },
 }
@@ -418,7 +432,9 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
             height,
             hz,
             seconds,
-        }) => attach_test(&cli.serve, Mode { width, height, hz }, seconds),
+            scale,
+        }) => attach_test(&cli.serve, Mode { width, height, hz }, seconds, scale),
+        Some(Command::DisplayScale { try_scale, seconds }) => display_scale(try_scale, seconds),
     }
 }
 
@@ -601,6 +617,8 @@ fn shut_down(
 fn put_displays_back(drv: &Arc<dyn VirtualDisplay>) {
     // Physical monitor device nodes must exist before their saved topology can
     // be restored. MTT cleanup also recovers locks left by a crashed host.
+    // The virtual monitor's scale goes back first, while it can still be on.
+    scale::recover_saved();
     if let Err(e) = drv.cleanup() {
         log::warn!("virtual display cleanup failed: {e:#}");
     }
@@ -613,6 +631,7 @@ fn put_displays_back(drv: &Arc<dyn VirtualDisplay>) {
 
 /// `restore` subcommand: the manual way out if the physical displays stayed off.
 fn restore_displays() -> Result<()> {
+    scale::recover_saved();
     match driver::open() {
         Ok(drv) => drv.cleanup()?,
         Err(e) => log::warn!("virtual display driver not available: {e:#}"),
@@ -638,14 +657,36 @@ fn restore_displays() -> Result<()> {
     Ok(())
 }
 
+/// `display-scale` subcommand. The trial goes through the session's own
+/// apply / snapshot / restore path, on whichever display is named.
+fn display_scale(try_scale: Option<Vec<String>>, seconds: u64) -> Result<()> {
+    print!("{}", scale::describe_all()?);
+    let Some(args) = try_scale else {
+        return Ok(());
+    };
+    let (display, percent) = (&args[0], args[1].parse::<u16>().context("PERCENT")?);
+    let applied = scale::apply(display, percent)?;
+    println!(
+        "set {display} for {percent}% (previous step {}):",
+        applied.previous
+    );
+    print!("{}", scale::describe_all()?);
+    std::thread::sleep(Duration::from_secs(seconds));
+    // What a crashed session leaves for the next start: the saved file.
+    scale::recover_saved();
+    println!("restored:");
+    print!("{}", scale::describe_all()?);
+    Ok(())
+}
+
 /// Runs exactly what a session does — snapshot, enable, exclusive, hold,
 /// restore, disable — and reports on every step.
-fn attach_test(args: &ServeArgs, want: Mode, seconds: u64) -> Result<()> {
+fn attach_test(args: &ServeArgs, want: Mode, seconds: u64, scale: Option<u16>) -> Result<()> {
     let gpu = select_gpu(args.gpu.as_deref())?;
     let drv = open_driver()?;
 
     let started = std::time::Instant::now();
-    let source = server::acquire_display(Some(&drv), &gpu, want, true)?;
+    let source = server::acquire_display(Some(&drv), &gpu, want, true, scale::requested(scale))?;
     let monitor = source.monitor().clone();
     log::info!(
         "virtual display active after {:.1}s: {} ({}), {}",

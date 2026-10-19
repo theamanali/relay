@@ -17,6 +17,7 @@ mod native_nvenc;
 mod nvenc_bindings;
 pub mod nvenc_caps;
 pub mod protocol;
+pub mod scale;
 pub mod server;
 pub mod service;
 pub mod status;

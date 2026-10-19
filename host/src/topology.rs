@@ -146,6 +146,23 @@ fn source_gdi_name(adapter: LUID, id: u32) -> Option<String> {
         .then(|| wide_to_string(&name.viewGdiDeviceName))
 }
 
+/// Every active path's source as (adapter, source id, `\\.\DISPLAYn`,
+/// monitor device path).
+pub(crate) fn active_sources() -> Result<Vec<(LUID, u32, String, String)>> {
+    let (paths, _) = query(QDC_ONLY_ACTIVE_PATHS)?;
+    Ok(paths
+        .iter()
+        .map(|p| {
+            (
+                p.sourceInfo.adapterId,
+                p.sourceInfo.id,
+                source_gdi_name(p.sourceInfo.adapterId, p.sourceInfo.id).unwrap_or_default(),
+                target_device_path(p.targetInfo.adapterId, p.targetInfo.id).unwrap_or_default(),
+            )
+        })
+        .collect())
+}
+
 fn snapshot_file() -> Result<PathBuf> {
     Ok(crate::state_dir()?.join("display-snapshot.bin"))
 }

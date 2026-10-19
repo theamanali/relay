@@ -119,6 +119,12 @@ struct Args {
     /// present → submit → sent → received. With --wiggle, also input → applied.
     #[arg(long)]
     timing: bool,
+    /// Ask for this Windows display scale in percent (CLIENT_HELLO
+    /// `display_scale`, after the picture options; 0 = Windows' own). Sent only
+    /// when the host advertises CAP_DISPLAY_SCALE. Applies to the virtual
+    /// display; a --no-vdd host logs it and leaves its monitors alone
+    #[arg(long)]
+    display_scale: Option<u16>,
 }
 
 /// NTP's estimate from one TIME_REPLY: t1 client send, t2 host receive,
@@ -216,6 +222,7 @@ fn main() -> Result<()> {
     let capabilities = p.get(name_end + 1).copied().unwrap_or(0);
     let named_pairing = capabilities & protocol::CAP_PAIR_NAME != 0;
     let video_options = capabilities & protocol::CAP_VIDEO_OPTIONS != 0;
+    let display_scale = capabilities & protocol::CAP_DISPLAY_SCALE != 0;
     let timing = args.timing && capabilities & protocol::CAP_TIMING != 0;
     if args.timing && !timing {
         println!("host does not advertise timing; not sending TIME_REQUEST");
@@ -279,7 +286,13 @@ fn main() -> Result<()> {
         (None, Some(CodecArg::Hevc)) => Codec::Hevc.bit(),
     });
     hello.extend_from_slice(&protocol::pair_name_ad(&args.name));
-    if args.quality.is_some() || args.full_color || args.ten_bit {
+    let scale = args.display_scale.filter(|_| {
+        display_scale || {
+            println!("host does not advertise display scale; not sending it");
+            false
+        }
+    });
+    if args.quality.is_some() || args.full_color || args.ten_bit || scale.is_some() {
         let quality = args
             .quality
             .map_or(encoder_quality::DEFAULT, EncoderQuality::wire);
@@ -290,6 +303,12 @@ fn main() -> Result<()> {
             println!("picture options: quality {quality}, flags 0b{flags:02b}");
         } else {
             println!("host does not advertise picture options; sending CLIENT_HELLO without them");
+        }
+        // display_scale follows the picture options, which a host with
+        // CAP_DISPLAY_SCALE always reads.
+        if let Some(percent) = scale {
+            hello.extend_from_slice(&percent.to_be_bytes());
+            println!("display scale: {percent}%");
         }
     }
     tx.send(msg::CLIENT_HELLO, 0, &hello)?;

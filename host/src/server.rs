@@ -23,6 +23,7 @@ use crate::protocol::{
     self, msg, stop_reason, video_flags, ClientHello, Codec, FrameTiming, FrameTimingExt,
     TimeReply, VideoFormat, FLAG_KEYFRAME, UNKNOWN_MICROS, UNKNOWN_TIME,
 };
+use crate::scale;
 use crate::status::{HostStatus, SessionInfo, NO_END_REQUEST};
 use crate::topology;
 
@@ -435,15 +436,23 @@ fn keep_displays_on(stop: &AtomicBool) {
 }
 
 /// Everything that has to be undone when the session ends, in order: the
-/// user's display layout comes back first, then the virtual monitor goes away.
+/// virtual monitor's scale while it is still on the desktop, the user's
+/// display layout, then the virtual monitor goes away.
 struct DisplayLease {
     driver: Option<(Arc<dyn VirtualDisplay>, Attachment)>,
     snapshot: Option<topology::Snapshot>,
     monitor: Monitor,
+    scale: Option<scale::Applied>,
 }
 
 impl Drop for DisplayLease {
     fn drop(&mut self) {
+        if let Some(applied) = self.scale.take() {
+            // A failure keeps the saved value for the next `recover_saved`.
+            if let Err(e) = applied.restore() {
+                log::warn!("could not restore the display scale: {e:#}");
+            }
+        }
         if let Some((driver, _)) = &self.driver {
             if let Err(e) = driver.unlock_physical_outputs() {
                 log::warn!("could not re-enable physical monitor devices: {e:#}");
@@ -560,7 +569,13 @@ impl Source {
                     want.height,
                     want.hz
                 );
-                (topology::exclusive(pnp_id, want)?, true)
+                let monitor = topology::exclusive(pnp_id, want)?;
+                if let Some(applied) = &self.lease.scale {
+                    if let Err(e) = applied.reapply() {
+                        log::warn!("could not reapply the display scale: {e:#}");
+                    }
+                }
+                (monitor, true)
             }
         };
 
@@ -598,13 +613,14 @@ pub fn acquire_display(
     gpu: &GpuInfo,
     want: Mode,
     lock_physical: bool,
+    scale: Option<u16>,
 ) -> Result<Source> {
     if driver.is_some() {
         return crate::desktop::with_input_desktop("acquire display", || {
-            acquire_display_bound(driver, gpu, want, lock_physical)
+            acquire_display_bound(driver, gpu, want, lock_physical, scale)
         });
     }
-    acquire_display_bound(driver, gpu, want, lock_physical)
+    acquire_display_bound(driver, gpu, want, lock_physical, scale)
 }
 
 fn acquire_display_bound(
@@ -612,6 +628,7 @@ fn acquire_display_bound(
     gpu: &GpuInfo,
     want: Mode,
     lock_physical: bool,
+    scale: Option<u16>,
 ) -> Result<Source> {
     let Some(driver) = driver else {
         let monitor = display::primary().ok_or_else(|| anyhow!("no primary display"))?;
@@ -625,11 +642,16 @@ fn acquire_display_bound(
             placement.hz,
             location.adapter_name
         );
+        if let Some(percent) = scale {
+            // The primary is a physical monitor: never change its scale.
+            log::info!("dev mode: not applying the client's {percent}% display scale");
+        }
         return Ok(Source {
             lease: DisplayLease {
                 driver: None,
                 snapshot: None,
                 monitor,
+                scale: None,
             },
             placement,
             location,
@@ -638,6 +660,8 @@ fn acquire_display_bound(
 
     // Do not overwrite a failed restore with a potentially damaged/new-session
     // layout. Retry it in the current console before beginning another lease.
+    // A scale left changed goes back first, while its monitor may still be on.
+    scale::recover_saved();
     topology::recover_saved()?;
 
     // The snapshot must describe the user's own layout: a virtual monitor that
@@ -660,6 +684,7 @@ fn acquire_display_bound(
         driver: Some((Arc::clone(driver), attachment)),
         snapshot: Some(snapshot),
         monitor,
+        scale: None,
     };
 
     let monitor = topology::exclusive(driver.pnp_id(), want)?;
@@ -670,6 +695,13 @@ fn acquire_display_bound(
         log::info!("physical monitor device lock disabled (--no-lock-physical)");
     }
     let name = lease.monitor.device_name.clone();
+    if let Some(percent) = scale {
+        // Cosmetic: a session at Windows' own scale beats no session.
+        match scale::apply(&name, percent) {
+            Ok(applied) => lease.scale = Some(applied),
+            Err(e) => log::warn!("could not set the display scale to {percent}%: {e:#}"),
+        }
+    }
     let placement = display::current_placement(&name)?;
     if (placement.width, placement.height, placement.hz) != (want.width, want.height, want.hz) {
         if driver.dynamic_modes() {
@@ -882,7 +914,7 @@ fn handle_session(
     }
     let hello = ClientHello::parse(&payload).ok_or_else(|| anyhow!("malformed CLIENT_HELLO"))?;
     log::info!(
-        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz at {} Mbps, codecs 0b{:03b}, input={}, {}",
+        "client '{}' ({client_fp}) v{} wants {}x{}@{}Hz at {} Mbps, codecs 0b{:03b}, input={}, {}, {}",
         hello.name,
         hello.version,
         hello.width,
@@ -897,6 +929,11 @@ fn handle_session(
                 "picture options quality {q}, flags 0b{:02b}",
                 flags.unwrap_or(0)
             ),
+        },
+        match hello.display_scale {
+            None => "no display scale".to_string(),
+            Some(0) => "Windows' own display scale".to_string(),
+            Some(p) => format!("display scale {p}%"),
         }
     );
     if hello.version != protocol::VERSION {
@@ -968,7 +1005,13 @@ fn handle_session(
         Ok(()) => log::info!("woke displays before session setup"),
         Err(e) => log::warn!("could not wake displays before session setup: {e:#}"),
     }
-    let mut source = acquire_display(cfg.driver.as_ref(), &gpu, want, cfg.lock_physical)?;
+    let mut source = acquire_display(
+        cfg.driver.as_ref(),
+        &gpu,
+        want,
+        cfg.lock_physical,
+        scale::requested(hello.display_scale),
+    )?;
     let placement = source.placement;
     let actual = Mode {
         width: placement.width,
@@ -2090,6 +2133,7 @@ mod pairing_wait_tests {
             assert_ne!(hello[name_end + 1] & protocol::CAP_PAIR_NAME, 0);
             assert_ne!(hello[name_end + 1] & protocol::CAP_VIDEO_OPTIONS, 0);
             assert_ne!(hello[name_end + 1] & protocol::CAP_TIMING, 0);
+            assert_ne!(hello[name_end + 1] & protocol::CAP_DISPLAY_SCALE, 0);
 
             // Exceeds the old known-client deadline, through the production
             // handler rather than a fixture that sets its own host timeout.
@@ -2405,6 +2449,7 @@ mod preflight_tests {
             name: "MacBook".into(),
             encoder_quality: Some(protocol::encoder_quality::BALANCED),
             video_flags: Some(0),
+            display_scale: None,
         }
     }
 
