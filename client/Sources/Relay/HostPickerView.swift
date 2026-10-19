@@ -94,19 +94,17 @@ private struct WiFiConnectAlert: View {
 
 /// A reduced size on a 1× screen makes the PC's desktop look larger than
 /// the Mac's own UI (Windows can't scale below 100%): say so once, with the
-/// system's "Don't ask again", and offer Native instead.
+/// system's "Don't ask again".
 private struct LargerDesktopAlert: View {
     @Bindable var model: PickerModel
     @AppStorage(PickerModel.largerDesktopWarningSuppressedKey) private var suppressed = false
 
     var body: some View {
         let size = StreamMode.size(native: model.nativePixelSize, scale: model.mode.scale)
-        let native = StreamMode.size(native: model.nativePixelSize, scale: 1)
         let larger = model.desktopEnlargement.map(PickerModel.enlargementText) ?? "2×"
         // Plain Strings: localized interpolation groups digits ("2,560").
         let title = "Connect at \(size.width) × \(size.height)?"
-        let useNative = "Use Native (\(native.width) × \(native.height))"
-        let message = "On this display, the PC’s desktop will look about \(larger) larger than your Mac’s and slightly blurry. Windows can’t scale below 100%, so Native is the only size that looks normal here."
+        let message = "Windows will look about \(larger) larger on this display. For normal size, choose Native."
         Color.clear
             .alert(
                 title,
@@ -119,7 +117,6 @@ private struct LargerDesktopAlert: View {
                     model.connect?()
                 }
                 .keyboardShortcut(.defaultAction)
-                Button(useNative) { model.connectAtNative() }
                 Button("Cancel", role: .cancel) { model.largerDesktopCandidate = nil }
             } message: { _ in
                 Text(verbatim: message)

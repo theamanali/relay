@@ -133,12 +133,6 @@ final class PickerModel {
         return tenths == tenths.rounded() ? "\(Int(tenths))×" : String(format: "%.1f×", tenths)
     }
 
-    /// The larger-desktop alert's other way out: connect at Native instead.
-    func connectAtNative() {
-        largerDesktopCandidate = nil
-        setMode(StreamMode(scale: 1, refresh: mode.refresh))
-        connect?()
-    }
     @ObservationIgnored var forget: ((DiscoveredHost) -> Void)?
     @ObservationIgnored var rename: ((DiscoveredHost, String) -> Void)?
     @ObservationIgnored var prefsChanged: ((SessionPrefs) -> Void)?

@@ -82,8 +82,8 @@ pairing; reopening Relay or entering the PIN again should not be necessary.
   best connection. "Don't ask again" turns the question off. On a 1× screen
   (an external monitor without Retina), 75% and 50% make the PC's desktop
   look larger than the Mac's own (about 1.3× and 2×) and a little soft,
-  because Windows can't scale below 100%; Connect asks first, and offers
-  **Use Native** instead. It has its own "Don't ask again". On a Retina
+  because Windows can't scale below 100%; Connect asks first, with its own
+  "Don't ask again". On a Retina
   screen every size looks normal and nothing is asked. When the session ends, the list comes back with the
   same PC selected.
 - A PC that is streaming to another Mac still allows Pair and Forget. Connect

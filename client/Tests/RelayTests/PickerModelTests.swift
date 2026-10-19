@@ -254,11 +254,7 @@ final class PickerModelTests: XCTestCase {
         XCTAssertEqual(model.largerDesktopCandidate?.id, "Desk")
         XCTAssertEqual(connects, 1)
 
-        // Use Native connects at Native, keeping the rate.
-        model.connectAtNative()
-        XCTAssertNil(model.largerDesktopCandidate)
-        XCTAssertEqual(model.mode, StreamMode(scale: 1, refresh: 144))
-        XCTAssertEqual(connects, 2)
+        model.largerDesktopCandidate = nil
 
         // Over Wi-Fi as well: the Wi-Fi alert, then this one.
         overWiFi = true
@@ -270,7 +266,7 @@ final class PickerModelTests: XCTestCase {
         await Task.yield()
         XCTAssertNil(model.wifiCandidate)
         XCTAssertEqual(model.largerDesktopCandidate?.id, "Desk")
-        XCTAssertEqual(connects, 2)
+        XCTAssertEqual(connects, 1)
         model.largerDesktopCandidate = nil
         overWiFi = false
 
@@ -279,7 +275,7 @@ final class PickerModelTests: XCTestCase {
                         initial: StreamMode(scale: 0.5, refresh: 120))
         XCTAssertNil(model.desktopEnlargement)
         model.requestConnect()
-        XCTAssertEqual(connects, 3)
+        XCTAssertEqual(connects, 2)
 
         // "Do not show this message again".
         model.configure(native: CGSize(width: 2560, height: 1440), pointWidth: 2560, maxRefresh: 144,
@@ -287,7 +283,7 @@ final class PickerModelTests: XCTestCase {
         UserDefaults.standard.set(true, forKey: PickerModel.largerDesktopWarningSuppressedKey)
         model.requestConnect()
         XCTAssertNil(model.largerDesktopCandidate)
-        XCTAssertEqual(connects, 4)
+        XCTAssertEqual(connects, 3)
     }
 
     @MainActor func testSectionsFoldOnlyWithTwoOrMorePCs() async {
