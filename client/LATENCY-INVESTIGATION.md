@@ -5,7 +5,7 @@ motion while the app had the system cursor hidden with `NSCursor.hide()`. See
 [Pointer motion with a hidden cursor](#pointer-motion-with-a-hidden-cursor).
 The measurements below are the original, pre-fix investigation.
 
-Source `a2e90ef`, M3 Pro / macOS 27.0, real GAMING-PC, HEVC
+Source `0159395`, M3 Pro / macOS 27.0, real GAMING-PC, HEVC
 3024×1964 @ 120 Hz, 120 Mbps, Balanced, 4:2:0 8-bit, Ethernet,
 VSync off, detailed Relay HUD. Mostly static PowerShell content; its window
 geometry changed between some runs. First three seconds excluded by Relay.

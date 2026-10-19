@@ -4,7 +4,7 @@ The user initially requested a Windows-session handoff on 2026-10-09, then
 authorized proceeding with the fix. The Mac session applied the host source
 change and added production-handler regression tests on 2026-10-10.
 **Windows checks, deployment and all five user-run real-Mac retests passed on
-2026-10-10.** Source commit `ae249f4` needed no further code changes. See the
+2026-10-10.** Source commit `eb2f280` needed no further code changes. See the
 verification record below for the installed build and scope of the checks.
 
 ## Reproduction and cause
@@ -145,7 +145,7 @@ concurrent stream. No new host source changes were required.
 ## Real-Mac verification — 2026-10-10
 
 The user reported **“All of these tests worked”** for the five requested checks
-on the deployed `ae249f4` build:
+on the deployed `eb2f280` build:
 
 | User-run check | Result |
 |---|---|

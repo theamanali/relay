@@ -329,7 +329,7 @@ same fake identity, and verified it without a PIN. GAMING-PC stayed visible
 through that restart. The local advertiser was kept alive: a record registered
 by this Mac cannot reproduce the real PC's TXT failure.
 
-Fixed-client real-PC checks, home LAN, 2026-10-18 UTC, source `4f74101`:
+Fixed-client real-PC checks, home LAN, 2026-10-18 UTC, source `232805f`:
 
 | case | observed result |
 |---|---|

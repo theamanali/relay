@@ -6,10 +6,10 @@ case below has a recorded result on the hardware.
 
 ## Build and machine
 
-- Host source: `062d411` for the agent-run cases below (phase A
-  `9334c1e`…`4a8c5d6`, fault hooks `04ae0ff`, per-session GPU re-selection
-  `d1546a3`, refused-desktop fix `062d411`; release SHA-256 `D7C7F314…004345F9`).
-  The user-run cases use `3e320af`, which only repairs em dashes in log
+- Host source: `cd93619` for the agent-run cases below (phase A
+  `0eb98fa`…`728f547`, fault hooks `580b726`, per-session GPU re-selection
+  `49341a8`, refused-desktop fix `cd93619`; release SHA-256 `D7C7F314…004345F9`).
+  The user-run cases use `54e400c`, which only repairs em dashes in log
   strings and comments that a PowerShell rewrite had double-encoded: release
   SHA-256 `A3E248D313F6ED871C46B404B691034E6254574DFA2FF0F91A46E2A1518F1112`,
   installed with `install-host.ps1 -SkipDriver`. Every relink changes the
@@ -66,7 +66,7 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
 
 ### Findings
 
-1. **Fixed (`062d411`), predates phase A.** `is_desktop_not_capturable` never
+1. **Fixed (`cd93619`), predates phase A.** `is_desktop_not_capturable` never
    matched: `Encoder::spawn` attaches the marker with `.context()`, which is
    not a chain item of its own type. On a desktop the process may not capture
    (the lock screen, for a non-SYSTEM host) restarts fell into the generic
@@ -74,7 +74,7 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    session. The first B12 run (12 s) survived only because 12 < 15; after the
    fix the 20 s run waited and recovered. The SYSTEM worker can capture the lock
    screen, which is why the service never showed it.
-2. **Fixed in phase C (`c2400d9`): the next capture waits for retirements and
+2. **Fixed in phase C (`391f815`): the next capture waits for retirements and
    retries a busy output.** B03's native start failed with
    `IDXGIOutput1::DuplicateOutput: The parameter is incorrect (0x80070057)`. It
    began 1.5 s after the 4:4:4 10-bit session ended, whose capture is retired
@@ -96,7 +96,7 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    iec61966-2-1 / bt709 came from the ffmpeg fallback of finding 2, not from
    `signal_colour`: ffmpeg's NVENC wrapper wrote matrix 5 (BT.470BG) for RGB
    input and copied ddagrab's frame tags (BT.709 primaries, sRGB transfer).
-   Rerun on the pre-phase-C source (`8d89fac` build, `--no-vdd` dev host,
+   Rerun on the pre-phase-C source (`66facf4` build, `--no-vdd` dev host,
    probe; SPS VUI read with `ffmpeg -bsf:v trace_headers`, which matches
    ffprobe):
 
@@ -314,7 +314,7 @@ discovery issue outside this gate.
 
 ## Phase C regression (2026-10-17, probe-tested)
 
-The native-only build (`b11f2a4` source; release and installed SHA-256
+The native-only build (`88ee82a` source; release and installed SHA-256
 `C5EA77A8B37F4E1B869C206B1EDF1A8EAF76DA99169ED9F38BB2E43A754A7442`) on
 `--no-vdd` dev hosts with probe, the 2560×1440@144 primary display (logged
 as `\\.\DISPLAY2` that time; see the GDI-name note above). All 16 checks passed, then the script installed
@@ -342,7 +342,7 @@ regression (see its section `The NVIDIA-only host against that baseline`).
 
 | case | date/time | result | notes (HUD fps, PC work, log lines, anything odd) |
 |---|---|---|---|
-| U1 | 2026-10-17 21:50–21:56 and 22:12–22:13 UTC | **pass** | Two real-Mac sessions on the installed `3e320af`. Each: `encoder preflight: HEVC 3024x1964@120 P4 initializes` (194 / 202 ms), wake, layout saved, `virtual display \\.\DISPLAY37`/`38` `is the only display: 3024x1964@120` on the RTX (no re-check: the mode matched), native capture `4:4:4 10-bit, preset balanced`, about 95.5 fps with encode about 20.7 ms (mostly static desktop: 0–300 of 600 frames fresh), `display layout restored` on each disconnect; the user confirmed the monitors. The second connect came 3 s after the first ended and started native capture (finding 2 not reproduced at 3 s). Those two ran with 4:4:4 + 10-bit still on; the 4:2:0 8-bit run is the 22:12:07 session: preflight 183 ms, `capturing … HEVC 120 Mbps, preset balanced`, native `3024x1964@120 4:2:0 8-bit`, 105–108 fps (the 2026-10-17 LATENCY.md Balanced run had 102.1 fps), restored on disconnect |
+| U1 | 2026-10-17 21:50–21:56 and 22:12–22:13 UTC | **pass** | Two real-Mac sessions on the installed `54e400c`. Each: `encoder preflight: HEVC 3024x1964@120 P4 initializes` (194 / 202 ms), wake, layout saved, `virtual display \\.\DISPLAY37`/`38` `is the only display: 3024x1964@120` on the RTX (no re-check: the mode matched), native capture `4:4:4 10-bit, preset balanced`, about 95.5 fps with encode about 20.7 ms (mostly static desktop: 0–300 of 600 frames fresh), `display layout restored` on each disconnect; the user confirmed the monitors. The second connect came 3 s after the first ended and started native capture (finding 2 not reproduced at 3 s). Those two ran with 4:4:4 + 10-bit still on; the 4:2:0 8-bit run is the 22:12:07 session: preflight 183 ms, `capturing … HEVC 120 Mbps, preset balanced`, native `3024x1964@120 4:2:0 8-bit`, 105–108 fps (the 2026-10-17 LATENCY.md Balanced run had 102.1 fps), restored on disconnect |
 | U2 | 2026-10-17 21:50–21:56 UTC | **pass**, via the U1 sessions | CLIENT_HELLO flags 0b11 applied: `capturing … HEVC 4:4:4 10-bit 120 Mbps, preset balanced`; layout restored |
 | U3 | 2026-10-17 21:59–22:01 UTC | **pass** | Session 1: `SessionLock` → access lost → `capture recovered after 1.1s` (twice: lock, then a second desktop transition), `SessionUnlock` from the Mac → recovered 1.1 s, lock again → recovered 1.1 s, disconnect while locked → `physical monitor devices restored`, `display layout restored`. Session 2 connected to the still-locked PC: preflight, exact-mode virtual display, lock-screen capture, unlock from the Mac → recovered 1.1 s, disconnect → restored. No `capture restart refused`, no `cannot be captured`, no ffmpeg fallback (the SYSTEM worker captures the lock screen). The GDI names of the two physical monitors swapped between the sessions (`DISPLAY2 (ACR0692)` in session 2's snapshot); restore follows the saved paths, not the names. Session 2 ended with a 10053 send error after the restore (the Mac closed first). Still 4:4:4 10-bit Balanced |
 | U4 | 2026-10-17 22:13–22:16 UTC | **pass** | LUID before/after: 0:122e1 / 0:122e1 (unchanged, so `session_gpu`'s re-query was not exercised; it is unit-tested). Win+Ctrl+Shift+B at 22:13:57: `Desktop Duplication access lost`, then `display topology changed during capture … reasserting virtual-only 3024x1964@120` (the virtual monitor came back extended at x=3640), `exclusive topology`, `capture recovered after 1.7s and 1 encoder restart(s)`, 107–108 fps again; no ffmpeg fallback, no `capture restart refused`. The user saw the picture return after a couple of seconds; the physical monitors lit briefly without a picture during the driver restart and went dark again (no physical display was ever on the desktop: `physical displays active: none`). Disconnect restored the layout; a new session at 22:16:08 streamed normally without a PIN |

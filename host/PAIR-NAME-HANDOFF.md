@@ -1,7 +1,7 @@
 # Mac handoff: show the Mac name immediately after Pair
 
 **Completion update, 2026-10-10:** the Mac implementation and wire spec landed;
-host build `ae249f4` was verified and deployed. The user confirmed pair-only
+host build `eb2f280` was verified and deployed. The user confirmed pair-only
 naming in the PC tray before Connect, delayed PIN entry/retry, Forget, and
 ordinary streaming/disconnect restoration all passed on the real Mac and PC.
 Real-Mac name persistence across a service restart remains unreported. See

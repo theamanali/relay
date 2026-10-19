@@ -1,10 +1,10 @@
 # Windows handoff: wake the displays before a session starts
 
 Written by the Mac session on 2026-10-17. **Status: done on Windows
-2026-10-17** (host commit `7b38109`, installed and verified on the real Mac;
+2026-10-17** (host commit `6ab02a3`, installed and verified on the real Mac;
 see "Windows verification record" below). The mid-session freeze in the open
 question was confirmed, then fixed the same day with a preemptive keep-alive
-(`af03936`, "Keep-alive" below).
+(`360f9e0`, "Keep-alive" below).
 
 ## Symptom
 
@@ -144,7 +144,7 @@ process; the host would send it from the SYSTEM worker, which reaches the
 same session's input. Not exercised: the lock screen mid-session and a host
 run with `lock_physical` off (monitors not device-disabled).
 
-### Keep-alive (2026-10-17, `af03936`)
+### Keep-alive (2026-10-17, `360f9e0`)
 
 The user asked for the nudge to be automatic. It is preemptive, not a
 reaction to stale capture: 0 fresh frames also means a desktop that is not

@@ -292,7 +292,7 @@ isolated HostConnection/fakehost loopback checks and the Mac release bundle
 passed. On 2026-10-10 the user confirmed that Pair without Connect immediately
 shows the Mac's name in the PC's Forget submenu.
 
-On 2026-10-10, host commit `ae249f4` passed Windows formatting, 145 unit tests
+On 2026-10-10, host commit `eb2f280` passed Windows formatting, 145 unit tests
 and the probe integration test, strict clippy and release build, and was deployed
 with `install-host.ps1 -SkipDriver`. The installed executable matches that build.
 Against the running service, a known probe identity re-paired after a 12-second

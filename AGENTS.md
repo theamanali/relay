@@ -36,8 +36,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   and Developer ID notarization remain pending. Details and acceptance gates:
   `docs/PLATFORM-REVIEW.md#implementation-status`.
 
-- NVIDIA enforcement, phase A (2026-10-17, handoff steps 1–4; `9334c1e`,
-  `2f91bb4`, `421c177`, `4a8c5d6`): `gpu::choose` considers only `gpu::eligible`
+- NVIDIA enforcement, phase A (2026-10-17, handoff steps 1–4; `0eb98fa`,
+  `f1a9297`, `70e6ad0`, `728f547`): `gpu::choose` considers only `gpu::eligible`
   adapters (NVIDIA, not software, not the IDD proxy), most VRAM then lowest
   DXGI index; an explicit `--gpu` must match one; `describe` still lists all.
   `NvApi::load` calls `NvEncodeAPIGetMaxSupportedVersion` first and refuses
@@ -66,11 +66,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   ≈42 fps at 3024×1964) is shown as a rating only: this GPU measured
   102–118 fps there.
 - Phase B, PC half (2026-10-17): see `host/NVIDIA-RECOVERY-RETEST.md`. 17
-  `--no-vdd` dev-host + probe cases pass on `062d411` (installed as the
+  `--no-vdd` dev-host + probe cases pass on `cd93619` (installed as the
   service, hash `D7C7F314...004345F9`). Found and fixed: `is_desktop_not_capturable`
   walked `chain()` and never matched a `.context()` marker, so a non-SYSTEM
   host's lock-screen wait never engaged (use `downcast_ref` on the
-  `anyhow::Error`). Also `session_gpu` (`d1546a3`): each session re-selects the
+  `anyhow::Error`). Also `session_gpu` (`49341a8`): each session re-selects the
   GPU, since a driver restart changes its LUID. Open for phase C: a second
   `DuplicateOutput` on an output this process still duplicates fails with
   E_INVALIDARG (confirmed in-process); a session starting while the previous
@@ -79,14 +79,14 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   from native H.264 (finding 5, resolved; no code change).
   `RELAY_TEST_FAULT=trial,display-gpu` and `probe --progress` /
   `--codec-mask` exist for these cases. User-run U1–U6 all passed on
-  2026-10-17 on the installed `3e320af` (hash `A3E248D3...518F1112`):
+  2026-10-17 on the installed `54e400c` (hash `A3E248D3...518F1112`):
   real-Mac 4:2:0 and 4:4:4 10-bit sessions, lock/unlock, Win+Ctrl+Shift+B
   (recovered in 1.7 s, LUID unchanged), worker kill (service restored and
   respawned in 5 s), simulated hybrid mismatch on the VDD (rolled back in
   1.4 s), oversized mode refused untouched. Gate B passed; phase C (removal)
   awaits the user's go-ahead. After a killed worker the Mac's picker needed
   Relay reopened to see the PC (no mDNS goodbye; finding 6). Host side
-  (`6de6010`): mdns-sd 0.11.5 announces a registration only at 0 and 1 s,
+  (`e8f929d`): mdns-sd 0.11.5 announces a registration only at 0 and 1 s,
   so `Advertisement::reannounce_if_due` re-`register`s the same
   `ServiceInfo` (no goodbye, same TXT) 3, 8, 16, 32 and 60 s after each
   registration, on the readvertise thread's tick; nothing after a minute.
@@ -94,7 +94,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   real-worker kills (F6b) left the Mac's picker without the PC for good
   while host.log showed all five re-announcements. A `--no-vdd` dev host
   killed the same way never lost the row (F6a). Mac diagnosis/fix
-  (`b0620a6`, `4f74101`; 2026-10-17 Pacific / 2026-10-18 UTC): simultaneous
+  (`d79fb94`, `232805f`; 2026-10-17 Pacific / 2026-10-18 UTC): simultaneous
   `dns-sd -B`, `dns-sd -L`, mDNSResponder and app captures establish an
   app-side lost TXT update. The PTR never left either interface; after a
   real mid-session kill at 18:11:58 Pacific, resolve returned full TXT at
@@ -133,7 +133,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   later times are 2026-10-18 UTC. Detailed Mac evidence:
   `client/README.md#worker-crash-rediscovery-finding-6`. The PC session owns
   updates to both host handoff/retest files.
-- Phase C (2026-10-17, handoff steps 6–7; `c2400d9`, `91430f0`, `382bc27`):
+- Phase C (2026-10-17, handoff steps 6–7; `391f815`, `e5b2ecd`, `c537ee5`):
   one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
   and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`
   every 100 ms for 2 s while `create_capture` reports `OutputBusy`.
@@ -181,7 +181,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   in flight, input → applied p50 0.13 ms; without `--timing` FRAME_TIMING
   still every 4th frame; 4:4:4 10-bit fine. The first run lost Desktop
   Duplication twice ~2 s into sessions (`no DXGI output is named
-  \\.\DISPLAY2`); a rerun of the old (`e5300ab`) and new builds side by side
+  \\.\DISPLAY2`); a rerun of the old (`5b04101`) and new builds side by side
   had no losses on either, with the same fps and PC work (130.6 / 4.37 ms
   vs 130.9 / 4.41). The desktop was never fully static (on-screen
   animation: 597–600 of 600 fresh), so the `u64::MAX` case is from
@@ -195,7 +195,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   present→submit p50 0.9 ms, submit→sent 5.2 ms, sent→received 31 µs,
   input → applied p50 0.14 ms (p95 1.1), inputs 369 sent / 368 reported;
   host.log: physical monitors and layout restored.
-  Mac side (2026-10-18, `cac14a2`, `f5c0716`): `ClockSync` (pure; 8
+  Mac side (2026-10-18, `599ea4c`, `8d07763`): `ClockSync` (pure; 8
   samples, lowest delay wins, delay > 50 ms or broken stamps dropped),
   `InputLedger` (counts 0x90–0x93 from the first TIME_REQUEST; nil-event
   sends counted, not sampled), `FrameEndToEnd`. HostConnection sends
@@ -258,7 +258,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   the attempt 20 s after CLIENT_HELLO without STREAM_START ("the PC didn't
   start the stream") and 10 s after STREAM_START without a FRAME ("the PC sent
   no picture"); `Tools/test-pair-name.sh` covers both. Host side done
-  (`7b38109`): `handle_session` sends one zero-distance relative `SendInput`
+  (`6ab02a3`): `handle_session` sends one zero-distance relative `SendInput`
   move (`input::wake_displays`, inside `with_input_desktop("wake displays")`)
   after the display claim and before `acquire_display`, logs `woke displays
   before session setup`, and only warns if it fails. Never `ES_DISPLAY_REQUIRED`
@@ -270,7 +270,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   each disconnect. An Observe session then froze once the timeout passed
   mid-stream (0 fresh frames from 60 s after the last input); a zero-distance
   nudge resumed capture with the device-disabled physical monitors still dark.
-  Fixed with `DisplayKeepAlive` (`af03936`, user request): a per-session
+  Fixed with `DisplayKeepAlive` (`360f9e0`, user request): a per-session
   thread nudges after 30 s of `GetLastInputInfo` idle time, at most every
   30 s, and stops before restore. It is preemptive on purpose: fresh-frame
   counts cannot tell a static desktop from displays that are off. It also
@@ -356,7 +356,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   knew this key, so `server.rs` left the initial request at HELLO_TIMEOUT
   (5 s). The PC closed the Mac's PIN sheet before manual re-pair could complete;
   only unknown keys got PAIR_TIMEOUT (120 s). This is fixed in the installed
-  `ae249f4` build as of 2026-10-10; clearing the PC's entry is no longer needed
+  `eb2f280` build as of 2026-10-10; clearing the PC's entry is no longer needed
   to obtain the full PIN-entry window.
   The Mac must not send CLIENT_HELLO
   or guess a PIN just to hold that socket open.

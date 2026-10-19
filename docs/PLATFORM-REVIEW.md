@@ -1,6 +1,6 @@
 # NVIDIA, Apple silicon and SwiftUI review
 
-Reviewed 2026-10-10 at source commit `1d0118e`. The review below records the original plan;
+Reviewed 2026-10-10 at source commit `d81d20f`. The review below records the original plan;
 implementation progress and remaining acceptance gates are recorded at the end.
 
 The requested policy is NVIDIA-only on Windows and Apple-silicon-only on Mac,

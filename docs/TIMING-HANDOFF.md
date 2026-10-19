@@ -1,7 +1,7 @@
 # Handoff for the PC session: clock sync and per-frame timing
 
 **Status (2026-10-18): done on both sides.** The Mac half landed in
-`cac14a2` (fakehost `f5c0716`) with no wire change, and a real-PC session
+`599ea4c` (fakehost `8d07763`) with no wire change, and a real-PC session
 over the cable measured Desktop → screen p50 14.9 ms (details: `AGENTS.md`
 Status, "Clock sync + frame timing"). One deviation from the Mac-side notes
 below: Sent → received ends when the whole frame has arrived, not at its

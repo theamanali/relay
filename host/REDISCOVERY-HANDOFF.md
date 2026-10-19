@@ -13,7 +13,7 @@ reopened. After reopening, Connect works without a PIN.
 
 ## Evidence (home LAN, Mac at `2601:600:9b7f:85ff:dc6:bf12:7712:a49f`)
 
-Installed host `6de6010`+ (SHA-256 `70749142…9CF97724`), which re-announces
+Installed host `e8f929d`+ (SHA-256 `70749142…9CF97724`), which re-announces
 each new record 3, 8, 16, 32 and 60 s after registering it, on top of
 mdns-sd 0.11.5's own two announcements at 0 and 1 s:
 
