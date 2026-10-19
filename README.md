@@ -148,14 +148,17 @@ were measured and rejected; both are written up in
 
 ## Status
 
-**Display scale, PC side (2026-10-18):** the PC can now set Windows' scale
-for the virtual display to what the Mac asks for (PROTOCOL.md "Display
-scale"), apply it live before the first frame, and put the previous value back
-on disconnect, after a crash and in `restore`; physical monitors are never
-touched. Checked on Windows with unit tests, clippy, a set/restore trial on a
-physical monitor and a `--no-vdd` probe session; installed as the service.
-The Mac does not send the value yet, so nothing changes until it does; the
-real-display check is in [SESSION-HANDOFF.md](SESSION-HANDOFF.md).
+**Display scale (2026-10-18):** the Mac now tells the PC which Windows scale
+to use for the virtual display (PROTOCOL.md "Display scale"): the requested
+pixel width over the Mac screen's width in points, so native Retina asks for
+200%, `--scale 0.75` for 150% and a 1× screen for 100% (never less). The PC
+applies it live before the first frame and puts the previous value back on
+disconnect, after a crash and in `restore`; physical monitors are never
+touched, and older PCs get today's CLIENT_HELLO. Checked on Windows with unit
+tests, clippy, a set/restore trial on a physical monitor and a `--no-vdd`
+probe session (installed as the service), and on the Mac with unit tests,
+isolated loopback checks and the real app against `fakehost`. The check on
+the real virtual display is in [SESSION-HANDOFF.md](SESSION-HANDOFF.md).
 
 **End-to-end timing (2026-10-18):** the Mac and PC now relate their clocks
 (PROTOCOL.md "Clock sync and frame timing"), so the detailed latency HUD and
@@ -345,9 +348,9 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
       input; on the real Mac, 3 idle minutes at a 1-minute timeout never froze
       and the physical monitors stayed dark. See the same handoff
 - [ ] Camera-based screen-to-screen latency measurement
-- [ ] Display scaling (DPI) for the virtual monitor: PC side done and
-      installed (2026-10-18); the Mac sending it and the real-display check
-      are open in [SESSION-HANDOFF.md](SESSION-HANDOFF.md)
+- [ ] Display scaling (DPI) for the virtual monitor: PC and Mac sides done
+      (2026-10-18); the real-display check is open in
+      [SESSION-HANDOFF.md](SESSION-HANDOFF.md)
 - [ ] Release qualification on the Mac: macOS 26 (the minimum) and the latest
       stable release; 60 Hz Air, 120 Hz Pro and an external screen; real-PC
       pairing, Forget and reconnect; input release on focus loss;
@@ -415,9 +418,6 @@ on every push that touches that side.
 - Built for a cable or a LAN: there is no congestion control, so it is not meant
   for streaming over the internet.
 - macOS keeps ⌘Tab, ⌘Space and the Fn media keys; everything else is forwarded.
-- Windows' scaling for the virtual monitor has to be set once by hand in
-  Settings → Display (200% looks right at Retina resolution) until the Mac
-  sends it; the PC already applies it when asked.
 
 ## Acknowledgements
 

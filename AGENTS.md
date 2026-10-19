@@ -201,6 +201,21 @@ README status and here. Do not create other handoff or retest files.
   keeps the value, the login-screen desktop), the virtual monitor's
   recommended scale at 3024×1964 (the user's `+2` suggests 150%), and the
   real Mac: SESSION-HANDOFF.md "→ user".
+  Mac side (2026-10-18): `StreamMode.displayScale` = requested pixel width
+  ÷ the stream screen's `frame.width` × 100, rounded, **never under 100**
+  (a reduced mode on a 1× screen would send 50/75, which the host ignores
+  as 0 and so keeps a stale scale); 0 only for a zero size.
+  `HostConnection.Options.displayScale` goes out only with
+  `supportsDisplayScale` (cap 0x08), after the picture-option bytes, which
+  are then always sent (0, 0 without `CAP_VIDEO_OPTIONS`); older hosts get
+  the old CLIENT_HELLO. fakehost advertises 0x08 unless
+  `--no-display-scale` and prints size, extension and scale for every
+  CLIENT_HELLO, including the one after pairing. Verified: 195 Swift tests,
+  `test-pair-name.sh` 22 PASS (new: `display-scale` → 150%,
+  `display-scale-old-pc` → no extension), and the debug app via `--host`
+  against fakehost on the 1× ED273UR: 2560x1440 / 1920x1080 / 1280x720 all
+  sent 100%. The Retina 200/150/100 values are unit-tested only (the app
+  picked the external screen); the real-PC check covers them.
 - Clock sync + frame timing, host + probe + spec (2026-10-18;
   PROTOCOL.md "Clock sync and frame timing").
   SERVER_HELLO caps `0x07` (`CAP_TIMING` 0x04). `clock.rs`: QPC µs
