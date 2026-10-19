@@ -665,7 +665,7 @@ documented there. What follows is only the mechanics that are easy to break:
   one within the widest seen on one line (the automatic scaling one). Each
   section folds (`Section(_:isExpanded:)`, 2026-10-18, user request), its
   state in `@AppStorage` `settings{Video,Input,Performance}Expanded`;
-  not yet checked in the bundled app. Subtitles stay on one line at that width (user
+  the user confirmed folding and unfolding in the bundled app. Subtitles stay on one line at that width (user
   request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
   matter while forwarding; while it is off they show off (user request) but
