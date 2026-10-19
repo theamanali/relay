@@ -216,7 +216,8 @@ README status and here. Do not create other handoff or retest files.
   against fakehost on the 1× ED273UR: 2560x1440 / 1920x1080 / 1280x720 all
   sent 100%. The Retina 200/150/100 values are unit-tested only (the app
   picked the external screen); the real-PC check covers them.
-  Settings ▸ Display (same day, user request): Automatic scaling
+  Display scale settings (same day, user request; at the end of Video,
+  not a section of its own, user decision): Automatic scaling
   (`SessionPrefs.displayScaleAutomatic`, default on) and a Scale menu of
   `DisplayScale.steps` (100–300), disabled while automatic and then showing
   `PickerModel.effectiveDisplayScale` (the automatic value snapped like the
@@ -649,7 +650,7 @@ documented there. What follows is only the mechanics that are easy to break:
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
   clears it once when the popover becomes key. Since 2026-10-18 (user
   review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
-  Form like a System Settings pane: Video / Display / Latency / Input
+  Form like a System Settings pane: Video / Latency / Input
   sections, mini switches (`SettingSwitch`) with the detail as the toggle
   label's second Text (the form draws it as a subtitle; it dims a disabled
   switch but not its label, so `SettingSwitch` dims both Texts from
@@ -657,7 +658,7 @@ documented there. What follows is only the mechanics that are easy to break:
   (slider + rounded-border field: a grouped form draws fields borderless;
   disabled while Automatic bitrate is on, user request),
   380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
-  rows (~800 pt tall with Display). Subtitles stay on one line at that width (user
+  rows (~730 pt before the two display scale rows). Subtitles stay on one line at that width (user
   request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
   matter while forwarding; while it is off they show off (user request) but

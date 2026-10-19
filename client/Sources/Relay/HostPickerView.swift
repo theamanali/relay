@@ -502,8 +502,6 @@ struct SessionSettingsView: View {
                               feature: .tenBit, key: \.tenBit)
                 SettingSwitch("VSync", detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))
-            }
-            Section("Display") {
                 // Windows' scale for the virtual display. Automatic matches
                 // this Mac's screen; the Scale row shows the step it picks,
                 // greyed out, until Automatic is switched off.
