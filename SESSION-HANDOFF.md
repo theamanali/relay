@@ -20,23 +20,6 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
-### → PC: reset the clone to the rewritten history (2026-10-18)
-
-The Mac session stripped Claude co-author trailers from history, which
-rewrote the last 121 commits, and force-pushed `main`. Before committing on
-the PC (save any unpushed work first):
-
-```powershell
-git fetch origin; git reset --hard origin/main
-```
-
-Also new on `main`: `.claude/settings.json` turns off Claude Code's commit
-and PR attribution (do not add `Co-Authored-By` trailers), the repo
-`.gitignore` ignores `.claude/settings.local.json` and `.claude/worktrees/`,
-and the separate handoff/retest files were folded into this one.
-`host/NVIDIA-RECOVERY-RETEST.md` stays as the recovery regression suite.
-Done when the PC's `main` matches `origin/main`; delete this item then.
-
 ### → user, on the PC: Windows service retests (from 2026-10-09)
 
 Reboot-before-login, sign-out/reconnect and lock/unlock each passed once on
