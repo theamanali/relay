@@ -659,7 +659,8 @@ documented there. What follows is only the mechanics that are easy to break:
   only), so hovering and switching tabs flashed the header.
   `.scrollEdgeEffectStyle(.hard, for: .top)` on every pane draws the band
   at rest everywhere (user request). `toolbarBackgroundVisibility` and
-  `scrollEdgeEffectHidden` did not change it. Video starts with Resolution and Refresh rate pickers bound to the
+  `scrollEdgeEffectHidden` did not change it. The user confirmed the band
+  stays steady on hover and when switching tabs. Video starts with Resolution and Refresh rate pickers bound to the
   same `PickerModel.mode` as the footer (user request; Refresh rate is
   disabled when the screen offers one rate). Each tab is one untitled
   `.formStyle(.grouped)` Section, like a
