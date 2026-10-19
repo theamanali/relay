@@ -20,6 +20,141 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
+### → PC: true 10-bit SDR display and capture when 10-bit color is enabled (2026-10-19)
+
+**User request:** make the existing Mac **10-bit color** setting select a
+10-bit Windows virtual display and preserve that precision through capture,
+composition and NVENC input. This is SDR work; HDR remains a separate roadmap
+item. The user sees **8-bit** in Windows Advanced display during a current
+10-bit stream. This handoff was prepared on the Mac; implementation and
+Windows verification have not been done.
+
+**Current behavior, confirmed in source**
+
+- `tools/vdd_settings.template.xml` sets `SDR10bit=false` and
+  `HDRPlus=false`. `driver/mtt.rs::render_settings` merges the GPU and modes
+  but does not connect color settings to the negotiated session.
+- `native_nvenc.rs::create_capture` uses `IDXGIOutput1::DuplicateOutput`;
+  `create_texture` makes BGRA8 composition and encoder-slot textures.
+  `EncoderSession::configure`, initialization and resource registration use
+  `NV_ENC_BUFFER_FORMAT_ARGB`. The existing 10-bit flag changes HEVC's
+  output depth, so NVENC currently encodes an 8-bit capture into a 10-bit
+  bitstream. A Main10 SPS alone does not establish 10-bit capture.
+- The Mac already sends the request, selects hardware VideoToolbox's 10-bit
+  output from the SPS, and renders 10-bit buffers to a `bgr10a2Unorm` layer
+  (`VideoRenderer.swift`, `VideoCapabilities.swift`, `MetalPresenter.swift`).
+  That is client support, not a new real-Mac qualification of this feature.
+
+**Implementation, in order**
+
+1. **Prove the source path on the actual Windows machine first.** Read the
+   installed MTT version and the live XML under the registry's `VDDPATH`;
+   the installer pins 25.7.23, and a template is not proof of live settings.
+   MTT documents `SDR10bit=true` for 10-bit SDR, mutually exclusive with
+   `HDRPlus`. Check the installed version's actual XML schema and behavior.
+   Verify Windows' active bit depth/color space and what Desktop Duplication
+   actually returns. Do not assume enabling the setting forces every
+   acquired frame to use a particular DXGI format. If MTT/Windows cannot
+   expose a usable high-precision SDR capture, record the evidence here
+   before choosing an alternative; do not substitute HDR without the user
+   requesting it.
+2. **Carry negotiated depth into display acquisition.** Reuse the existing
+   CLIENT_HELLO picture option and `SessionPlan.video.ten_bit`; H.264 and a
+   negotiated 8-bit session must keep the 8-bit path. Thread the effective
+   depth through `server::acquire_display`, the `VirtualDisplay` trait and
+   MTT `attach`/settings merge, including test doubles and diagnostic callers.
+   Set the applicable VDD color options before enabling the device. Preserve
+   unrelated XML, keep the merge idempotent, and make on → off → on select
+   the correct settings each time. Use devnode disable/enable when needed;
+   never the MTT control pipe. Define cleanup for temporary color overrides
+   and recover them if required by that ownership model. `--no-vdd` must
+   inspect the physical display as-is, without changing its color settings.
+3. **Negotiate and retain a high-precision capture format.** Use
+   `IDXGIOutput5::DuplicateOutput1` with supported formats appropriate to the
+   actual SDR desktop, retaining BGRA8 compatibility where the API requires
+   it. Inspect the duplication description and acquired texture descriptors;
+   select the path from actual format/color-space information. Candidate
+   formats include `R10G10B10A2_UNORM` and FP16, but the supported/returned
+   format must be established on the installed driver. Allocate composition
+   textures and encoder slots accordingly. `CopyResource` is not a format
+   conversion: use a GPU conversion when source/destination formats differ.
+   If FP16/scRGB is returned, correctly convert its linear values into the
+   intended SDR transfer/range before encoding; do not clamp through BGRA8
+   or treat scRGB as PQ. Keep conversion and composition on the selected GPU.
+4. **Keep cursor composition and NVENC input at the selected precision.**
+   Audit `cursor_overlay.rs`, composition targets, slot allocation, all
+   resource copies, registration/mapping and picture submission. An 8-bit
+   cursor shape is fine; the desktop target must retain its precision.
+   Preserve normal, masked and monochrome/XOR cursor behavior. Query and
+   trial an actually supported 10-bit NVENC input format, with correct
+   DXGI/channel packing (ARGB10 and ABGR10 are not interchangeable), or use
+   a supported 10-bit YUV input with GPU conversion. Update `nvenc_caps.rs`,
+   `query_caps`, `trial_initialize`/`trial_encoder` and `encoder-caps` so
+   preflight exercises the input format the real session uses. Cover both
+   HEVC Main10 4:2:0 and Rext 4:4:4 10-bit. NVENC API 12.1 is our floor;
+   check its actual bindings instead of copying newer SDK fields.
+5. **Make capability reporting, color and recovery honest.** Log requested
+   and negotiated depth, active display bit depth/color space, duplication
+   format, composition/slot format and NVENC input/output formats separately.
+   Gate 10-bit support on the usable high-precision input path as well as
+   output-depth/profile support. For a negotiated 10-bit session, an
+   unsupported capture path must fail clearly with layout restoration rather
+   than silently reuse the current BGRA8-to-Main10 path. Preserve existing
+   codec negotiation semantics for H.264/unsupported picture options. Keep
+   normal capture recovery for lock/unlock, display changes and GPU restart,
+   revalidating the actual format when capture is recreated; a transient
+   unavailable desktop is still recoverable. Preserve SDR colorimetry where
+   possible; if conversion changes matrix/range, signal the actual values
+   in VUI and arrange the matching spec/client verification. Do not label SDR
+   as HDR. No new wire field is expected: the existing request and
+   STREAM_START bit already describe depth. Any necessary protocol change
+   must follow AGENTS.md's host-first/spec/client sequence.
+
+**Verification and acceptance**
+
+- Add focused regressions for session depth propagation, idempotent VDD XML
+  changes and on/off transitions, texture/NVENC format selection and packing,
+  capability refusal, and failure cleanup. Run Windows fmt, unit/probe tests,
+  strict all-target clippy and a release build. Keep the 8-bit HEVC and H.264
+  paths working, including older clients without picture options.
+- First use `--no-vdd` for safe pipeline tests on a suitable existing display;
+  this may demonstrate correct refusal if that display is only 8-bit. Any
+  synthetic encoder-only test must be identified as such, not called a
+  virtual-display capture pass. Coordinate service stop/start as in AGENTS.md.
+- Prove precision with a controlled **native high-precision SDR** test image
+  or ramp containing differences below one 8-bit step. Inspect numeric values
+  after actual desktop capture and after composition/conversion to show the
+  distinctions survived; an expanded 8-bit ramp also has nonzero low bits,
+  so texture format or low-bit occupancy alone is insufficient. Check an
+  encoded/decoded dump at adequate quality against the 8-bit baseline, with
+  channel, range and color checks. Account for lossy quantization; do not
+  require bit-exact reproduction of every 10-bit code. Record the diagnostic
+  method and results here without creating another handoff/retest file.
+- The user runs exclusive virtual-display sessions because they black out
+  the PC's physical monitors. Check 10-bit on/off/on, Windows reporting the
+  intended active depth, capture/encoder logs, 4:2:0 and 4:4:4 10-bit, cursor,
+  quick reconnect, lock/unlock, capture/GPU restart and disconnect/failure
+  restore. Physical monitors, their color settings, layout, DPI and refresh
+  rates must return as before. A Windows 10-bit display label is necessary
+  evidence, not a substitute for the capture precision check above.
+- Install the verified host using the existing installer and record the
+  installed/release hashes. Hand back real-Mac A/B at 3024×1964@120, Fastest,
+  both chroma modes: actual 10-bit decoder buffers, correct colors/gradients,
+  fps, PC work and end-to-end latency against the existing 8-bit-source
+  baseline. Earlier results saying 10-bit was free measured the old capture
+  path and do not qualify this implementation. Keep unrun checks explicitly
+  pending in this item.
+
+Done when source precision, Windows display behavior, compatibility, restore
+and performance are supported by recorded evidence. Update README status and
+the AGENTS.md 10-bit notes to distinguish old encoding-only support from the
+new capture path; remove this item only after all required outcomes are
+recorded there. Keep any remaining Mac/user checks open here. Commit small
+and push on `main`; no implementation change is part of this Mac handoff.
+
+References: [MTT's SDR10bit option](https://github.com/VirtualDrivers/Virtual-Display-Driver/wiki/How-to-configure-the-driver#options-section),
+[Microsoft's DuplicateOutput1 formats and behavior](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_5/nf-dxgi1_5-idxgioutput5-duplicateoutput1).
+
 ### → user, on the PC: display scale on the real virtual display (2026-10-18)
 
 The Mac sends the scale since 2026-10-18 (rebuild/`./bundle.sh` from
