@@ -111,11 +111,11 @@ hidden on a 60 Hz screen). Both follow the window when it moves to another
 display. Streaming from the PC at 2560×1440@144 to a 144 Hz external monitor
 was verified on 2026-10-18 (user report). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
-The **Settings** gear in the footer opens a grouped pane (Video, Input,
-Performance) of switches, laid out like System Settings. Each subtitle
-describes the current choice (e.g. VSync off: "Lowest delay, but fast motion
-may tear."). Each section folds from its header, and stays folded the next
-time:
+The **Settings** gear in the footer (or Relay ▸ Settings…, ⌘,) opens the
+Settings window, with a tab each for Video, Input and Performance, laid out
+like System Settings. It reopens on the last tab, and stays open while you
+use the picker. Each subtitle describes the current choice (e.g. VSync off:
+"Lowest delay, but fast motion may tear."):
 
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks

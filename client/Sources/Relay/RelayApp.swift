@@ -19,6 +19,11 @@ struct RelayApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .commands { RelayCommands(model: delegate.pickerModel, delegate: delegate) }
+
+        // Relay ▸ Settings… (⌘,) and the picker's gear: one tab per group.
+        Settings {
+            SessionSettingsView(model: delegate.pickerModel)
+        }
     }
 }
 
@@ -61,10 +66,6 @@ struct RelayCommands: Commands {
         let _ = delegate.registerPickerOpener { openWindow(id: "picker") }
         CommandGroup(replacing: .appInfo) {
             Button("About Relay") { delegate.showAbout(nil) }
-        }
-        CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { model.showSettings() }
-                .keyboardShortcut(",").disabled(!paired)
         }
         // Relay has no documents; the PC menu takes File's place.
         CommandGroup(replacing: .newItem) {}
@@ -144,7 +145,7 @@ struct RelayCommands: Commands {
                                          set: { _ in model.setBitrate(bitrate) })) { Text(verbatim: "\(bitrate) Mbps") }
                 }
                 Divider()
-                Button("Custom…") { model.showSettings() }
+                SettingsLink { Text("Custom…") }
             } label: {
                 Label("Bitrate", systemImage: "speedometer")
             }

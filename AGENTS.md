@@ -642,31 +642,31 @@ documented there. What follows is only the mechanics that are easy to break:
   alert wording. Keep the SwiftUI colors: the inset list's own background spans
   the window (its selection inset is fixed at 10 pt; a painted background did
   not match the list's translucent fill), and the footer has no material.
-  The gear icon replaces the old Advanced button at the end of the mode row;
-  its popover opens to the right, or below when the window is too close to
-  the screen's right edge (`PickerModel.showSettings`; AppKit's own fallback
-  would try the left side next). Opening it focuses nothing: AppKit makes the
-  popover's first control (the bitrate field) first responder, which
-  SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
-  clears it once when the popover becomes key. Since 2026-10-18 (user
-  review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
-  Form like a System Settings pane: Video / Input / Performance
-  sections (Performance last since 2026-10-18, user request), mini switches (`SettingSwitch`) with the detail as the toggle
-  label's second Text (the form draws it as a subtitle; it dims a disabled
-  switch but not its label, so `SettingSwitch` dims both Texts from
-  `isEnabled`), Encoder as a form Picker, Bitrate as a LabeledContent row
-  (slider + rounded-border field: a grouped form draws fields borderless;
-  disabled while Automatic bitrate is on, user request),
-  380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
-  rows (~730 pt before the two display scale rows). Subtitles describe the
-  current choice (2026-10-18, user request): `SettingDetail` (on/off text
-  per switch) and `EncoderQuality.detail`;
-  an unavailable option still shows its reason instead. A test keeps every
-  one within the widest seen on one line (the automatic scaling one). Each
-  section folds (`Section(_:isExpanded:)`, 2026-10-18, user request), its
-  state in `@AppStorage` `settings{Video,Input,Performance}Expanded`;
-  the user confirmed folding and unfolding in the bundled app. Subtitles stay on one line at that width (user
-  request; ⌘⌥⌃ glyphs render wider than they look, measure).
+  Settings (2026-10-18, user request: the popover was too tall and folding
+  sections cost clicks) is SwiftUI's `Settings` scene in `RelayApp`: a
+  window with toolbar tabs Video / Input / Performance (`SessionSettingsView`,
+  a `TabView`, last tab in `@AppStorage("settingsTab")`). The footer gear is
+  a `SettingsLink` (disabled with the rest of the mode row until a paired PC
+  is selected); Relay ▸ Settings… (⌘,) is SwiftUI's own item, always
+  enabled; View ▸ Bitrate ▸ Custom… is a `SettingsLink` too. It replaced the
+  gear's popover (its right/below placement, `showSettings`,
+  `settingsFitsRight`) and the folding sections. `NoInitialFocus` still
+  clears the bitrate field's first responder once when the window becomes
+  key. Each tab is one untitled `.formStyle(.grouped)` Section, like a
+  System Settings pane: mini switches (`SettingSwitch`) with the detail as
+  the toggle label's second Text (the form draws it as a subtitle; it dims
+  a disabled switch but not its label, so `SettingSwitch` dims both Texts
+  from `isEnabled`), Encoder as a form Picker, Bitrate as a LabeledContent
+  row (slider + rounded-border field: a grouped form draws fields
+  borderless; disabled while Automatic bitrate is on, user request).
+  `Style.settingsWidth` 420 pt (at 380 "Show session performance report on
+  disconnect" wrapped), `scrollDisabled` + vertical `fixedSize`, so the
+  window sizes to each tab. Subtitles describe the current choice
+  (`SettingDetail`, `EncoderQuality.detail`); an unavailable option shows
+  its reason instead. A test keeps every subtitle within the widest seen on
+  one line. Subtitles stay on one line (user request; ⌘⌥⌃ glyphs render
+  wider than they look, measure). Checked in the bundled app: all three
+  tabs, ⌘, in the Relay menu.
   Control the PC sits first under Input and disables the options that only
   matter while forwarding; while it is off they show off (user request) but
   keep their saved values. VSync flips `displaySyncEnabled` on the

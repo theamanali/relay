@@ -21,7 +21,7 @@ struct HostPickerView: View {
             PickerFooter(model: model)
         }
         .frame(width: Style.windowWidth)
-        .onChange(of: model.renamingID != nil || model.settingsPresented) { _, busy in
+        .onChange(of: model.renamingID != nil) { _, busy in
             HoverCard.shared.isSuspended = busy
         }
         .sheet(item: $model.pinPrompt) { prompt in
@@ -415,14 +415,11 @@ private struct PickerFooter: View {
                     .fixedSize()
                     .help("Refresh rate")
                 }
-                Button { model.showSettings() } label: {
+                SettingsLink {
                     Image(systemName: "gearshape").frame(width: 24)
                 }
                 .help("Settings")
                 .accessibilityLabel("Settings")
-                .popover(isPresented: $model.settingsPresented, arrowEdge: model.settingsEdge) {
-                    SessionSettingsView(model: model)
-                }
             }
             // The mode and settings describe a session, and only a paired PC
             // can start one; until then the controls have nothing to apply to.
@@ -456,10 +453,8 @@ private struct PickerFooter: View {
 
 struct SessionSettingsView: View {
     @Bindable var model: PickerModel
-    // Each section folds from its header; remembered across opens and launches.
-    @AppStorage("settingsVideoExpanded") private var videoExpanded = true
-    @AppStorage("settingsInputExpanded") private var inputExpanded = true
-    @AppStorage("settingsPerformanceExpanded") private var performanceExpanded = true
+    /// The tab the Settings window shows; remembered across opens and launches.
+    @AppStorage("settingsTab") private var tab = "video"
 
     private func preference<Value>(_ key: WritableKeyPath<SessionPrefs, Value>) -> Binding<Value> {
         Binding(get: { model.prefs[keyPath: key] }, set: { value in
@@ -481,125 +476,142 @@ struct SessionSettingsView: View {
             .disabled(availability != .available)
     }
 
-    // Laid out like a System Settings pane: grouped sections, the label on
-    // the left, its control on the right, details as a subtitle.
+    // One tab per group, each laid out like a System Settings pane: a
+    // grouped form, the label on the left, its control on the right,
+    // details as a subtitle. The window sizes itself to the tab shown.
     var body: some View {
-        Form {
-            Section("Video", isExpanded: $videoExpanded) {
-                // Automatic follows the resolution, refresh rate and link;
-                // the Bitrate row below shows its value, greyed out, until
-                // Automatic is switched off.
-                SettingSwitch("Automatic bitrate",
-                              detail: SettingDetail.automaticBitrate(model.prefs.bitrateAutomatic),
-                              isOn: Binding(get: { model.prefs.bitrateAutomatic },
-                                            set: { model.setBitrateAutomatic($0) }))
-                let automatic = model.prefs.bitrateAutomatic
-                LabeledContent {
-                    HStack(spacing: Style.Space.s) {
-                        Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
-                            model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
-                        }), in: 0...1)
-                        .controlSize(.small)
-                        .frame(width: 104)
-                        .accessibilityLabel("Video bitrate")
-                        .accessibilityValue("\(model.effectiveBitrate) Mbps")
-                        .help("Video bitrate from 1 to 1,000 Mbps")
-                        TextField("", value: Binding(get: { model.effectiveBitrate }, set: { model.setBitrate($0) }),
-                                  format: .number.grouping(.never))
-                            .labelsHidden()
-                            // A grouped form draws fields borderless; the
-                            // border says the value can be typed.
-                            .textFieldStyle(.roundedBorder)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 48)
-                            .accessibilityLabel("Video bitrate in megabits per second")
-                        Text("Mbps").foregroundStyle(automatic ? .tertiary : .secondary)
-                    }
-                } label: {
-                    // Text ignores .disabled; dim it like the disabled switches' titles.
-                    Text("Bitrate").foregroundStyle(automatic ? .tertiary : .primary)
-                }
-                .disabled(automatic)
-                // Windows' scale for the virtual display. Automatic matches
-                // this Mac's screen; the Scale row shows the step it picks,
-                // greyed out, until Automatic is switched off.
-                SettingSwitch("Automatic scaling",
-                              detail: SettingDetail.automaticScaling(model.prefs.displayScaleAutomatic),
-                              isOn: Binding(get: { model.prefs.displayScaleAutomatic },
-                                            set: { model.setDisplayScaleAutomatic($0) }))
-                let automaticScale = model.prefs.displayScaleAutomatic
-                Picker(selection: Binding(get: { model.effectiveDisplayScale },
-                                          set: { model.setDisplayScale($0) })) {
-                    ForEach(DisplayScale.steps, id: \.self) { Text(verbatim: "\($0)%").tag($0) }
-                } label: {
-                    Text("Scale").foregroundStyle(automaticScale ? .tertiary : .primary)
-                }
-                .disabled(automaticScale)
-                // Applied by the PC when it offers them (TXT `enc`); otherwise
-                // disabled, with the reason where the description would be.
-                let quality = model.availability(.encoderQuality)
-                Picker(selection: preference(\.encoderQuality)) {
-                    ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
-                } label: {
-                    Text("Encoder")
-                        .foregroundStyle(quality == .available ? .primary : .tertiary)
-                    Text(quality.reason ?? model.prefs.encoderQuality.detail)
-                        .foregroundStyle(quality == .available ? .secondary : .tertiary)
-                }
-                .disabled(quality != .available)
-                pictureOption("Full color (4:4:4)", detail: SettingDetail.fullColor,
-                              feature: .fullColor, key: \.fullColor)
-                pictureOption("10-bit color", detail: SettingDetail.tenBit,
-                              feature: .tenBit, key: \.tenBit)
-                SettingSwitch("VSync", detail: SettingDetail.vsync(model.prefs.preventTearing),
-                              isOn: preference(\.preventTearing))
-            }
-            Section("Input", isExpanded: $inputExpanded) {
-                let controlling = model.prefs.forwardInput
-                // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
-                // matter while the Mac controls the PC: they show off while it
-                // is off, like the color options a PC lacks, but keep their
-                // saved values for when control comes back.
-                SettingSwitch("Control the PC", detail: SettingDetail.control(controlling),
-                              isOn: preference(\.forwardInput))
-                Group {
-                    // Off sends keys by their physical position instead. The note
-                    // describes the current mapping, in the same key order.
-                    SettingSwitch("Mac-style modifier keys",
-                                  detail: !controlling ? "Applies while controlling the PC."
-                                      : model.prefs.modifiers == .mac
-                                      ? "\u{2318} is Ctrl, \u{2325} is Alt, \u{2303} is the Windows key."
-                                      : "\u{2318} is Alt, \u{2325} is the Windows key, \u{2303} is Ctrl.",
-                                  isOn: Binding(get: { controlling && model.prefs.modifiers == .mac }, set: {
-                                      var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
-                                  }))
-                    SettingSwitch("Natural scrolling", isOn: Binding(get: {
-                        controlling && model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
-                    }, set: {
-                        var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
-                    }))
-                }
-                .disabled(!controlling)
-            }
-            Section("Performance", isExpanded: $performanceExpanded) {
-                SettingSwitch("Show performance overlay",
-                              isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
-                                  var prefs = model.prefs
-                                  prefs.hudMode = on ? .compact : .off
-                                  model.setPrefs(prefs)
-                              }))
-                // Latency is measured with or without the HUD, so the report
-                // is there either way (also View ▸ Last Session Performance Report).
-                SettingSwitch("Show session performance report on disconnect", isOn: preference(\.showSessionReport))
-            }
+        TabView(selection: $tab) {
+            pane { videoRows }
+                .tabItem { Label("Video", systemImage: "play.rectangle") }
+                .tag("video")
+            pane { inputRows }
+                .tabItem { Label("Input", systemImage: "keyboard") }
+                .tag("input")
+            pane { performanceRows }
+                .tabItem { Label("Performance", systemImage: "gauge.with.needle") }
+                .tag("performance")
         }
-        .formStyle(.grouped)
-        .scrollDisabled(true)
-        .frame(width: Style.settingsWidth)
-        .fixedSize(horizontal: false, vertical: true)
-        // The popover would otherwise make the bitrate field first responder,
-        // and the first keystroke would change the bitrate. Click to edit it.
+        // AppKit would otherwise make the bitrate field first responder, and
+        // the first keystroke would change the bitrate. Click to edit it.
         .background(NoInitialFocus())
+    }
+
+    private func pane<Rows: View>(@ViewBuilder _ rows: () -> Rows) -> some View {
+        Form { Section { rows() } }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .frame(width: Style.settingsWidth)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var videoRows: some View {
+        // Automatic follows the resolution, refresh rate and link;
+        // the Bitrate row below shows its value, greyed out, until
+        // Automatic is switched off.
+        SettingSwitch("Automatic bitrate",
+                      detail: SettingDetail.automaticBitrate(model.prefs.bitrateAutomatic),
+                      isOn: Binding(get: { model.prefs.bitrateAutomatic },
+                                    set: { model.setBitrateAutomatic($0) }))
+        let automatic = model.prefs.bitrateAutomatic
+        LabeledContent {
+            HStack(spacing: Style.Space.s) {
+                Slider(value: Binding(get: { VideoBitrate.sliderPosition(for: model.effectiveBitrate) }, set: {
+                    model.setBitrate(VideoBitrate.bitrate(forSliderPosition: $0))
+                }), in: 0...1)
+                .controlSize(.small)
+                .frame(width: 104)
+                .accessibilityLabel("Video bitrate")
+                .accessibilityValue("\(model.effectiveBitrate) Mbps")
+                .help("Video bitrate from 1 to 1,000 Mbps")
+                TextField("", value: Binding(get: { model.effectiveBitrate }, set: { model.setBitrate($0) }),
+                          format: .number.grouping(.never))
+                    .labelsHidden()
+                    // A grouped form draws fields borderless; the
+                    // border says the value can be typed.
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 48)
+                    .accessibilityLabel("Video bitrate in megabits per second")
+                Text("Mbps").foregroundStyle(automatic ? .tertiary : .secondary)
+            }
+        } label: {
+            // Text ignores .disabled; dim it like the disabled switches' titles.
+            Text("Bitrate").foregroundStyle(automatic ? .tertiary : .primary)
+        }
+        .disabled(automatic)
+        // Windows' scale for the virtual display. Automatic matches
+        // this Mac's screen; the Scale row shows the step it picks,
+        // greyed out, until Automatic is switched off.
+        SettingSwitch("Automatic scaling",
+                      detail: SettingDetail.automaticScaling(model.prefs.displayScaleAutomatic),
+                      isOn: Binding(get: { model.prefs.displayScaleAutomatic },
+                                    set: { model.setDisplayScaleAutomatic($0) }))
+        let automaticScale = model.prefs.displayScaleAutomatic
+        Picker(selection: Binding(get: { model.effectiveDisplayScale },
+                                  set: { model.setDisplayScale($0) })) {
+            ForEach(DisplayScale.steps, id: \.self) { Text(verbatim: "\($0)%").tag($0) }
+        } label: {
+            Text("Scale").foregroundStyle(automaticScale ? .tertiary : .primary)
+        }
+        .disabled(automaticScale)
+        // Applied by the PC when it offers them (TXT `enc`); otherwise
+        // disabled, with the reason where the description would be.
+        let quality = model.availability(.encoderQuality)
+        Picker(selection: preference(\.encoderQuality)) {
+            ForEach(EncoderQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+        } label: {
+            Text("Encoder")
+                .foregroundStyle(quality == .available ? .primary : .tertiary)
+            Text(quality.reason ?? model.prefs.encoderQuality.detail)
+                .foregroundStyle(quality == .available ? .secondary : .tertiary)
+        }
+        .disabled(quality != .available)
+        pictureOption("Full color (4:4:4)", detail: SettingDetail.fullColor,
+                      feature: .fullColor, key: \.fullColor)
+        pictureOption("10-bit color", detail: SettingDetail.tenBit,
+                      feature: .tenBit, key: \.tenBit)
+        SettingSwitch("VSync", detail: SettingDetail.vsync(model.prefs.preventTearing),
+                      isOn: preference(\.preventTearing))
+    }
+
+    @ViewBuilder private var inputRows: some View {
+        let controlling = model.prefs.forwardInput
+        // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
+        // matter while the Mac controls the PC: they show off while it
+        // is off, like the color options a PC lacks, but keep their
+        // saved values for when control comes back.
+        SettingSwitch("Control the PC", detail: SettingDetail.control(controlling),
+                      isOn: preference(\.forwardInput))
+        Group {
+            // Off sends keys by their physical position instead. The note
+            // describes the current mapping, in the same key order.
+            SettingSwitch("Mac-style modifier keys",
+                          detail: !controlling ? "Applies while controlling the PC."
+                              : model.prefs.modifiers == .mac
+                              ? "\u{2318} is Ctrl, \u{2325} is Alt, \u{2303} is the Windows key."
+                              : "\u{2318} is Alt, \u{2325} is the Windows key, \u{2303} is Ctrl.",
+                          isOn: Binding(get: { controlling && model.prefs.modifiers == .mac }, set: {
+                              var prefs = model.prefs; prefs.modifiers = $0 ? .mac : .physical; model.setPrefs(prefs)
+                          }))
+            SettingSwitch("Natural scrolling", isOn: Binding(get: {
+                controlling && model.prefs.naturalScrolling(macNatural: SessionPrefs.macNaturalScrolling)
+            }, set: {
+                var prefs = model.prefs; prefs.scrollDirection = $0 ? .natural : .standard; model.setPrefs(prefs)
+            }))
+        }
+        .disabled(!controlling)
+    }
+
+    @ViewBuilder private var performanceRows: some View {
+        SettingSwitch("Show performance overlay",
+                      isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
+                          var prefs = model.prefs
+                          prefs.hudMode = on ? .compact : .off
+                          model.setPrefs(prefs)
+                      }))
+        // Latency is measured with or without the HUD, so the report
+        // is there either way (also View ▸ Last Session Performance Report).
+        SettingSwitch("Show session performance report on disconnect", isOn: preference(\.showSessionReport))
     }
 }
 

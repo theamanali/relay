@@ -15,8 +15,7 @@ final class HoverCard {
     private var pending: DispatchWorkItem?
     private weak var anchor: NSView?
     private var clickMonitor: Any?
-    /// While a rename or popover is up over the list: a card ordering itself
-    /// front would close a transient popover, so hovering shows nothing.
+    /// While a rename is up over the list, hovering shows nothing.
     var isSuspended = false {
         didSet { if isSuspended { hide() } }
     }
