@@ -43,6 +43,10 @@ struct SessionPrefs: Equatable {
     var encoderQuality: EncoderQuality = .fastest
     var fullColor = false
     var tenBit = false
+    /// Windows' scale for the virtual display: matched to this Mac's screen
+    /// (`DisplayScale.automatic`) until the user picks a step.
+    var displayScaleAutomatic = true
+    var displayScale = DisplayScale.defaultChoice
 
     /// The settings checkbox: Natural scrolling on the PC. Until the user
     /// picks, it shows (and keeps) whatever this Mac itself does.
@@ -72,6 +76,8 @@ struct SessionPrefs: Equatable {
     private static let encoderQualityKey = "encoderQuality"
     private static let fullColorKey = "fullColor"
     private static let tenBitKey = "tenBit"
+    private static let displayScaleAutomaticKey = "displayScaleAutomatic"
+    private static let displayScaleKey = "displayScale"
 
     static func load(from d: UserDefaults = .standard) -> SessionPrefs {
         var p = SessionPrefs()
@@ -94,6 +100,12 @@ struct SessionPrefs: Equatable {
         if let q = EncoderQuality(rawValue: d.integer(forKey: encoderQualityKey)) { p.encoderQuality = q }
         p.fullColor = d.bool(forKey: fullColorKey)
         p.tenBit = d.bool(forKey: tenBitKey)
+        if d.object(forKey: displayScaleAutomaticKey) != nil {
+            p.displayScaleAutomatic = d.bool(forKey: displayScaleAutomaticKey)
+        }
+        if d.object(forKey: displayScaleKey) != nil {
+            p.displayScale = DisplayScale.nearestStep(d.integer(forKey: displayScaleKey))
+        }
         return p
     }
 
@@ -110,6 +122,14 @@ struct SessionPrefs: Equatable {
         d.set(encoderQuality.rawValue, forKey: Self.encoderQualityKey)
         d.set(fullColor, forKey: Self.fullColorKey)
         d.set(tenBit, forKey: Self.tenBitKey)
+        d.set(displayScaleAutomatic, forKey: Self.displayScaleAutomaticKey)
+        d.set(displayScale, forKey: Self.displayScaleKey)
+    }
+
+    /// What CLIENT_HELLO's `display_scale` asks for, streaming `pixelWidth`
+    /// to a screen `pointWidth` points wide.
+    func requestedDisplayScale(pixelWidth: Int, pointWidth: Double) -> Int {
+        displayScaleAutomatic ? DisplayScale.automatic(pixelWidth: pixelWidth, pointWidth: pointWidth) : displayScale
     }
 
     /// Command-line flags override the remembered values for this launch.

@@ -106,8 +106,8 @@ hidden on a 60 Hz screen). Both follow the window when it moves to another
 display. Streaming from the PC at 2560×1440@144 to a 144 Hz external monitor
 was verified on 2026-10-18 (user report). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
-The **Settings** gear in the footer opens a grouped pane (Video, Latency,
-Input) of switches, laid out like System Settings:
+The **Settings** gear in the footer opens a grouped pane (Video, Display,
+Latency, Input) of switches, laid out like System Settings:
 
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
@@ -128,6 +128,14 @@ Input) of switches, laid out like System Settings:
   why.
 - **VSync**: prevents tearing but adds up to a frame of delay.
   Off by default and switchable mid-session.
+- **Automatic scaling** (Display): on by default. Windows' scale for the PC's
+  desktop follows this Mac's screen: the stream's pixel width over the
+  screen's width in points, so Native on a Retina MacBook is 200%, 0.75 of
+  it 150% and a 1× external screen 100% (never less). Switch it off to pick
+  a **Scale** of your own (100–300% in Windows' steps); while it is on the
+  Scale menu is greyed out and shows the step the PC will use. Applied when
+  a session starts, by a PC that supports it (`docs/PROTOCOL.md` "Display
+  scale"); the PC puts its own scale back on disconnect.
 - **Show latency overlay**: a small HUD drawn into the stream's corner. Its
   headline is how far behind the PC your screen is (PC → your screen, measured
   across both machines; a PC without clock sync shows the Mac's own share,

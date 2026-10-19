@@ -58,6 +58,55 @@ final class VideoOptionsTests: XCTestCase {
         XCTAssertTrue(loaded.tenBit)
     }
 
+    @MainActor func testDisplayScalePrefsPersist() async {
+        let suite = "RelayTests.VideoOptions.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = SessionPrefs.load(from: defaults)
+        XCTAssertTrue(fresh.displayScaleAutomatic)
+        XCTAssertEqual(fresh.displayScale, 200)
+        var saved = SessionPrefs()
+        saved.displayScaleAutomatic = false
+        saved.displayScale = 175
+        saved.save(to: defaults)
+        let loaded = SessionPrefs.load(from: defaults)
+        XCTAssertFalse(loaded.displayScaleAutomatic)
+        XCTAssertEqual(loaded.displayScale, 175)
+        defaults.set(180, forKey: "displayScale")
+        XCTAssertEqual(SessionPrefs.load(from: defaults).displayScale, 175, "a saved value is kept to the offered steps")
+
+        XCTAssertEqual(fresh.requestedDisplayScale(pixelWidth: 2268, pointWidth: 1512), 150, "automatic: the honest ratio")
+        XCTAssertEqual(loaded.requestedDisplayScale(pixelWidth: 2268, pointWidth: 1512), 175, "a choice is sent as is")
+    }
+
+    @MainActor func testPickerDisplayScale() async {
+        let model = PickerModel()
+        model.configure(native: CGSize(width: 3024, height: 1964), pointWidth: 1512, maxRefresh: 120,
+                        initial: StreamMode(scale: 1, refresh: 120))
+        // Automatic shows the step the PC would use, following the mode.
+        XCTAssertEqual(model.effectiveDisplayScale, 200)
+        model.setMode(StreamMode(scale: 0.75, refresh: 120))
+        XCTAssertEqual(model.effectiveDisplayScale, 150)
+        // Turning Automatic off keeps the value shown; picking one ends it.
+        model.setDisplayScaleAutomatic(false)
+        XCTAssertEqual(model.prefs.displayScale, 150)
+        model.setMode(StreamMode(scale: 1, refresh: 120))
+        XCTAssertEqual(model.effectiveDisplayScale, 150, "a choice no longer follows the mode")
+        model.setDisplayScaleAutomatic(true)
+        XCTAssertEqual(model.effectiveDisplayScale, 200)
+        model.setDisplayScale(125)
+        XCTAssertFalse(model.prefs.displayScaleAutomatic)
+        XCTAssertEqual(model.effectiveDisplayScale, 125)
+        // A 1× screen: 100, also for the reduced modes.
+        model.configure(native: CGSize(width: 2560, height: 1440), pointWidth: 2560, maxRefresh: 144, initial: nil)
+        model.setDisplayScaleAutomatic(true)
+        model.setMode(StreamMode(scale: 0.5, refresh: 144))
+        XCTAssertEqual(model.effectiveDisplayScale, 100)
+        XCTAssertEqual(DisplayScale.nearestStep(168), 175)
+        XCTAssertEqual(DisplayScale.nearestStep(275), 250, "a tie goes to the smaller step")
+        XCTAssertEqual(DisplayScale.nearestStep(400), 300)
+    }
+
     func testSPSReaderFindsChromaFormatAndBitDepth() throws {
         typealias Sets = VideoCapabilities.ParameterSets
         let cases: [([Data], Int, Int, OSType)] = [
@@ -164,7 +213,7 @@ final class VideoOptionsTests: XCTestCase {
         let model = PickerModel()
         model.connectsOverWiFi = { $0.name == "Air" }
         model.macDecodes = { $0 != .tenBit }
-        model.configure(native: CGSize(width: 3024, height: 1964), maxRefresh: 120, initial: StreamMode(scale: 1, refresh: 120))
+        model.configure(native: CGSize(width: 3024, height: 1964), pointWidth: 1512, maxRefresh: 120, initial: StreamMode(scale: 1, refresh: 120))
         let old = host("Old", key: 1, enc: nil), new = host("New", key: 2, enc: "q,444,10"), air = host("Air", key: 3, enc: "q")
         let known = [old.publicKey!: "Old", new.publicKey!: "New", air.publicKey!: "Air"]
         model.update(hosts: [old, new, air], known: known, nicknames: [:])

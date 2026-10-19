@@ -46,6 +46,8 @@ final class PickerModel {
     var prefs = SessionPrefs()
     var mode = StreamMode(scale: 1, refresh: 60)
     var nativePixelSize = CGSize(width: 2, height: 2)
+    /// The picker screen's width in points, for the automatic display scale.
+    var screenPointWidth: Double = 1
     var maxRefresh = 60
     var settingsPresented = false
     /// Which side of the gear the settings popover opens on.
@@ -222,8 +224,9 @@ final class PickerModel {
         selection = row.id
     }
 
-    func configure(native: CGSize, maxRefresh: Int, initial: StreamMode?) {
+    func configure(native: CGSize, pointWidth: Double, maxRefresh: Int, initial: StreamMode?) {
         nativePixelSize = native
+        screenPointWidth = pointWidth
         self.maxRefresh = maxRefresh
         mode = (initial ?? mode).clamped(toMaxRefresh: maxRefresh)
     }
@@ -248,6 +251,29 @@ final class PickerModel {
         let (width, height) = StreamMode.size(native: nativePixelSize, scale: mode.scale)
         let overWiFi = selected.map { connectsOverWiFi($0.host) } ?? false
         return VideoBitrate.automatic(width: width, height: height, refresh: mode.refresh, overWiFi: overWiFi)
+    }
+
+    /// The display scale the settings show: the step the PC would use for
+    /// the automatic value, or the user's choice.
+    var effectiveDisplayScale: Int {
+        let (width, _) = StreamMode.size(native: nativePixelSize, scale: mode.scale)
+        let percent = prefs.requestedDisplayScale(pixelWidth: width, pointWidth: screenPointWidth)
+        return prefs.displayScaleAutomatic ? DisplayScale.nearestStep(percent) : percent
+    }
+
+    func setDisplayScale(_ percent: Int) {
+        var next = prefs
+        next.displayScale = DisplayScale.nearestStep(percent)
+        next.displayScaleAutomatic = false
+        setPrefs(next)
+    }
+
+    /// Turning Automatic off keeps the step it was showing.
+    func setDisplayScaleAutomatic(_ on: Bool) {
+        var next = prefs
+        if !on { next.displayScale = effectiveDisplayScale }
+        next.displayScaleAutomatic = on
+        setPrefs(next)
     }
 
     // MARK: picture options

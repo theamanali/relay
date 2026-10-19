@@ -64,7 +64,7 @@ final class PickerModelTests: XCTestCase {
 
     @MainActor func testScreenRefreshClampPreservesNativeResolution() async {
         let model = PickerModel()
-        model.configure(native: CGSize(width: 2560, height: 1664), maxRefresh: 60,
+        model.configure(native: CGSize(width: 2560, height: 1664), pointWidth: 1280, maxRefresh: 60,
                         initial: StreamMode(scale: 1, refresh: 120))
         XCTAssertEqual(model.mode, StreamMode(scale: 1, refresh: 60))
         XCTAssertEqual(model.refreshRates, [60])
@@ -79,7 +79,7 @@ final class PickerModelTests: XCTestCase {
 
     @MainActor func testResolutionTitlesAreNotDigitGrouped() async {
         let model = PickerModel()
-        model.configure(native: CGSize(width: 3024, height: 1964), maxRefresh: 120, initial: nil)
+        model.configure(native: CGSize(width: 3024, height: 1964), pointWidth: 1512, maxRefresh: 120, initial: nil)
         XCTAssertEqual(model.resolutionTitle(1), "Native (3024 × 1964)")
         XCTAssertEqual(model.resolutionTitle(0.75), "75% (2268 × 1474)")
     }

@@ -52,8 +52,8 @@ final class HostPickerWindowController: NSWindowController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(nativePixelSize: CGSize, maxRefresh: Int, initial: StreamMode? = nil) {
-        model.configure(native: nativePixelSize, maxRefresh: maxRefresh, initial: initial)
+    func configure(nativePixelSize: CGSize, pointWidth: Double, maxRefresh: Int, initial: StreamMode? = nil) {
+        model.configure(native: nativePixelSize, pointWidth: pointWidth, maxRefresh: maxRefresh, initial: initial)
     }
     func update(hosts: [DiscoveredHost]) {
         // A result in the footer gives way once the list of PCs changes.

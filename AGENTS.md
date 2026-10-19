@@ -216,6 +216,14 @@ README status and here. Do not create other handoff or retest files.
   against fakehost on the 1× ED273UR: 2560x1440 / 1920x1080 / 1280x720 all
   sent 100%. The Retina 200/150/100 values are unit-tested only (the app
   picked the external screen); the real-PC check covers them.
+  Settings ▸ Display (same day, user request): Automatic scaling
+  (`SessionPrefs.displayScaleAutomatic`, default on) and a Scale menu of
+  `DisplayScale.steps` (100–300), disabled while automatic and then showing
+  `PickerModel.effectiveDisplayScale` (the automatic value snapped like the
+  host: nearest step, tie to the smaller); turning Automatic off keeps the
+  shown step, picking one turns it off. A manual choice is sent as is.
+  `requestedDisplayScale` decides what CLIENT_HELLO carries. Checked in the
+  bundled app on the Retina panel: 200% greyed, enabled with Automatic off.
 - Clock sync + frame timing, host + probe + spec (2026-10-18;
   PROTOCOL.md "Clock sync and frame timing").
   SERVER_HELLO caps `0x07` (`CAP_TIMING` 0x04). `clock.rs`: QPC µs
@@ -641,7 +649,7 @@ documented there. What follows is only the mechanics that are easy to break:
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
   clears it once when the popover becomes key. Since 2026-10-18 (user
   review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
-  Form like a System Settings pane: Video / Latency / Input
+  Form like a System Settings pane: Video / Display / Latency / Input
   sections, mini switches (`SettingSwitch`) with the detail as the toggle
   label's second Text (the form draws it as a subtitle; it dims a disabled
   switch but not its label, so `SettingSwitch` dims both Texts from
@@ -649,7 +657,7 @@ documented there. What follows is only the mechanics that are easy to break:
   (slider + rounded-border field: a grouped form draws fields borderless;
   disabled while Automatic bitrate is on, user request),
   380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
-  rows (~730 pt tall). Subtitles stay on one line at that width (user
+  rows (~800 pt tall with Display). Subtitles stay on one line at that width (user
   request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
   matter while forwarding; while it is off they show off (user request) but

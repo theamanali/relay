@@ -16,17 +16,6 @@ struct StreamMode: Equatable {
         return (even(native.width * scale), even(native.height * scale))
     }
 
-    /// Windows' scale for the virtual display, in percent: the requested
-    /// pixel width over the screen's width in points (what the user sees),
-    /// rounded. Native Retina sends 200, 0.75 of it 150, a 1× screen 100;
-    /// the PC snaps it to the steps Windows offers. Never under 100, Windows'
-    /// smallest step: a reduced mode on a 1× screen (50, 75) would otherwise
-    /// be ignored and keep whatever scale Windows had. 0 when unknown.
-    static func displayScale(pixelWidth: Int, pointWidth: Double) -> UInt16 {
-        guard pixelWidth > 0, pointWidth > 0 else { return 0 }
-        return UInt16(clamping: max(100, Int((Double(pixelWidth) / pointWidth * 100).rounded())))
-    }
-
     static func sizes(native: CGSize) -> [(scale: Double, width: Int, height: Int)] {
         scales.map { s in
             let (w, h) = size(native: native, scale: s)
@@ -72,5 +61,31 @@ struct StreamMode: Equatable {
         let d = UserDefaults.standard
         d.set(scale, forKey: Self.scaleKey)
         d.set(refresh, forKey: Self.refreshKey)
+    }
+}
+
+/// Windows' scale for the virtual display, in percent (PROTOCOL.md "Display
+/// scale"): automatic, or one of the steps Windows offers, as the user picks.
+enum DisplayScale {
+    /// The steps the settings offer; the PC also clamps to what the virtual
+    /// monitor allows.
+    static let steps = [100, 125, 150, 175, 200, 225, 250, 300]
+    static let defaultChoice = 200
+
+    /// The requested pixel width over the screen's width in points (what the
+    /// user sees), rounded. Native Retina sends 200, 0.75 of it 150, a 1×
+    /// screen 100; the PC snaps it to the steps Windows offers. Never under
+    /// 100, Windows' smallest step: a reduced mode on a 1× screen (50, 75)
+    /// would otherwise be ignored and keep whatever scale Windows had. 0 when
+    /// unknown.
+    static func automatic(pixelWidth: Int, pointWidth: Double) -> Int {
+        guard pixelWidth > 0, pointWidth > 0 else { return 0 }
+        return max(100, Int((Double(pixelWidth) / pointWidth * 100).rounded()))
+    }
+
+    /// The step the PC would use for `percent`: the nearest, a tie going to
+    /// the smaller, as the host snaps it.
+    static func nearestStep(_ percent: Int) -> Int {
+        steps.min { abs($0 - percent) < abs($1 - percent) } ?? defaultChoice
     }
 }

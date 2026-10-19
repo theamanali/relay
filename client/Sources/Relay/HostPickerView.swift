@@ -503,6 +503,23 @@ struct SessionSettingsView: View {
                 SettingSwitch("VSync", detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))
             }
+            Section("Display") {
+                // Windows' scale for the virtual display. Automatic matches
+                // this Mac's screen; the Scale row shows the step it picks,
+                // greyed out, until Automatic is switched off.
+                SettingSwitch("Automatic scaling",
+                              detail: "Sizes the PC's desktop to match this Mac's screen.",
+                              isOn: Binding(get: { model.prefs.displayScaleAutomatic },
+                                            set: { model.setDisplayScaleAutomatic($0) }))
+                let automaticScale = model.prefs.displayScaleAutomatic
+                Picker(selection: Binding(get: { model.effectiveDisplayScale },
+                                          set: { model.setDisplayScale($0) })) {
+                    ForEach(DisplayScale.steps, id: \.self) { Text(verbatim: "\($0)%").tag($0) }
+                } label: {
+                    Text("Scale").foregroundStyle(automaticScale ? .tertiary : .primary)
+                }
+                .disabled(automaticScale)
+            }
             Section("Latency") {
                 SettingSwitch("Show latency overlay",
                               isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in

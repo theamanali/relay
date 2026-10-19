@@ -86,7 +86,7 @@ final class HostConnection: @unchecked Sendable {
         /// Picture options, sent only to a host that reads them.
         var video: Proto.VideoRequest? = nil
         /// Windows' scale for the virtual display, in percent
-        /// (`StreamMode.displayScale`), sent only to a host that reads it;
+        /// (`SessionPrefs.requestedDisplayScale`), sent only to a host that reads it;
         /// 0 leaves Windows' own choice.
         var displayScale: UInt16 = 0
         var wantsInput: Bool = true

@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     }
 
     private func configurePicker(for screen: NSScreen, initial: StreamMode? = nil) {
-        picker?.configure(nativePixelSize: Self.nativePixelSize(of: screen),
+        picker?.configure(nativePixelSize: Self.nativePixelSize(of: screen), pointWidth: screen.frame.width,
                           maxRefresh: Self.maxRefresh(of: screen), initial: initial)
     }
 
@@ -522,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         let (w, h) = StreamMode.size(native: Self.nativePixelSize(of: screen), scale: mode.scale)
         opts.requestedWidth = w
         opts.requestedHeight = h
-        opts.displayScale = StreamMode.displayScale(pixelWidth: w, pointWidth: screen.frame.width)
+        opts.displayScale = UInt16(clamping: prefs.requestedDisplayScale(pixelWidth: w, pointWidth: screen.frame.width))
         opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
         opts.wantsInput = prefs.forwardInput
         opts.requestedBitrateMbps = prefs.bitrateAutomatic
