@@ -522,6 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         let (w, h) = StreamMode.size(native: Self.nativePixelSize(of: screen), scale: mode.scale)
         opts.requestedWidth = w
         opts.requestedHeight = h
+        opts.displayScale = StreamMode.displayScale(pixelWidth: w, pointWidth: screen.frame.width)
         opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
         opts.wantsInput = prefs.forwardInput
         opts.requestedBitrateMbps = prefs.bitrateAutomatic

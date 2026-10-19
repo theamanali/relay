@@ -85,6 +85,10 @@ final class HostConnection: @unchecked Sendable {
         var codecs: UInt8? = nil
         /// Picture options, sent only to a host that reads them.
         var video: Proto.VideoRequest? = nil
+        /// Windows' scale for the virtual display, in percent
+        /// (`StreamMode.displayScale`), sent only to a host that reads it;
+        /// 0 leaves Windows' own choice.
+        var displayScale: UInt16 = 0
         var wantsInput: Bool = true
         var clientName = ""
         /// PIN to use without asking (e.g. from the command line).
@@ -123,6 +127,7 @@ final class HostConnection: @unchecked Sendable {
     private var receivedFrame = false
     private var supportsPairName = false
     private var supportsVideoOptions = false
+    private var supportsDisplayScale = false
     /// SERVER_HELLO's CAP_TIMING, and the clock sync that follows it.
     private var supportsTiming = false
     private var clock = ClockSync()
@@ -299,6 +304,7 @@ final class HostConnection: @unchecked Sendable {
         receivedFrame = false
         supportsPairName = false
         supportsVideoOptions = false
+        supportsDisplayScale = false
         supportsTiming = false
         clock = ClockSync()
         timingStarted = false
@@ -546,6 +552,7 @@ final class HostConnection: @unchecked Sendable {
         greeted = true
         supportsPairName = hello.supportsPairName
         supportsVideoOptions = hello.supportsVideoOptions
+        supportsDisplayScale = hello.supportsDisplayScale
         supportsTiming = hello.supportsTiming
         if !hello.name.isEmpty { serviceName = hello.name }
         if options.unpairOnly { return } // UNPAIR is already on its way
@@ -651,7 +658,8 @@ final class HostConnection: @unchecked Sendable {
             wantsInput: options.wantsInput,
             codecs: codecs,
             name: options.clientName,
-            video: supportsVideoOptions ? options.video : nil
+            video: supportsVideoOptions ? options.video : nil,
+            displayScale: supportsDisplayScale ? options.displayScale : nil
         )
         sendRaw(hello)
         ready = true

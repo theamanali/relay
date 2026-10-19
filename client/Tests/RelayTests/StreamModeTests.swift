@@ -22,6 +22,24 @@ final class StreamModeTests: XCTestCase {
         }
     }
 
+    func testDisplayScaleIsPixelsOverPoints() {
+        // Every built-in panel at its default "looks like" size is 2× its points.
+        for (native, _, _) in panels {
+            let points = native.width / 2
+            let sizes = StreamMode.sizes(native: native)
+            XCTAssertEqual(sizes.map { StreamMode.displayScale(pixelWidth: $0.width, pointWidth: points) },
+                           [200, 150, 100], "\(native)")
+        }
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 2560, pointWidth: 2560), 100, "a 1× external screen")
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 1920, pointWidth: 2560), 100,
+                       "0.75 on a 1× screen: Windows' smallest step, not an ignored 75")
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 1280, pointWidth: 2560), 100)
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 3024, pointWidth: 1800), 168,
+                       "a scaled 'looks like' size sends the honest ratio; the PC snaps it")
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 3024, pointWidth: 0), 0)
+        XCTAssertEqual(StreamMode.displayScale(pixelWidth: 0, pointWidth: 1512), 0)
+    }
+
     func testRefreshRatesFollowThePanel() {
         XCTAssertEqual(StreamMode.refreshRates(max: 120), [120, 60])
         XCTAssertEqual(StreamMode.refreshRates(max: 144), [144, 60], "external monitors offer their own top rate")

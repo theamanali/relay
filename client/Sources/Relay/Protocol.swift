@@ -44,6 +44,9 @@ enum Proto {
     /// SERVER_HELLO: the host answers TIME_REQUEST and then sends
     /// FRAME_TIMING_EXT (PROTOCOL.md "Clock sync and frame timing").
     static let capTiming: UInt8 = 0x04
+    /// SERVER_HELLO: the host reads CLIENT_HELLO's `display_scale` after the
+    /// picture options (PROTOCOL.md "Display scale").
+    static let capDisplayScale: UInt8 = 0x08
 
     /// Input messages (0x90–0x93): the ones FRAME_TIMING_EXT's
     /// `inputs_applied` counts.
@@ -122,6 +125,7 @@ enum Proto {
         var supportsPairName: Bool { capabilities & Proto.capPairName != 0 }
         var supportsVideoOptions: Bool { capabilities & Proto.capVideoOptions != 0 }
         var supportsTiming: Bool { capabilities & Proto.capTiming != 0 }
+        var supportsDisplayScale: Bool { capabilities & Proto.capDisplayScale != 0 }
 
         init?(_ p: Data) {
             guard p.count >= 3 else { return nil }
@@ -299,10 +303,13 @@ enum Proto {
         return d
     }
 
-    /// `video` only for a host whose SERVER_HELLO has `capVideoOptions`;
-    /// older hosts ignore bytes after the name anyway.
+    /// `video` only for a host whose SERVER_HELLO has `capVideoOptions`,
+    /// `displayScale` only for one with `capDisplayScale`; older hosts ignore
+    /// bytes after the name anyway. The scale follows the picture-option
+    /// bytes, so with a scale they are always sent (0, 0 when unwanted).
     static func clientHello(width: Int, height: Int, refresh: Int, bitrateMbps: Int,
-                            wantsInput: Bool, codecs: UInt8, name: String, video: VideoRequest? = nil) -> Data {
+                            wantsInput: Bool, codecs: UInt8, name: String, video: VideoRequest? = nil,
+                            displayScale: UInt16? = nil) -> Data {
         var p = Data()
         p.appendBE16(version)
         p.appendBE16(UInt16(clamping: width))
@@ -314,7 +321,13 @@ enum Proto {
         let nameBytes = Array(name.utf8.prefix(255))
         p.append(UInt8(nameBytes.count))
         p.append(contentsOf: nameBytes)
-        if let video { p.append(contentsOf: [video.quality, video.flags]) }
+        if let displayScale {
+            let v = video ?? VideoRequest(quality: 0, flags: 0)
+            p.append(contentsOf: [v.quality, v.flags])
+            p.appendBE16(displayScale)
+        } else if let video {
+            p.append(contentsOf: [video.quality, video.flags])
+        }
         return message(.clientHello, payload: p)
     }
 

@@ -97,7 +97,8 @@ final class FakeHost {
 
 func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: String? = "000000",
              pairOnly: Bool = true, verifyOnly: Bool = false, unpairOnly: Bool = false,
-             streamTimeouts: TimeInterval? = nil, expectEnd: Bool = true) throws -> (HostConnection, Delegate) {
+             streamTimeouts: TimeInterval? = nil, expectEnd: Bool = true,
+             displayScale: UInt16 = 0) throws -> (HostConnection, Delegate) {
     var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
     options.expectedHostKey = try host.key
     options.clientName = name
@@ -106,6 +107,7 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     options.verifyOnly = verifyOnly
     options.unpairOnly = unpairOnly
     options.dialTimeout = 5
+    options.displayScale = displayScale
     if let streamTimeouts {
         options.streamStartTimeout = streamTimeouts
         options.firstFrameTimeout = streamTimeouts
@@ -299,6 +301,18 @@ func run(_ root: URL) throws {
             try check(delegate.reason == reason, "\(label): ended with '\(delegate.reason)'\n\(host.log)")
             try check(delegate.frames == 0, "\(label): frames arrived")
             print("PASS \(label): ended with '\(reason)'")
+        }
+        // CLIENT_HELLO's display_scale only to a PC that advertises 0x08.
+        for (label, arguments, expected) in [
+            ("display-scale", ["hang"], "quality 0 video flags 0b0, display scale 150%)"),
+            ("display-scale-old-pc", ["hang", "--no-display-scale"], "no extension)"),
+        ] {
+            let host = try FakeHost(root: root, label: label, arguments: arguments)
+            defer { host.stop() }
+            _ = try connect(host)
+            _ = try connect(host, pin: nil, pairOnly: false, streamTimeouts: 0.5, displayScale: 150)
+            try check(host.log.contains(", \(expected)"), "\(label): expected '\(expected)'\n\(host.log)")
+            print("PASS \(label): CLIENT_HELLO ended '\(expected)'")
         }
         let host = try FakeHost(root: root, label: "stream-healthy", arguments: ["accept", "--clip", clipURL.path])
         defer { host.stop() }

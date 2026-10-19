@@ -16,6 +16,17 @@ struct StreamMode: Equatable {
         return (even(native.width * scale), even(native.height * scale))
     }
 
+    /// Windows' scale for the virtual display, in percent: the requested
+    /// pixel width over the screen's width in points (what the user sees),
+    /// rounded. Native Retina sends 200, 0.75 of it 150, a 1× screen 100;
+    /// the PC snaps it to the steps Windows offers. Never under 100, Windows'
+    /// smallest step: a reduced mode on a 1× screen (50, 75) would otherwise
+    /// be ignored and keep whatever scale Windows had. 0 when unknown.
+    static func displayScale(pixelWidth: Int, pointWidth: Double) -> UInt16 {
+        guard pixelWidth > 0, pointWidth > 0 else { return 0 }
+        return UInt16(clamping: max(100, Int((Double(pixelWidth) / pointWidth * 100).rounded())))
+    }
+
     static func sizes(native: CGSize) -> [(scale: Double, width: Int, height: Int)] {
         scales.map { s in
             let (w, h) = size(native: native, scale: s)

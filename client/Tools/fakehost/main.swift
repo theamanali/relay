@@ -67,6 +67,10 @@
 // DWM presented each picture 0.8 ms before the tick and encoding took 0.2 ms;
 // every fifth tick is a re-encode (present unknown).
 //
+// SERVER_HELLO advertises CAP_DISPLAY_SCALE (0x08) unless `--no-display-scale`
+// (an older PC), and CLIENT_HELLO's `display_scale` is printed when present
+// (PROTOCOL.md "Display scale").
+//
 // Messages this fake reads fit one record; FRAMEs it streams are split into
 // records as the spec says (the app reassembles them; CryptoTests covers that).
 import CryptoKit
@@ -120,6 +124,7 @@ let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { 
 // `--no-frames`: STREAM_START, then nothing (a PC that can't capture).
 let noFrames = args.contains("--no-frames")
 let timing = !args.contains("--no-timing")
+let displayScale = !args.contains("--no-display-scale")
 let clockOffsetMicros = Int64((Double(argument("--clock-offset-ms") ?? "0") ?? 0) * 1_000)
 /// The fake PC's clock: this Mac's uptime shifted by the offset.
 func hostMicros() -> UInt64 {
@@ -262,6 +267,23 @@ final class Channel {
     }
 }
 
+/// CLIENT_HELLO's codecs and optional extensions: u16 version, width,
+/// height, refresh, bitrate, u8 flags, u8 codecs, u8 name length, name, then
+/// the optional u8 quality, u8 video flags, then the optional u16 display_scale.
+func describeHello(_ payload: Data) -> String {
+    let p = [UInt8](payload)
+    let codecs = p.count > 11 ? p[11] : 0
+    let nameEnd = p.count > 12 ? 13 + Int(p[12]) : p.count
+    var ext = p.count >= nameEnd + 2 ? "quality \(p[nameEnd]) video flags 0b\(String(p[nameEnd + 1], radix: 2))" : "no extension"
+    if p.count >= nameEnd + 4 {
+        ext += ", display scale \(UInt16(p[nameEnd + 2]) << 8 | UInt16(p[nameEnd + 3]))%"
+    } else if displayScale {
+        ext += ", no display scale"
+    }
+    let size = p.count >= 6 ? "\(UInt16(p[2]) << 8 | UInt16(p[3]))x\(UInt16(p[4]) << 8 | UInt16(p[5])), " : ""
+    return "\(size)codecs 0b\(String(codecs, radix: 2)), \(ext)"
+}
+
 func serve(_ fd: Int32) {
     defer { close(fd); print("-- closed") }
     guard let m1 = readFrame(fd) else { print("no msg1"); return }
@@ -292,7 +314,8 @@ func serve(_ fd: Int32) {
     var hello = Data(); hello.appendBE16(4); let name = Array("Fake PC".utf8); hello.append(UInt8(name.count)); hello.append(contentsOf: name)
     hello.append(claimPaired ? 1 : 0)
     if !legacyPair {
-        hello.append(Proto.capPairName | (enc != nil ? Proto.capVideoOptions : 0) | (timing ? Proto.capTiming : 0))
+        hello.append(Proto.capPairName | (enc != nil ? Proto.capVideoOptions : 0) | (timing ? Proto.capTiming : 0)
+                     | (displayScale ? Proto.capDisplayScale : 0))
     }
     writeAll(fd, tx.seal(type: 0x01, payload: hello))
 
@@ -438,8 +461,9 @@ func serve(_ fd: Int32) {
         writeAll(fd, tx.seal(type: 0xA1, payload: p)); print("-- PAIR_RESULT rate-limited \(limitSecs) s")
     case ("wrong", 0xA0), ("accept", 0xA0), ("hang", 0xA0), ("notpaired", 0xA0):
         guard pair(payload) else { break }
-        if let next = readFrame(fd), let (nextType, _) = rx.open(next) {
+        if let next = readFrame(fd), let (nextType, nextPayload) = rx.open(next) {
             print(String(format: "-- next message 0x%02x", nextType))
+            if nextType == 0x81 { print("-- CLIENT_HELLO (\(describeHello(nextPayload)))") }
             if mode == "notpaired" && nextType == 0x81 {
                 writeAll(fd, tx.seal(type: 0x06, payload: Data([4])))
                 print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
@@ -454,13 +478,7 @@ func serve(_ fd: Int32) {
     case ("notpaired", 0x81):
         writeAll(fd, tx.seal(type: 0x06, payload: Data([4]))); print("-- CLIENT_HELLO refused with STREAM_STOP(4)")
     case (_, 0x81):
-        // u16 version, width, height, refresh, bitrate, u8 flags, u8 codecs,
-        // u8 name length, name, then the optional u8 quality, u8 video flags.
-        let p = [UInt8](payload)
-        let codecs = p.count > 11 ? p[11] : 0
-        let nameEnd = p.count > 12 ? 13 + Int(p[12]) : p.count
-        let ext = p.count >= nameEnd + 2 ? " quality \(p[nameEnd]) video flags 0b\(String(p[nameEnd + 1], radix: 2))" : " no extension"
-        print("-- CLIENT_HELLO (codecs 0b\(String(codecs, radix: 2)),\(ext)); \(clip != nil ? "streaming" : mode == "hang" ? "hanging" : "closing")")
+        print("-- CLIENT_HELLO (\(describeHello(payload))); \(clip != nil ? "streaming" : mode == "hang" ? "hanging" : "closing")")
         if let clip { stream(clip) } else if mode == "hang" { _ = readFrame(fd) }
     default:
         print("-- unexpected; closing")

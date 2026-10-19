@@ -104,6 +104,25 @@ final class VideoOptionsTests: XCTestCase {
         XCTAssertEqual(VideoOptionAvailability.pcNeedsUpdate.reason, "Needs Relay to be updated on the PC.")
     }
 
+    func testClientHelloDisplayScaleFollowsThePictureOptions() {
+        func hello(video: Proto.VideoRequest?, scale: UInt16?) -> Data {
+            Proto.clientHello(width: 3024, height: 1964, refresh: 120, bitrateMbps: 120,
+                              wantsInput: true, codecs: 0b11, name: "Mac", video: video, displayScale: scale)
+        }
+        let plain = hello(video: nil, scale: nil)
+        let afterName = { (m: Data) in Array(m.suffix(from: m.startIndex + plain.count)) }
+        XCTAssertEqual(afterName(hello(video: nil, scale: 200)), [0, 0, 0, 200],
+                       "the picture-option bytes are sent as 0, 0 when nothing is wanted")
+        XCTAssertEqual(afterName(hello(video: .init(quality: 2, flags: VideoFlags.tenBit), scale: 150)),
+                       [2, VideoFlags.tenBit, 0, 150])
+        XCTAssertEqual(afterName(hello(video: nil, scale: 300)), [0, 0, 0x01, 0x2c], "big-endian")
+        XCTAssertEqual(afterName(hello(video: nil, scale: 0)), [0, 0, 0, 0])
+        XCTAssertEqual(afterName(hello(video: .init(quality: 1, flags: 0), scale: nil)), [1, 0],
+                       "without the capability, today's CLIENT_HELLO")
+        // Header: type, flags, two reserved bytes, u32 payload length.
+        XCTAssertEqual(hello(video: nil, scale: 200).be32(at: 4), UInt32(plain.count - Proto.headerSize + 4))
+    }
+
     func testClientHelloExtensionAndStreamStartFormat() {
         let plain = Proto.clientHello(width: 100, height: 50, refresh: 120, bitrateMbps: 120,
                                       wantsInput: true, codecs: 0b11, name: "Mac")
@@ -115,6 +134,8 @@ final class VideoOptionsTests: XCTestCase {
         XCTAssertEqual(extended.prefix(4), plain.prefix(4)) // same type; length differs
 
         let hello = { (caps: [UInt8]) in Proto.ServerHello(Data([0, 4, 2]) + Data("PC".utf8) + Data([1]) + Data(caps)) }
+        XCTAssertEqual(hello([0x07])?.supportsDisplayScale, false)
+        XCTAssertEqual(hello([0x0f])?.supportsDisplayScale, true)
         XCTAssertEqual(hello([])?.supportsVideoOptions, false)
         XCTAssertEqual(hello([Proto.capPairName])?.supportsVideoOptions, false)
         XCTAssertEqual(hello([Proto.capPairName | Proto.capVideoOptions])?.supportsVideoOptions, true)
