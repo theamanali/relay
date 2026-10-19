@@ -467,10 +467,11 @@ struct SessionSettingsView: View {
 
     /// A color option: off and disabled, with the reason, when the PC or
     /// this Mac can't do it.
-    private func pictureOption(_ title: String, detail: String, feature: VideoFeatures,
+    private func pictureOption(_ title: String, detail: (Bool) -> String, feature: VideoFeatures,
                                key: WritableKeyPath<SessionPrefs, Bool>) -> some View {
         let availability = model.availability(feature)
-        return SettingSwitch(title, detail: availability.reason ?? detail,
+        let on = availability == .available && model.prefs[keyPath: key]
+        return SettingSwitch(title, detail: availability.reason ?? detail(on),
                              isOn: Binding(get: { availability == .available && model.prefs[keyPath: key] },
                                            set: { var prefs = model.prefs; prefs[keyPath: key] = $0; model.setPrefs(prefs) }))
             .disabled(availability != .available)
@@ -485,7 +486,7 @@ struct SessionSettingsView: View {
                 // the Bitrate row below shows its value, greyed out, until
                 // Automatic is switched off.
                 SettingSwitch("Automatic bitrate",
-                              detail: "Set for the resolution, refresh rate and connection.",
+                              detail: SettingDetail.automaticBitrate(model.prefs.bitrateAutomatic),
                               isOn: Binding(get: { model.prefs.bitrateAutomatic },
                                             set: { model.setBitrateAutomatic($0) }))
                 let automatic = model.prefs.bitrateAutomatic
@@ -519,7 +520,8 @@ struct SessionSettingsView: View {
                 // this Mac's screen; the Scale row shows the step it picks,
                 // greyed out, until Automatic is switched off.
                 SettingSwitch("Automatic scaling",
-                              detail: "Sizes the PC's desktop to match this Mac's screen.",
+                              detail: SettingDetail.automaticScaling(model.prefs.displayScaleAutomatic,
+                                                                     percent: model.effectiveDisplayScale),
                               isOn: Binding(get: { model.prefs.displayScaleAutomatic },
                                             set: { model.setDisplayScaleAutomatic($0) }))
                 let automaticScale = model.prefs.displayScaleAutomatic
@@ -538,15 +540,15 @@ struct SessionSettingsView: View {
                 } label: {
                     Text("Encoder")
                         .foregroundStyle(quality == .available ? .primary : .tertiary)
-                    Text(quality.reason ?? "Better quality takes the PC longer per frame.")
+                    Text(quality.reason ?? model.prefs.encoderQuality.detail)
                         .foregroundStyle(quality == .available ? .secondary : .tertiary)
                 }
                 .disabled(quality != .available)
-                pictureOption("Full color (4:4:4)", detail: "Sharper colored text; needs more bitrate.",
+                pictureOption("Full color (4:4:4)", detail: SettingDetail.fullColor,
                               feature: .fullColor, key: \.fullColor)
-                pictureOption("10-bit color", detail: "Smoother gradients with less banding.",
+                pictureOption("10-bit color", detail: SettingDetail.tenBit,
                               feature: .tenBit, key: \.tenBit)
-                SettingSwitch("VSync", detail: "Prevents tearing but adds up to a frame of delay.",
+                SettingSwitch("VSync", detail: SettingDetail.vsync(model.prefs.preventTearing),
                               isOn: preference(\.preventTearing))
             }
             Section("Input") {
@@ -555,7 +557,7 @@ struct SessionSettingsView: View {
                 // matter while the Mac controls the PC: they show off while it
                 // is off, like the color options a PC lacks, but keep their
                 // saved values for when control comes back.
-                SettingSwitch("Control the PC", detail: "Off to watch without sending keys or clicks.",
+                SettingSwitch("Control the PC", detail: SettingDetail.control(controlling),
                               isOn: preference(\.forwardInput))
                 Group {
                     // Off sends keys by their physical position instead. The note

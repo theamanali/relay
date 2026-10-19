@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Relay
 
@@ -102,5 +103,28 @@ final class SessionPrefsTests: XCTestCase {
         saved.save(to: defaults)
         let launch = LaunchOptions.parse(["Relay", "--latency-stats"])
         XCTAssertEqual(SessionPrefs.load(from: defaults).overridden(by: launch).hudMode, .compact)
+    }
+
+    /// Settings subtitles describe the current choice, and each stays on one
+    /// line: no wider than the widest one the 380 pt pane was laid out with.
+    func testSettingSubtitlesFollowTheChoiceAndFitOneLine() {
+        let pairs = [
+            (SettingDetail.automaticBitrate(true), SettingDetail.automaticBitrate(false)),
+            (SettingDetail.automaticScaling(true, percent: 200), SettingDetail.automaticScaling(false, percent: 200)),
+            (SettingDetail.fullColor(true), SettingDetail.fullColor(false)),
+            (SettingDetail.tenBit(true), SettingDetail.tenBit(false)),
+            (SettingDetail.vsync(true), SettingDetail.vsync(false)),
+            (SettingDetail.control(true), SettingDetail.control(false)),
+        ]
+        for (on, off) in pairs { XCTAssertNotEqual(on, off) }
+        XCTAssertEqual(Set(EncoderQuality.allCases.map(\.detail)).count, EncoderQuality.allCases.count)
+        XCTAssertEqual(SettingDetail.automaticScaling(true, percent: 150), "Set to 150% to match this Mac's screen.")
+
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        func width(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }
+        let budget = width("Set for the resolution, refresh rate and connection.")
+        let all = pairs.flatMap { [$0.0, $0.1] } + EncoderQuality.allCases.map(\.detail)
+            + [SettingDetail.automaticScaling(true, percent: 300)]
+        for text in all { XCTAssertLessThanOrEqual(width(text), budget, text) }
     }
 }

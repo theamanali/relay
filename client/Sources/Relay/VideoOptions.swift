@@ -17,6 +17,15 @@ enum EncoderQuality: Int, CaseIterable {
         case .best: "Best quality"
         }
     }
+
+    /// The settings subtitle for this choice.
+    var detail: String {
+        switch self {
+        case .fastest: "Lowest delay. Best for games and motion."
+        case .balanced: "Sharper picture, a little more delay."
+        case .best: "Sharpest picture, the most delay."
+        }
+    }
 }
 
 /// What a PC can do with the CLIENT_HELLO extension, from TXT `enc`
