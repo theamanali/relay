@@ -106,11 +106,11 @@ final class SessionPrefsTests: XCTestCase {
     }
 
     /// Settings subtitles describe the current choice, and each stays on one
-    /// line: no wider than the widest one the 380 pt pane was laid out with.
+    /// line: no wider than the widest one seen on one line in the 380 pt pane.
     func testSettingSubtitlesFollowTheChoiceAndFitOneLine() {
         let pairs = [
             (SettingDetail.automaticBitrate(true), SettingDetail.automaticBitrate(false)),
-            (SettingDetail.automaticScaling(true, percent: 200), SettingDetail.automaticScaling(false, percent: 200)),
+            (SettingDetail.automaticScaling(true), SettingDetail.automaticScaling(false)),
             (SettingDetail.fullColor(true), SettingDetail.fullColor(false)),
             (SettingDetail.tenBit(true), SettingDetail.tenBit(false)),
             (SettingDetail.vsync(true), SettingDetail.vsync(false)),
@@ -118,13 +118,12 @@ final class SessionPrefsTests: XCTestCase {
         ]
         for (on, off) in pairs { XCTAssertNotEqual(on, off) }
         XCTAssertEqual(Set(EncoderQuality.allCases.map(\.detail)).count, EncoderQuality.allCases.count)
-        XCTAssertEqual(SettingDetail.automaticScaling(true, percent: 150), "Set to 150% to match this Mac's screen.")
 
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         func width(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }
-        let budget = width("Set for the resolution, refresh rate and connection.")
+        // The widest subtitle seen on one line in the bundled app.
+        let budget = width("Sizes the PC's desktop to match this Mac's screen.")
         let all = pairs.flatMap { [$0.0, $0.1] } + EncoderQuality.allCases.map(\.detail)
-            + [SettingDetail.automaticScaling(true, percent: 300)]
         for text in all { XCTAssertLessThanOrEqual(width(text), budget, text) }
     }
 }

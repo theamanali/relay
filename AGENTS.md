@@ -660,9 +660,9 @@ documented there. What follows is only the mechanics that are easy to break:
   380 pt wide, `scrollDisabled` + vertical `fixedSize` so it sizes to its
   rows (~730 pt before the two display scale rows). Subtitles describe the
   current choice (2026-10-18, user request): `SettingDetail` (on/off text
-  per switch, the automatic scale's percent) and `EncoderQuality.detail`;
+  per switch) and `EncoderQuality.detail`;
   an unavailable option still shows its reason instead. A test keeps every
-  one within the old widest subtitle's width. Subtitles stay on one line at that width (user
+  one within the widest seen on one line (the automatic scaling one). Subtitles stay on one line at that width (user
   request; ⌘⌥⌃ glyphs render wider than they look, measure).
   Control the PC sits first under Input and disables the options that only
   matter while forwarding; while it is off they show off (user request) but

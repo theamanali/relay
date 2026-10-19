@@ -520,8 +520,7 @@ struct SessionSettingsView: View {
                 // this Mac's screen; the Scale row shows the step it picks,
                 // greyed out, until Automatic is switched off.
                 SettingSwitch("Automatic scaling",
-                              detail: SettingDetail.automaticScaling(model.prefs.displayScaleAutomatic,
-                                                                     percent: model.effectiveDisplayScale),
+                              detail: SettingDetail.automaticScaling(model.prefs.displayScaleAutomatic),
                               isOn: Binding(get: { model.prefs.displayScaleAutomatic },
                                             set: { model.setDisplayScaleAutomatic($0) }))
                 let automaticScale = model.prefs.displayScaleAutomatic

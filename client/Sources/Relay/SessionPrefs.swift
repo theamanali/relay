@@ -27,22 +27,22 @@ enum ScrollDirection: String, CaseIterable {
 /// what it does now rather than what it can do.
 enum SettingDetail {
     static func automaticBitrate(_ on: Bool) -> String {
-        on ? "Follows the resolution, refresh rate and link." : "Uses the bitrate you set below."
+        on ? "Set for the resolution, refresh rate and connection." : "Uses the bitrate you choose below."
     }
-    static func automaticScaling(_ on: Bool, percent: Int) -> String {
-        on ? "Set to \(percent)% to match this Mac's screen." : "Uses the scale you choose below."
+    static func automaticScaling(_ on: Bool) -> String {
+        on ? "Sizes the PC's desktop to match this Mac's screen." : "Uses the scale you choose below."
     }
     static func fullColor(_ on: Bool) -> String {
-        on ? "Colored text stays sharp; needs more bitrate." : "Colored text may look slightly soft."
+        on ? "Colored text stays sharp, but needs more bitrate." : "Colored text may look slightly soft."
     }
     static func tenBit(_ on: Bool) -> String {
         on ? "Smoother gradients with less banding." : "Gradients may show slight banding."
     }
     static func vsync(_ on: Bool) -> String {
-        on ? "No tearing, but up to a frame of extra delay." : "Lowest delay; fast motion may tear."
+        on ? "No tearing, but up to a frame of extra delay." : "Lowest delay, but fast motion may tear."
     }
     static func control(_ on: Bool) -> String {
-        on ? "Keys, clicks and scrolling go to the PC." : "Watching only; nothing is sent to the PC."
+        on ? "Keys, clicks and scrolling go to the PC." : "Watching only, no input is sent to the PC."
     }
 }
 
