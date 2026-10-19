@@ -114,7 +114,8 @@ was verified on 2026-10-18 (user report). The **View** menu mirrors both and add
 The **Settings** gear in the footer opens a grouped pane (Video, Input,
 Performance) of switches, laid out like System Settings. Each subtitle
 describes the current choice (e.g. VSync off: "Lowest delay, but fast motion
-may tear."):
+may tear."). Each section folds from its header, and stays folded the next
+time:
 
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks

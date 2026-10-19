@@ -456,6 +456,10 @@ private struct PickerFooter: View {
 
 struct SessionSettingsView: View {
     @Bindable var model: PickerModel
+    // Each section folds from its header; remembered across opens and launches.
+    @AppStorage("settingsVideoExpanded") private var videoExpanded = true
+    @AppStorage("settingsInputExpanded") private var inputExpanded = true
+    @AppStorage("settingsPerformanceExpanded") private var performanceExpanded = true
 
     private func preference<Value>(_ key: WritableKeyPath<SessionPrefs, Value>) -> Binding<Value> {
         Binding(get: { model.prefs[keyPath: key] }, set: { value in
@@ -481,7 +485,7 @@ struct SessionSettingsView: View {
     // the left, its control on the right, details as a subtitle.
     var body: some View {
         Form {
-            Section("Video") {
+            Section("Video", isExpanded: $videoExpanded) {
                 // Automatic follows the resolution, refresh rate and link;
                 // the Bitrate row below shows its value, greyed out, until
                 // Automatic is switched off.
@@ -550,7 +554,7 @@ struct SessionSettingsView: View {
                 SettingSwitch("VSync", detail: SettingDetail.vsync(model.prefs.preventTearing),
                               isOn: preference(\.preventTearing))
             }
-            Section("Input") {
+            Section("Input", isExpanded: $inputExpanded) {
                 let controlling = model.prefs.forwardInput
                 // Also PC ▸ Control / Observe and ⌃⌥⌘K. The options under it only
                 // matter while the Mac controls the PC: they show off while it
@@ -577,7 +581,7 @@ struct SessionSettingsView: View {
                 }
                 .disabled(!controlling)
             }
-            Section("Performance") {
+            Section("Performance", isExpanded: $performanceExpanded) {
                 SettingSwitch("Show performance overlay",
                               isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
                                   var prefs = model.prefs
