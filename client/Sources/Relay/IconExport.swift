@@ -2,7 +2,7 @@
 // picker draws, so the PC and the Mac share one piece of artwork. Produces
 // relay-light.ico (black, for a light taskbar) and relay-dark.ico (white, for a
 // dark one); Windows does not tint tray icons, hence two files. See
-// host/assets/README.md.
+// host/README.md.
 //
 // `--render-app-icon <dir>`: the Mac app's own icon from the same glyph.
 // Two forms. AppIcon.icon is an Icon Composer document (macOS 26): a blue

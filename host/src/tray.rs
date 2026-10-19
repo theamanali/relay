@@ -4,7 +4,7 @@
 //! Get new PIN, a Forget paired MacBook submenu, Start on system boot and Exit.
 //!
 //! The icon is the client's tower-and-MacBook glyph, rendered on the Mac into
-//! `assets/relay-{light,dark}.ico` (see `assets/README.md`) and embedded here.
+//! `assets/relay-{light,dark}.ico` (see `host/README.md`) and embedded here.
 //! Windows does not tint tray icons, so there is one per taskbar theme; the
 //! menu follows the same theme through `menu_theme`.
 

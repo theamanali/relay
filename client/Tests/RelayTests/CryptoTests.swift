@@ -115,7 +115,7 @@ final class CryptoTests: XCTestCase {
 
     // MARK: records
 
-    /// host/PAIR-NAME-HANDOFF.md and crypto::tests::named_pairing_vector.
+    /// The named pairing vector in docs/PROTOCOL.md and crypto::tests::named_pairing_vector.
     /// Same Noise and CPace secrets as v4; only the name AD changes the tags.
     func testNamedPairingVector() throws {
         let mac = Handshake.initiator(identity: try key(0x11), ephemeral: try key(0x22))

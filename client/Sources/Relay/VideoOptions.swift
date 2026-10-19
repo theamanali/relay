@@ -1,6 +1,6 @@
 // Picture options the PC applies: its encoder preset, full 4:4:4 color and
 // 10-bit color. A PC says which it offers in its TXT record (`enc`); the
-// Mac asks for them in CLIENT_HELLO's extension (docs/VIDEO-OPTIONS-HANDOFF.md).
+// Mac asks for them in CLIENT_HELLO's extension (docs/PROTOCOL.md).
 
 import Foundation
 

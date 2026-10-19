@@ -1,7 +1,7 @@
 # NVIDIA-only host: failure/recovery gate (handoff step 5) — 2026-10-17
 
 The gate for removing the ffmpeg, AMF/QSV/software and Parsec paths
-(`docs/WINDOWS-PLATFORM-HANDOFF.md` steps 6–7). Nothing is removed until every
+(platform-migration phase C). Nothing is removed until every
 case below has a recorded result on the hardware.
 
 ## Build and machine
@@ -112,7 +112,8 @@ Every preflight logged two trials (requested 1920×1080@60, then the display's
    so every session now signals 1 / 1 / 6. Matrices 5 and 6 are both BT.601,
    and the Mac presenter uses only the matrix and range.
 6. **Open: the host-side re-announcement is installed and not enough; the
-   Mac must re-browse (`host/REDISCOVERY-HANDOFF.md`).** F6b on 2026-10-18:
+   Mac must re-browse (fixed on the Mac with `BrowseRecovery`, see
+   `client/README.md#worker-crash-rediscovery-finding-6`).** F6b on 2026-10-18:
    both real-worker kills (idle with a failed Connect, and mid-session) left
    the Mac's picker without the PC for good, although each new worker
    registered and logged `re-announced` 1/5 to 5/5 within 60 s and `browse`

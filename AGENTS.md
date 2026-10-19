@@ -17,11 +17,17 @@ piece of ceremony and it is intentional.
 | `client/Tools/fakehost/main.swift` | fake host in Swift (the app's own `Noise.swift` + `CPace.swift`, real v4 handshake and pairing, PIN `000000` or `--pin`); the way to test the client's connect/pair paths without a PC — busy, rate-limited, wrong PIN, accept; `--legacy-pair` simulates an older v4 host; `--clip <file.hevc> --size WxH --fps <n>` streams a looped clip on a fixed schedule (60 fps by default; 120 for 120 Hz checks); `--no-frames` sends STREAM_START and then nothing | Mac (`swiftc … Tools/fakehost/main.swift Sources/Relay/{Noise,Field25519,CPace,Protocol,VideoBitrate}.swift`: with several files only `main.swift` may hold top-level code; advertise with `dns-sd -R`; `./Tools/test-pair-name.sh` runs isolated HostConnection loopback checks) |
 | `tools/` | elevated installer (`install-host.ps1`), driver settings template | Windows |
 | `docs/PROTOCOL.md` | the wire contract, including the handshake **test vector** | both — this is the source of truth |
+| `SESSION-HANDOFF.md` | the only place for Mac ↔ PC handoffs: open items, steps, results | both — read after every `git pull` |
 
 Two sessions, one repo: the PC session owns `host/` + `tools/`, the Mac session owns
 `client/`. Both work on `main`; commit small, push often, `git pull` before starting.
 Protocol changes go host-first (verified with `probe` + tests), then the spec, then the
 client. Never change `docs/PROTOCOL.md` and only one side.
+
+Handoffs between the machines go in `SESSION-HANDOFF.md` and nowhere else: read its
+Open items after every `git pull`, add an item (and push) before stopping when the
+other side or the user has work to do, and delete an item once its outcome is in the
+README status and here. Do not create other handoff or retest files.
 
 ## Status
 
@@ -29,12 +35,11 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
   picker restoration below), isolated
   fakehost checks, local release/signature and picker/PIN/Forget smoke tests
-  pass on macOS 27.0. The Windows half of `docs/WINDOWS-PLATFORM-HANDOFF.md`
+  pass on macOS 27.0. The Windows half of the platform migration
   is done (2026-10-17): phase A (NVIDIA enforcement), phase B (recovery gate,
   U1–U6 passed) and phase C (one native backend, installed, real-Mac latency
   with no regression), all below. Minimum / latest stable macOS qualification
-  and Developer ID notarization remain pending. Details and acceptance gates:
-  `docs/PLATFORM-REVIEW.md#implementation-status`.
+  and Developer ID notarization remain pending (README roadmap).
 
 - NVIDIA enforcement, phase A (2026-10-17, handoff steps 1–4; `0eb98fa`,
   `f1a9297`, `70e6ad0`, `728f547`): `gpu::choose` considers only `gpu::eligible`
@@ -132,7 +137,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   also recovered, but a universal 30 s bound is not established. All these
   later times are 2026-10-18 UTC. Detailed Mac evidence:
   `client/README.md#worker-crash-rediscovery-finding-6`. The PC session owns
-  updates to both host handoff/retest files.
+  updates to `host/NVIDIA-RECOVERY-RETEST.md`.
 - Phase C (2026-10-17, handoff steps 6–7; `391f815`, `e5b2ecd`, `c537ee5`):
   one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
   and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`
@@ -157,7 +162,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   section had said; corrected there.
 
 - Clock sync + frame timing, host + probe + spec (2026-10-18;
-  `docs/TIMING-HANDOFF.md`, now PROTOCOL.md "Clock sync and frame timing").
+  PROTOCOL.md "Clock sync and frame timing").
   SERVER_HELLO caps `0x07` (`CAP_TIMING` 0x04). `clock.rs`: QPC µs
   (u128 math), the `LastPresentTime` base; never `SystemTime` (PING still
   is). `read_loop` stamps TIME_REQUEST 0x88 and queues it in
@@ -220,7 +225,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   parts add up (3.3 + 7.1 + 0.4 + 4.4 ≈ 15.2). Whether a video tab was open
   in a browser was not checked.
 - Picture options, host + spec (2026-10-10; the Mac side shipped first by user
-  decision): `docs/VIDEO-OPTIONS-HANDOFF.md` landed unchanged and is now in
+  decision): the proposal landed unchanged and is now in
   `docs/PROTOCOL.md`. TXT `enc` comes from `VideoCaps::detect` at startup
   (`native_nvenc::query_caps`, a short NVENC session: HEVC GUID present,
   `SUPPORT_YUV444_ENCODE`, `SUPPORT_10BIT_ENCODE`; RTX 3080 Ti → `q,444,10`;
@@ -277,7 +282,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   holds off the screen saver and inactivity lock during a session. Real Mac,
   Observe, 1-minute timeout: no freeze over 3 minutes, idle never above
   29.9 s, monitors dark, 11 nudges logged, restore fine; installed hash
-  `5B6DBD61...CA9EDB60`. Evidence: `host/DISPLAY-WAKE-HANDOFF.md`.
+  `5B6DBD61...CA9EDB60`.
 - Milestones 0–3 and 5 are done and verified on the real hardware: the virtual display becomes
   the only display at the Mac's exact mode, layout is restored on disconnect/Ctrl-C/hard kill,
   in-process DXGI → NVENC runs at 3024x1964@120, PIN pairing + encryption, real sessions over
@@ -337,8 +342,8 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   Real-Mac/installed-host pair-only naming passed on 2026-10-10: the user confirmed
   the Mac name appeared in the PC's Forget submenu before Connect; the host log
   names the Mac in a tray Forget before the first stream on this build. A real-Mac
-  service-restart persistence check remains unreported. See `host/PAIR-NAME-HANDOFF.md`
-  for the original handoff; old “paired <IP>” entries need named re-pair or streaming
+  service-restart persistence check remains unreported (SESSION-HANDOFF.md).
+  Old “paired <IP>” entries need named re-pair or streaming
   to refresh. Keep this rollout separate from topology work.
 - The README status table is the source of truth for status; keep it current.
 - Forget diagnostics (2026-10-09): a real Mac attempt remained preparing and
@@ -380,8 +385,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   known-key pairing, a failed-PIN attempt followed by successful pairing, UNPAIR,
   the Mac name before streaming, 3024×1964@120 streaming and successful restore.
   Full 120-second expiry and real concurrent-stream pairing were not exercised;
-  repeat counts were not specified. See `docs/KNOWN-PEER-PIN-HANDOFF.md` for the
-  installed hash and evidence.
+  repeat counts were not specified.
 
 ## How the host and client work (details you need before changing them)
 
@@ -491,7 +495,7 @@ client. Never change `docs/PROTOCOL.md` and only one side.
   recovery attempt briefly found no virtual monitor while cleanup disabled it; the
   subsequent restore succeeded. Repeat runs must still distinguish true pre-session
   setup from a locked user session (SessionLogon preceded the reboot connection in
-  this log). See `host/PRELOGIN-RETEST.md` for evidence, steps and failure classification.
+  this log). Retest steps and log reading: SESSION-HANDOFF.md.
 - State is `%ProgramData%\Relay` (SYSTEM has no meaningful `%LOCALAPPDATA%`): Users
   RX, `identity.key` SYSTEM/Admins only (`restrict_to_admins` after creation). The
   installer and the first run as a user migrate the old `%LOCALAPPDATA%\Relay`. So
@@ -816,7 +820,7 @@ documented there. What follows is only the mechanics that are easy to break:
   hidden, any pointer motion, even on another display, held VSync-off
   presentation to ~50 fps and ~25 ms to screen (idle: 111 fps, 2.5 ms).
   `StreamView.hidesCursor` sets a transparent cursor rect instead
-  (`client/LATENCY-INVESTIGATION.md`).
+  (`docs/LATENCY.md`, "the hidden cursor").
 - `StreamView.flagsChanged` decides press vs release from its own held-key record
   **and** the event's flags: the record alone tells left from right, but forwards the
   release of a modifier it never sent down (control turned on by ⌃⌥⌘K with ⌃⌥⌘ still

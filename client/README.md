@@ -123,7 +123,7 @@ Input) of switches, laid out like System Settings:
 - **10-bit color**: smoother gradients with less banding. Off by default.
 
   These three need the PC to offer them (its Relay advertises `enc` once
-  updated, see `docs/VIDEO-OPTIONS-HANDOFF.md`) and, for the color options,
+  updated, see `docs/PROTOCOL.md`) and, for the color options,
   this Mac to decode them in hardware; otherwise they are greyed out and say
   why.
 - **VSync**: prevents tearing but adds up to a frame of delay.
@@ -255,8 +255,8 @@ also passed. CI now requests arm64 `macos-14` and `macos-latest`, prints the
 actual OS/toolchain, runs fakehost and verifies the release bundle/signature.
 GitHub's latest runner is not necessarily Apple's latest stable OS; see the
 [runner documentation](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Pending release/hardware checks are tracked in
-[platform implementation status](../docs/PLATFORM-REVIEW.md#implementation-status).
+Pending release/hardware checks are tracked in the
+[README's roadmap](../README.md#status).
 
 
 ```sh

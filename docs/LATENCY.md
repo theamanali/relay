@@ -222,6 +222,29 @@ stream (BT.601 matrix, BT.709 primaries and transfer, limited range). This was
 checked with `ffprobe` for both HEVC and H.264. The Mac's shader reads the
 matrix from the decoded buffer, so the client needed no change.
 
+## Found along the way: the hidden cursor (2026-10-17)
+
+Real-PC sessions showed receive → screen p50 jumping from ~8 ms to 14–31 ms,
+with the Mac showing 40–60 of 107 decoded fps; decode stayed at 2.6–3.0 ms and
+Metal still reported Direct. It reproduced on the Mac alone (bundled
+`Relay --host` against `fakehost --clip`, 3024×1964 @ 120 fps, VSync off, a
+CGEvent tool moving the pointer at 125 Hz), 17 s sessions:
+
+| run | shown fps | receive → screen p50 / p95 |
+|---|---|---|
+| idle pointer, `NSCursor.hide()` | 111.1 | 2.5 / 17.5 ms |
+| moving pointer, `NSCursor.hide()` | 46.8–54.4 | 24.1–32.7 / 33.0–34.5 ms |
+| moving pointer on another display (no events reach the app) | 54.4 | 24.1 / 33.0 ms |
+| moving, cursor not hidden | 101.7–110.3 | 2.5 / 16.3–31.9 ms |
+| moving, transparent cursor via cursor rect (the fix) | 107.0–111.6 | 2.5 / 11.3–25.1 ms |
+
+The other-display run rules out input forwarding and the app's own event
+handling: the system's handling of a moving hidden cursor stalls VSync-off
+drawable turnaround. `StreamView.hidesCursor` now installs a transparent 1×1
+cursor over the view instead of calling `NSCursor.hide()`. The full
+investigation (Metal traces, mode toggles) is in git history as
+`client/LATENCY-INVESTIGATION.md`.
+
 ## Still open
 
 - **Screen-to-screen latency with a camera**, the only way to measure what the

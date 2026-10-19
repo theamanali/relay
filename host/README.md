@@ -260,9 +260,9 @@ A probe session takes the display like a real Mac does, so **your monitors go
 dark** while it runs. Against a `--no-vdd` host it streams the primary monitor
 instead.
 
-Pair-only name support is staged on the host; the Mac change and wire-spec update
-are described in [PAIR-NAME-HANDOFF.md](PAIR-NAME-HANDOFF.md). The current Mac app
-still sends its name only when it streams. New unnamed pairings use “Paired
+Pair-only naming is in the host, the Mac app and the
+[wire spec](../docs/PROTOCOL.md): the Mac sends its name with PAIR, bound into
+CPace, so the tray shows it before the first stream. New unnamed pairings use “Paired
 MacBook” plus the fingerprint in the tray; named pairings save the name before
 reporting success. The automated probe fixture tests this without touching the
 installed service or any display.
@@ -350,8 +350,12 @@ learns within seconds that the tray forgot it.
 | [`tray.rs`](src/tray.rs), [`status.rs`](src/status.rs) | Tray icon and menu, and the state they show |
 | [`bin/probe.rs`](src/bin/probe.rs), [`bin/browse.rs`](src/bin/browse.rs) | Test tools |
 
-The tray icons in [`assets/`](assets/) are drawn by the Mac client from the same
-glyph as its own icon; see [assets/README.md](assets/README.md).
+The tray icons in [`assets/`](assets/) (`relay-light.ico` for a light taskbar,
+`relay-dark.ico` for a dark one, PNG images from 16 to 256 px; the host picks by
+`SystemUsesLightTheme` and the size nearest `SM_CXSMICON`) are drawn by the Mac
+client from the same glyph as its own icon. To regenerate them, on the Mac:
+`cd client && swift run Relay --render-icons ../host/assets`, then commit both
+files and rebuild the host.
 
 ## Troubleshooting
 

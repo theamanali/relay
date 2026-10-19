@@ -74,7 +74,7 @@ struct LaunchOptions {
             case "--metal-vsync":
                 o.metalVSync = true
             case "--render-icons":
-                // Host tray icons from the picker's glyph; see host/assets/README.md.
+                // Host tray icons from the picker's glyph; see host/README.md.
                 guard let dir = it.next() else {
                     print("--render-icons requires a directory")
                     exit(2)

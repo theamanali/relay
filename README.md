@@ -156,14 +156,14 @@ and an input event to `SendInput`. First real-PC session over the cable
 **desktop → screen p50 14.9 / p95 23.3 ms** (content age 3.3, PC work 7.1,
 sent → received 0.4, receive → screen 4.4) and **input → applied p50 1.1 ms**.
 Verified with 182 Mac tests, the isolated fakehost checks and fakehost with
-known clock offsets; host side as in the [timing handoff](docs/TIMING-HANDOFF.md).
+known clock offsets; the wire format is in [PROTOCOL.md](docs/PROTOCOL.md).
 
 **Platform migration (2026-10-10):** the Mac now uses SwiftUI for the picker,
 settings, PIN sheet and commands, Swift 6 language mode, and an arm64-only
 bundle with a macOS 14 minimum (Observation; raised to macOS 26 on 2026-10-18). Metal and hardware decoding are
 required. All 107 Mac unit tests, isolated fakehost checks and the signed local
 release bundle pass on macOS 27.0. The Windows side of the migration is done
-(2026-10-17, below; see the [Windows handoff](docs/WINDOWS-PLATFORM-HANDOFF.md)):
+(2026-10-17, below):
 NVIDIA-only encoding with a preflight (phase A), the failure/recovery gate on
 the real Mac and PC (phase B), and a single native backend with ffmpeg, AMF,
 Quick Sync, software encoding and Parsec removed (phase C), installed as the
@@ -253,8 +253,8 @@ clippy, release build; `probe --timing` against a `--no-vdd` dev host on
 loopback measured a clock offset of 0–4 µs, no fresh frame out of order, every
 input counted, and input → applied 0.13 ms p50. Installed as the service, where
 a 3024×1964@120 probe session on the virtual display measured the same (offset
-5 µs, frames in order, inputs counted) and restored the layout. The Mac side is
-next ([handoff](docs/TIMING-HANDOFF.md)).
+5 µs, frames in order, inputs counted) and restored the layout. The Mac side
+followed the same day (above).
 
 **Working and verified on the real hardware:** the virtual monitor at the
 Mac's native mode with the PC's layout restored afterwards; in-process capture
@@ -280,8 +280,7 @@ normal disconnect restoration, restoration while bound to Winlogon during shutdo
 lock/unlock capture recovery and 3024×1964@120 streaming. The post-reboot connection
 followed a Windows SessionLogon event, so setup before any user session exists is
 not independently established by that log. Repeat runs and crash recovery remain
-pending; see the
-[reboot and sign-out retest sequence](host/PRELOGIN-RETEST.md).
+pending; the steps are in [SESSION-HANDOFF.md](SESSION-HANDOFF.md).
 
 Pair-only naming is implemented on the host and Mac, with an optional v4
 capability and the name bound into CPace confirmation. An updated host learns
@@ -302,8 +301,7 @@ the original peer list was preserved. The user then reported all five real-Mac
 checks passed: delayed PIN entry, wrong-PIN retry, confirmed Forget, pair-only
 naming, and ordinary Connect/disconnect with physical monitors/layout restored.
 Host logs support delayed pairing, UNPAIR, the Mac name before streaming,
-3024×1964@120 streaming and successful restoration. See the
-[verification record](docs/KNOWN-PEER-PIN-HANDOFF.md#windows-verification-record--2026-10-10).
+3024×1964@120 streaming and successful restoration.
 
 Picture options (encoder quality Fastest / Balanced / Best, HEVC 4:4:4 and
 10-bit) are now in the host and the [wire contract](docs/PROTOCOL.md); the Mac
@@ -326,12 +324,12 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
       user-reported pass each), confirm setup before any user session exists, and
       verify crash restoration
 - [ ] Confirm the real Mac's pair-only name persists after a service restart;
-      immediate tray naming passed on 2026-10-10. See the
-      [Mac handoff](host/PAIR-NAME-HANDOFF.md).
+      immediate tray naming passed on 2026-10-10. Steps in
+      [SESSION-HANDOFF.md](SESSION-HANDOFF.md).
 - [x] Wake the PC's displays when a session starts (2026-10-17): with the
       displays off after inactivity, Observe-mode connects from the desktop
       and from the lock screen showed a picture in about 2 s, and disconnect
-      restored the monitors. See [host/DISPLAY-WAKE-HANDOFF.md](host/DISPLAY-WAKE-HANDOFF.md)
+      restored the monitors
 - [x] Keep the displays on while a session sends no input (2026-10-17):
       Observe sessions used to freeze once Windows' display-off timeout
       passed. The host now sends a zero-distance nudge after 30 s without
@@ -339,7 +337,13 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
       and the physical monitors stayed dark. See the same handoff
 - [ ] Camera-based screen-to-screen latency measurement
 - [ ] Display scaling (DPI) for the virtual monitor
-- [ ] Signed Windows installer and notarized Mac app
+- [ ] Release qualification on the Mac: macOS 26 (the minimum) and the latest
+      stable release; 60 Hz Air, 120 Hz Pro and an external screen; real-PC
+      pairing, Forget and reconnect; input release on focus loss;
+      sleep/wake and mode changes; upgrade and Local Network permission
+      behaviour
+- [ ] Signed Windows installer and notarized Mac app (the Developer ID /
+      notarytool path in `bundle.sh` exists but has never run)
 - [ ] HDR end to end
 
 ## Getting started

@@ -39,7 +39,7 @@ enum Proto {
     static let flagKeyframe: UInt8 = 0x01
     static let capPairName: UInt8 = 0x01
     /// SERVER_HELLO: the host reads CLIENT_HELLO's picture-options extension
-    /// (proposed in docs/VIDEO-OPTIONS-HANDOFF.md).
+    /// (docs/PROTOCOL.md).
     static let capVideoOptions: UInt8 = 0x02
     /// SERVER_HELLO: the host answers TIME_REQUEST and then sends
     /// FRAME_TIMING_EXT (PROTOCOL.md "Clock sync and frame timing").
