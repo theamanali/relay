@@ -644,7 +644,7 @@ documented there. What follows is only the mechanics that are easy to break:
   not match the list's translucent fill), and the footer has no material.
   Settings (2026-10-18, user request: the popover was too tall and folding
   sections cost clicks) is SwiftUI's `Settings` scene in `RelayApp`: a
-  window with toolbar tabs Video / Input / Performance (`SessionSettingsView`,
+  window with toolbar tabs Video / Input / Monitoring (`SessionSettingsView`,
   a `TabView`, last tab in `@AppStorage("settingsTab")`). The footer gear is
   a `SettingsLink` (disabled with the rest of the mode row until a paired PC
   is selected); Relay ▸ Settings… (⌘,) is SwiftUI's own item, always
@@ -721,7 +721,8 @@ documented there. What follows is only the mechanics that are easy to break:
   Use `Text(verbatim:)` for numbers: SwiftUI's localized interpolation groups
   digits ("3,024 × 1,964").
 - Latency HUD (2026-10-17): user-facing names since 2026-10-18 (user
-  request): Settings ▸ Performance (last section) ▸ Show performance overlay / Show
+  request): Settings ▸ Monitoring (last tab; named Performance until
+  2026-10-18, renamed because it changes nothing) ▸ Show performance overlay / Show
   session performance report on disconnect, View ▸ Performance Overlay and
   Last Session Performance Report, window "Session Performance Report".
   Code names (`StatsHUD`, `SessionReport`, `showLatency`, `--latency-stats`)

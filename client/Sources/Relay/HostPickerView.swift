@@ -487,9 +487,9 @@ struct SessionSettingsView: View {
             pane { inputRows }
                 .tabItem { Label("Input", systemImage: "keyboard") }
                 .tag("input")
-            pane { performanceRows }
-                .tabItem { Label("Performance", systemImage: "gauge.with.needle") }
-                .tag("performance")
+            pane { monitoringRows }
+                .tabItem { Label("Monitoring", systemImage: "waveform.path.ecg") }
+                .tag("monitoring")
         }
         // AppKit would otherwise make the bitrate field first responder, and
         // the first keystroke would change the bitrate. Click to edit it.
@@ -624,7 +624,7 @@ struct SessionSettingsView: View {
         .disabled(!controlling)
     }
 
-    @ViewBuilder private var performanceRows: some View {
+    @ViewBuilder private var monitoringRows: some View {
         SettingSwitch("Show performance overlay",
                       isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
                           var prefs = model.prefs

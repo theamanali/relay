@@ -112,7 +112,7 @@ display. Streaming from the PC at 2560×1440@144 to a 144 Hz external monitor
 was verified on 2026-10-18 (user report). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
 The **Settings** gear in the footer (or Relay ▸ Settings…, ⌘,) opens the
-Settings window, with a tab each for Video, Input and Performance, laid out
+Settings window, with a tab each for Video, Input and Monitoring, laid out
 like System Settings. It reopens on the last tab, and stays open while you
 use the picker. Each subtitle describes the current choice (e.g. VSync off:
 "Lowest delay, but fast motion may tear."). Video starts with the same
@@ -145,7 +145,7 @@ Resolution and Refresh rate choices as the footer:
   Scale menu is greyed out and shows the step the PC will use. Applied when
   a session starts, by a PC that supports it (`docs/PROTOCOL.md` "Display
   scale"); the PC puts its own scale back on disconnect.
-- **Show performance overlay** (Performance section): a small HUD drawn into the stream's corner. Its
+- **Show performance overlay** (Monitoring tab): a small HUD drawn into the stream's corner. Its
   headline is how far behind the PC your screen is (PC → your screen, measured
   across both machines; a PC without clock sync shows the Mac's own share,
   receive → screen), with frame rate, p95, skipped frames per second when
