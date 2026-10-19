@@ -11,6 +11,9 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+# Claude Code: personal settings and agent worktrees (.claude/settings.json is shared)
+.claude/settings.local.json
+.claude/worktrees/
 # Local artifacts
 /tools/downloads/
 /client/fakehost.key
