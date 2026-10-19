@@ -484,6 +484,21 @@ struct SessionSettingsView: View {
                     Text("Bitrate").foregroundStyle(automatic ? .tertiary : .primary)
                 }
                 .disabled(automatic)
+                // Windows' scale for the virtual display. Automatic matches
+                // this Mac's screen; the Scale row shows the step it picks,
+                // greyed out, until Automatic is switched off.
+                SettingSwitch("Automatic scaling",
+                              detail: "Sizes the PC's desktop to match this Mac's screen.",
+                              isOn: Binding(get: { model.prefs.displayScaleAutomatic },
+                                            set: { model.setDisplayScaleAutomatic($0) }))
+                let automaticScale = model.prefs.displayScaleAutomatic
+                Picker(selection: Binding(get: { model.effectiveDisplayScale },
+                                          set: { model.setDisplayScale($0) })) {
+                    ForEach(DisplayScale.steps, id: \.self) { Text(verbatim: "\($0)%").tag($0) }
+                } label: {
+                    Text("Scale").foregroundStyle(automaticScale ? .tertiary : .primary)
+                }
+                .disabled(automaticScale)
                 // Applied by the PC when it offers them (TXT `enc`); otherwise
                 // disabled, with the reason where the description would be.
                 let quality = model.availability(.encoderQuality)
@@ -502,32 +517,6 @@ struct SessionSettingsView: View {
                               feature: .tenBit, key: \.tenBit)
                 SettingSwitch("VSync", detail: "Prevents tearing but adds up to a frame of delay.",
                               isOn: preference(\.preventTearing))
-                // Windows' scale for the virtual display. Automatic matches
-                // this Mac's screen; the Scale row shows the step it picks,
-                // greyed out, until Automatic is switched off.
-                SettingSwitch("Automatic scaling",
-                              detail: "Sizes the PC's desktop to match this Mac's screen.",
-                              isOn: Binding(get: { model.prefs.displayScaleAutomatic },
-                                            set: { model.setDisplayScaleAutomatic($0) }))
-                let automaticScale = model.prefs.displayScaleAutomatic
-                Picker(selection: Binding(get: { model.effectiveDisplayScale },
-                                          set: { model.setDisplayScale($0) })) {
-                    ForEach(DisplayScale.steps, id: \.self) { Text(verbatim: "\($0)%").tag($0) }
-                } label: {
-                    Text("Scale").foregroundStyle(automaticScale ? .tertiary : .primary)
-                }
-                .disabled(automaticScale)
-            }
-            Section("Latency") {
-                SettingSwitch("Show latency overlay",
-                              isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
-                                  var prefs = model.prefs
-                                  prefs.hudMode = on ? .compact : .off
-                                  model.setPrefs(prefs)
-                              }))
-                // Latency is measured with or without the HUD, so the report
-                // is there either way (also View ▸ Last Session Report).
-                SettingSwitch("Show session report on disconnect", isOn: preference(\.showSessionReport))
             }
             Section("Input") {
                 let controlling = model.prefs.forwardInput
@@ -555,6 +544,17 @@ struct SessionSettingsView: View {
                     }))
                 }
                 .disabled(!controlling)
+            }
+            Section("Performance") {
+                SettingSwitch("Show performance overlay",
+                              isOn: Binding(get: { model.prefs.hudMode != .off }, set: { on in
+                                  var prefs = model.prefs
+                                  prefs.hudMode = on ? .compact : .off
+                                  model.setPrefs(prefs)
+                              }))
+                // Latency is measured with or without the HUD, so the report
+                // is there either way (also View ▸ Last Session Performance Report).
+                SettingSwitch("Show session performance report on disconnect", isOn: preference(\.showSessionReport))
             }
         }
         .formStyle(.grouped)

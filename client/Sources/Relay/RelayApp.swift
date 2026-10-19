@@ -162,10 +162,10 @@ struct RelayCommands: Commands {
                         ? KeyboardShortcut("l", modifiers: [.control, .option, .command]) : nil)
                 }
             } label: {
-                Label("Latency Overlay", systemImage: "chart.xyaxis.line")
+                Label("Performance Overlay", systemImage: "chart.xyaxis.line")
             }
             .disabled(!model.pickerActive)
-            Button("Last Session Report", systemImage: "list.bullet.rectangle") { delegate.showSessionReport(nil) }
+            Button("Last Session Performance Report", systemImage: "list.bullet.rectangle") { delegate.showSessionReport(nil) }
                 .disabled(model.sessionReport == nil)
         }
         CommandGroup(replacing: .help) {

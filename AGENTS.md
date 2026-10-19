@@ -216,8 +216,8 @@ README status and here. Do not create other handoff or retest files.
   against fakehost on the 1× ED273UR: 2560x1440 / 1920x1080 / 1280x720 all
   sent 100%. The Retina 200/150/100 values are unit-tested only (the app
   picked the external screen); the real-PC check covers them.
-  Display scale settings (same day, user request; at the end of Video,
-  not a section of its own, user decision): Automatic scaling
+  Display scale settings (same day, user request; in Video right under
+  Bitrate, not a section of its own, user decision): Automatic scaling
   (`SessionPrefs.displayScaleAutomatic`, default on) and a Scale menu of
   `DisplayScale.steps` (100–300), disabled while automatic and then showing
   `PickerModel.effectiveDisplayScale` (the automatic value snapped like the
@@ -650,8 +650,8 @@ documented there. What follows is only the mechanics that are easy to break:
   SwiftUI's FocusState/defaultFocus did not override, so `NoInitialFocus`
   clears it once when the popover becomes key. Since 2026-10-18 (user
   review: "unfinished, doesn't resemble Apple") it is a `.formStyle(.grouped)`
-  Form like a System Settings pane: Video / Latency / Input
-  sections, mini switches (`SettingSwitch`) with the detail as the toggle
+  Form like a System Settings pane: Video / Input / Performance
+  sections (Performance last since 2026-10-18, user request), mini switches (`SettingSwitch`) with the detail as the toggle
   label's second Text (the form draws it as a subtitle; it dims a disabled
   switch but not its label, so `SettingSwitch` dims both Texts from
   `isEnabled`), Encoder as a form Picker, Bitrate as a LabeledContent row
@@ -702,7 +702,12 @@ documented there. What follows is only the mechanics that are easy to break:
   (user decision); filters cannot match both bezel and text.
   Use `Text(verbatim:)` for numbers: SwiftUI's localized interpolation groups
   digits ("3,024 × 1,964").
-- Latency HUD (2026-10-17): never put a view over the stream's Metal layer;
+- Latency HUD (2026-10-17): user-facing names since 2026-10-18 (user
+  request): Settings ▸ Performance (last section) ▸ Show performance overlay / Show
+  session performance report on disconnect, View ▸ Performance Overlay and
+  Last Session Performance Report, window "Session Performance Report".
+  Code names (`StatsHUD`, `SessionReport`, `showLatency`, `--latency-stats`)
+  are unchanged. Never put a view over the stream's Metal layer;
   that blocks direct-to-display and cost ~2.5 ms of time to screen. `StatsHUD`
   draws the HUD with CoreGraphics/CoreText off the main thread (4 Hz, only
   while on); `MetalPresenter.setOverlay` uploads it as a new texture and

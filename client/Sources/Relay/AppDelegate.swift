@@ -837,7 +837,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             reportWindow.contentViewController = hosting
         } else {
             let w = NSWindow(contentViewController: hosting)
-            w.title = "Session Report"
+            w.title = "Session Performance Report"
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
             reportWindow = w

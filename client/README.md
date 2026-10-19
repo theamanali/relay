@@ -106,8 +106,8 @@ hidden on a 60 Hz screen). Both follow the window when it moves to another
 display. Streaming from the PC at 2560×1440@144 to a 144 Hz external monitor
 was verified on 2026-10-18 (user report). The **View** menu mirrors both and adds a **Bitrate** submenu: Automatic
 (showing what it would ask for) and presets.
-The **Settings** gear in the footer opens a grouped pane (Video, Latency,
-Input) of switches, laid out like System Settings:
+The **Settings** gear in the footer opens a grouped pane (Video, Input,
+Performance) of switches, laid out like System Settings:
 
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
@@ -136,7 +136,7 @@ Input) of switches, laid out like System Settings:
   Scale menu is greyed out and shows the step the PC will use. Applied when
   a session starts, by a PC that supports it (`docs/PROTOCOL.md` "Display
   scale"); the PC puts its own scale back on disconnect.
-- **Show latency overlay**: a small HUD drawn into the stream's corner. Its
+- **Show performance overlay** (Performance section): a small HUD drawn into the stream's corner. Its
   headline is how far behind the PC your screen is (PC → your screen, measured
   across both machines; a PC without clock sync shows the Mac's own share,
   receive → screen), with frame rate, p95, skipped frames per second when
@@ -146,14 +146,14 @@ Input) of switches, laid out like System Settings:
   encode & send; one-way network; decode and display), then input → PC
   and the stream as rows (Video, Picture, Display when VSync is on,
   Link, and Data: the video actually arriving against the bitrate asked for,
-  e.g. 48 of 120 Mbps). Also View ▸ Latency
+  e.g. 48 of 120 Mbps). Also View ▸ Performance
   Overlay. Clock offset, ping estimate, frame transfer, decrypt and the
-  counters are in the session report, not the HUD. It does
+  counters are in the session performance report, not the HUD. It does
   not slow the stream: it is part of the video frame, not a window over it.
   It appears 3 seconds into a session: start-up frames are left out of every
-  number, the session report's included.
-  When a session ends with it on, the **session report** opens on the screen
-  you streamed on (View ▸ Last Session Report any time). **Summary** leads
+  number, the session performance report's included.
+  When a session ends with it on, the **session performance report** opens on the screen
+  you streamed on (View ▸ Last Session Performance Report any time). **Summary** leads
   with the HUD's header for the whole session (the median, p95 under it;
   frames shown, the share skipped under that), then the median per second
   over the session (red above the budget, as in the HUD, so a slow stretch
@@ -170,10 +170,10 @@ Input) of switches, laid out like System Settings:
   arrived at (frames that fit one record, or that were already buffered,
   are skipped), **Decrypt** is the time spent opening its records, and
   **Input → sent** runs from the `NSEvent` timestamp to the socket.
-- **Show session report on disconnect**: off by default; turn it on to open
-  the report by itself when a session ends, whether or not the latency
+- **Show session performance report on disconnect**: off by default; turn it on to open
+  the report by itself when a session ends, whether or not the performance
   overlay was on (latency is measured either way). View ▸ Last Session
-  Report opens it any time.
+  Performance Report opens it any time.
 - **Control the PC**: whether your keyboard and pointer go to the PC; off
   watches only (also PC ▸ Control / Observe and ⌃⌥⌘K). The two options below
   apply only while it is on.
@@ -192,7 +192,7 @@ overrides it for one launch.
 |---|---|
 | ⌃⌥⌘Q | Leave the session and return to the list (quits in `--host` mode). |
 | ⌃⌥⌘K | Switch between controlling and observing the PC; also in the PC menu. |
-| ⌃⌥⌘L | Cycle the latency overlay: off, compact, detailed. |
+| ⌃⌥⌘L | Cycle the performance overlay: off, compact, detailed. |
 
 Everything else is sent to the PC, including ⌘ shortcuts, except ⌘Tab, ⌘Space
 and the Fn media keys, which macOS keeps. The modifier mapping:
@@ -234,7 +234,7 @@ Relay.app/Contents/MacOS/Relay --help     # the bundled app; `open --args` hides
 | `--bitrate <1…1000>` | Video bitrate in Mbps (default 120). |
 | `--modifiers mac\|physical` | Keyboard mapping (above). |
 | `--no-input` | Observe only. |
-| `--latency-stats` | Start with the latency overlay on (compact, unless detailed was chosen). |
+| `--latency-stats` | Start with the performance overlay on (compact, unless detailed was chosen). |
 | `--metal-vsync` | Enable VSync for this launch, as the setting does: no tearing, slightly more latency. |
 | `--codec h264\|hevc` | Offer the PC only this codec (it picks HEVC when both are offered). For latency measurements; H.264 has not been measured yet. |
 | `--render-icons <dir>` | Write the PC's tray icons and exit (see [Icons](#icons)). |
