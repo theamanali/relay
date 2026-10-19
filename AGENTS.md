@@ -161,6 +161,46 @@ README status and here. Do not create other handoff or retest files.
   desktop was mostly static (1–4% fresh frames in host.log), not moving as that
   section had said; corrected there.
 
+- Display scale, host + probe + spec (2026-10-18; `0c5828d`; Mac side in
+  SESSION-HANDOFF.md). Windows keeps a per-monitor scale **per user** in
+  `HKCU\Control Panel\Desktop\PerMonitorSettings\<EDID id>\DpiValue`, as
+  steps from the scale it recommends (100, 125, 150, 175, 200, 225, 250,
+  300, 350…); the id has no resolution or devnode instance in it, so the
+  user's one manual setting (`DpiValue=2` for `MTT1337…`) survived every
+  devnode disable/enable. `DisplayConfigGetDeviceInfo` packet -3 returns
+  min/current/max relative to the recommendation (min = the step of 100%);
+  `SetDeviceInfo` -4 sets it **live** (no sign-out) and writes the calling
+  user's HKCU at once. Measured here: both physical monitors recommend 100%
+  (max 175% / 225%). SERVER_HELLO cap `0x08` `CAP_DISPLAY_SCALE` (caps
+  `0x0f`); CLIENT_HELLO `u16 display_scale` (percent, 0 = Windows' own)
+  after the picture options. `scale.rs`: pure step math (nearest step, tie
+  to the smaller, clamped to the monitor's range), `apply` saves the
+  previous step to `%ProgramData%\Relay\display-scale.txt` *before* setting
+  and reads it back; the lease restores it first (the virtual monitor must
+  still be active), then the layout. `scale::recover_saved` runs before
+  `drv.cleanup()` in `put_displays_back` and `restore`, and before each
+  acquisition; a monitor already gone is logged and the file dropped (its
+  stale value affects only the virtual monitor and the next session sets
+  it). A reasserted topology reapplies it. `--no-vdd` never applies it
+  (physical monitor). Failure to set is a warning, never a refused session.
+  `relay-host display-scale [--try \.\DISPLAYn <percent>]`,
+  `attach-test --scale`, `probe --display-scale`. Verified on Windows: fmt,
+  229 unit tests + 2 probe tests + the probe integration test, clippy
+  `-D warnings` on 1.98 and 1.99, release build. Elevated `display-scale
+  --try \.\DISPLAY1 125` (the VG240Y): set, read back 125%, snapshot
+  written, restored from the file to 100%, file cleared (the test's
+  `DpiValue=0` key was then deleted, so the physical monitors are exactly
+  as before). Elevated `--no-vdd` dev host + `probe --display-scale 200`:
+  caps `0x0f`, logged "display scale 200%" and "dev mode: not applying",
+  118 fps; the 0 / 999 / absent requests were logged correctly but refused
+  busy (the probes reconnected before the first session had drained; a
+  script error, not a host one). Installed with `install-host.ps1
+  -SkipDriver`: hash `1E8620F4AF67DB45BDA90FA9405CC7CD62CD17BCC8A1E9AC6203B66EA844F2CF`
+  (= release), service Running. **Not verified:** the SYSTEM worker on the
+  real virtual display (which hive it writes, whether a sign-in mid-session
+  keeps the value, the login-screen desktop), the virtual monitor's
+  recommended scale at 3024×1964 (the user's `+2` suggests 150%), and the
+  real Mac: SESSION-HANDOFF.md "→ user".
 - Clock sync + frame timing, host + probe + spec (2026-10-18;
   PROTOCOL.md "Clock sync and frame timing").
   SERVER_HELLO caps `0x07` (`CAP_TIMING` 0x04). `clock.rs`: QPC µs
@@ -298,8 +338,8 @@ README status and here. Do not create other handoff or retest files.
   lock/unlock capture recovery and 3024×1964@120 streaming; the reboot connection
   followed SessionLogon, so that log does not independently prove setup before any
   user session exists. Repeat runs and service crash-restore verification remain
-  pending. Still to do: DPI,
-  installers/signing. Latency measurements, what was
+  pending. Still to do: DPI (host side done 2026-10-18, see "Display
+  scale"), installers/signing. Latency measurements, what was
   rejected and what is still open: `docs/LATENCY.md`.
 - Protocol v4 (2026-10-08): Noise XX handshake, CPace PIN pairing and chunked records
   (`docs/PROTOCOL.md`). Host and spec are done (`crypto.rs`, `cpace.rs`, `field25519.rs`; the

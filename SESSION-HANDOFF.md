@@ -20,6 +20,53 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
+### → Mac: send the display scale (2026-10-18)
+
+The host (`0c5828d`, installed `1E8620F4…A844F2CF`) advertises SERVER_HELLO
+capability `0x08` `CAP_DISPLAY_SCALE` (caps byte `0x0f`) and sets the
+virtual display's Windows scale from an optional `u16 display_scale` (percent,
+big-endian) after CLIENT_HELLO's picture options. Wire contract:
+`docs/PROTOCOL.md` "Display scale". Today Windows picks the scale itself, or
+whatever the user once set by hand; the README's Known limitations line goes
+once this ships.
+
+1. To a host with `0x08`, always send the two picture-option bytes (0, 0 if
+   nothing is wanted), then `display_scale`. Never to a host without it.
+2. Value: requested pixel width ÷ the screen's width in points × 100, rounded
+   (`NSScreen.frame` vs the mode in CLIENT_HELLO): native Retina 3024×1964 on
+   a 1512-point screen → 200, `--scale 0.75` → 150, `0.5` → 100, a 1×
+   external screen → 100. The host snaps to Windows' steps; send the honest
+   ratio. 0 means leave Windows' choice (no setting for it yet; not needed).
+3. fakehost: advertise `0x08`, parse and print the value, so the bytes are
+   checked against the spec without a PC. Unit-test the ratio and the
+   CLIENT_HELLO bytes (with and without the capability).
+
+Done when the Mac sends it, tests pass, and the user's real-PC check below
+can run; then delete this item and update the README/AGENTS.md status.
+
+### → user, on the PC: display scale on the real virtual display (2026-10-18)
+
+Needs the Mac item above. These black out the PC's monitors.
+
+1. Note `Get-ItemProperty 'HKCU:\Control Panel\Desktop\PerMonitorSettings\*'`
+   (the virtual monitor's `MTT1337…` entry was `DpiValue=2` on 2026-10-18;
+   the physical monitors have none).
+2. Connect from the Mac at 3024×1964@120. The Windows desktop should look like
+   the Mac's own "looks like 1512 × 982": 200%. host.log: `display scale of
+   \\.\DISPLAYn set to …` (or `already … as asked`), with what Windows
+   recommends and allows.
+3. While streaming, sign out and back in from the Mac (the SYSTEM worker set
+   the value; the open question is whether a sign-in keeps it or reloads the
+   user's own). Also lock/unlock once.
+4. Disconnect. host.log: `display scale of … restored` before `display layout
+   restored`. Both physical monitors back at 100%, same layout and refresh
+   rates. Repeat step 1: note which hive changed (the user's `HKCU` or
+   `HKEY_USERS\S-1-5-18`).
+5. Connect at `--scale 0.75` (expect 150%) once.
+
+Agents read host.log afterwards. Done when recorded; then tick the README
+checklist item and update the AGENTS.md "Display scale" bullet.
+
 ### → user, on the PC: Windows service retests (from 2026-10-09)
 
 Reboot-before-login, sign-out/reconnect and lock/unlock each passed once on

@@ -147,7 +147,8 @@ the initiator (A) and the host as the responder (B):
 **Optional name extension (v4).** SERVER_HELLO may append one capability byte
 after `paired`. Bit `0x01` is `CAP_PAIR_NAME` (bit `0x02`, `CAP_VIDEO_OPTIONS`,
 is described under "Picture options", bit `0x04`, `CAP_TIMING`, under "Clock
-sync and frame timing"); an absent byte means zero, and clients
+sync and frame timing", bit `0x08`, `CAP_DISPLAY_SCALE`, under "Display
+scale"); an absent byte means zero, and clients
 ignore unknown bits. Only when that bit is set, a client sends
 PAIR = `Ya[32] | u8 client_name_len | client_name_utf8`. The name is capped
 at 255 UTF-8 bytes, truncated on a Unicode scalar boundary, without a terminator;
@@ -322,7 +323,7 @@ another session" rather than retry in a loop.
 
 | type | name           | payload |
 |------|----------------|---------|
-| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`, `0x02` = `CAP_VIDEO_OPTIONS`, `0x04` = `CAP_TIMING`; missing = 0, ignore unknown bits) |
+| 0x01 | SERVER_HELLO   | `u16 proto_version`, `u8 name_len`, `name` (UTF-8), `u8 paired` (1 when the host knows the client's identity key), optional `u8 capabilities` (`0x01` = `CAP_PAIR_NAME`, `0x02` = `CAP_VIDEO_OPTIONS`, `0x04` = `CAP_TIMING`, `0x08` = `CAP_DISPLAY_SCALE`; missing = 0, ignore unknown bits) |
 | 0x02 | STREAM_START   | `u16 width`, `u16 height`, `u16 fps`, `u16 bitrate_mbps`, `u8 codec`, `u8 video_format` |
 | 0x03 | CODEC_CONFIG   | parameter-set NAL units: repeated `u32 len` + NAL bytes (no start codes). HEVC: VPS, SPS, PPS. H.264: SPS, PPS. |
 | 0x04 | FRAME          | one access unit: repeated `u32 len` + NAL bytes (no start codes, parameter sets and AUDs stripped). `flags & 0x01` = keyframe (IRAP). |
@@ -376,7 +377,7 @@ retry reason 7 without a lower user-selected value.
 
 | type | name         | payload |
 |------|--------------|---------|
-| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name`, optional `u8 encoder_quality`, `u8 video_flags` (Picture options, below) |
+| 0x81 | CLIENT_HELLO | `u16 proto_version`, `u16 width_px`, `u16 height_px`, `u16 refresh_hz`, `u16 bitrate_mbps`, `u8 flags`, `u8 codecs`, `u8 name_len`, `name`, optional `u8 encoder_quality`, `u8 video_flags` (Picture options, below), optional `u16 display_scale` (Display scale, below) |
 | 0x87 | PONG         | echo of the PING payload |
 | 0x88 | TIME_REQUEST | `u64 client_time_us` (the client's clock; opaque to the host). Only to a host with `CAP_TIMING`. |
 | 0x90 | MOUSE_MOVE   | `u16 x`, `u16 y` — position normalised to 0..65535 across the streamed frame |
@@ -419,6 +420,30 @@ client may append two bytes after `name`:
   reports what the host applied.
 - 4:4:4 needs more bits for the same luma quality. The bandwidth check (stop
   reason 7) is the same for every format.
+
+**Display scale.** When SERVER_HELLO has `CAP_DISPLAY_SCALE` (`0x08`), a
+client may append a `u16` after the picture options, so it always sends the
+two picture-option bytes first (0, 0 when it wants nothing from them):
+
+| offset after `name` | type | field |
+|---|---|---|
+| 2 | u16 | `display_scale`: Windows' scale for the virtual display, in percent; 0 = leave Windows' own choice |
+
+- Clients send it only to a host with the capability; a host without it
+  ignores the bytes. Missing, or only one byte of it, means 0.
+- The host snaps the value to the nearest scale Windows offers (100, 125, 150,
+  175, 200, 225, 250, 300, 350, 400, 450, 500; a tie goes to the smaller one)
+  and then to what Windows allows for that monitor. Values outside 100–500 are
+  ignored, as 0.
+- The host sets it after the virtual display becomes the only display and
+  before the first frame, and puts the previous value back before the display
+  leaves the desktop. It never changes a physical monitor's scale: a host
+  streaming an existing monitor (`--no-vdd`) ignores the field. The value is
+  cosmetic: a host that cannot set it still streams.
+- What a client should send: the ratio of the requested pixel size to the
+  size the user sees on the client's screen, in points, × 100. A Retina Mac
+  at its native pixel size sends 200; at 0.75 of it, 150; a 1× screen, 100.
+  The host cannot derive this from the pixel size alone.
 
 Keys are sent as HID usages so the protocol is platform-neutral; the client
 decides how macOS modifiers map (default: ⌘→Ctrl, ⌥→Alt, ⌃→Win) and the host
