@@ -652,11 +652,7 @@ documented there. What follows is only the mechanics that are easy to break:
   gear's popover (its right/below placement, `showSettings`,
   `settingsFitsRight`) and the folding sections. `NoInitialFocus` still
   clears the bitrate field's first responder once when the window becomes
-  key. `.toolbarBackgroundVisibility(.visible, for: .windowToolbar)`
-  (2026-10-18): on macOS 27 the toolbar drew its background and separator
-  only while content sat under it, which was always on the tall Video tab
-  but only on hover on Input/Performance, so hovering and switching to
-  those tabs flashed the header; checked hover on Input in the bundled app. Video starts with Resolution and Refresh rate pickers bound to the
+  key. Video starts with Resolution and Refresh rate pickers bound to the
   same `PickerModel.mode` as the footer (user request; Refresh rate is
   disabled when the screen offers one rate). Each tab is one untitled
   `.formStyle(.grouped)` Section, like a

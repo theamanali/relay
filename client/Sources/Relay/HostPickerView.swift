@@ -491,10 +491,6 @@ struct SessionSettingsView: View {
                 .tabItem { Label("Performance", systemImage: "gauge.with.needle") }
                 .tag("performance")
         }
-        // The toolbar draws its background only while content sits under it:
-        // always on Video (the tallest pane), on hover alone on the others,
-        // so switching tabs and hovering flashed the header. Always on.
-        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         // AppKit would otherwise make the bitrate field first responder, and
         // the first keystroke would change the bitrate. Click to edit it.
         .background(NoInitialFocus())
