@@ -115,7 +115,8 @@ The **Settings** gear in the footer (or Relay ▸ Settings…, ⌘,) opens the
 Settings window, with a tab each for Video, Input and Performance, laid out
 like System Settings. It reopens on the last tab, and stays open while you
 use the picker. Each subtitle describes the current choice (e.g. VSync off:
-"Lowest delay, but fast motion may tear."):
+"Lowest delay, but fast motion may tear."). Video starts with the same
+Resolution and Refresh rate choices as the footer:
 
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks

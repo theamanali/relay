@@ -652,7 +652,10 @@ documented there. What follows is only the mechanics that are easy to break:
   gear's popover (its right/below placement, `showSettings`,
   `settingsFitsRight`) and the folding sections. `NoInitialFocus` still
   clears the bitrate field's first responder once when the window becomes
-  key. Each tab is one untitled `.formStyle(.grouped)` Section, like a
+  key. Video starts with Resolution and Refresh rate pickers bound to the
+  same `PickerModel.mode` as the footer (user request; Refresh rate is
+  disabled when the screen offers one rate). Each tab is one untitled
+  `.formStyle(.grouped)` Section, like a
   System Settings pane: mini switches (`SettingSwitch`) with the detail as
   the toggle label's second Text (the form draws it as a subtitle; it dims
   a disabled switch but not its label, so `SettingSwitch` dims both Texts

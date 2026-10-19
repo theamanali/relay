@@ -505,6 +505,21 @@ struct SessionSettingsView: View {
     }
 
     @ViewBuilder private var videoRows: some View {
+        // The footer's mode controls, mirrored: the same saved mode, for the
+        // screen the picker is on.
+        Picker("Resolution", selection: Binding(get: { model.mode.scale }, set: {
+            model.setMode(StreamMode(scale: $0, refresh: model.mode.refresh))
+        })) {
+            ForEach(StreamMode.scales, id: \.self) { scale in
+                Text(verbatim: model.resolutionTitle(scale)).tag(scale)
+            }
+        }
+        Picker("Refresh rate", selection: Binding(get: { model.mode.refresh }, set: {
+            model.setMode(StreamMode(scale: model.mode.scale, refresh: $0))
+        })) {
+            ForEach(model.refreshRates, id: \.self) { Text(verbatim: "\($0) Hz").tag($0) }
+        }
+        .disabled(model.refreshRates.count < 2)
         // Automatic follows the resolution, refresh rate and link;
         // the Bitrate row below shows its value, greyed out, until
         // Automatic is switched off.
