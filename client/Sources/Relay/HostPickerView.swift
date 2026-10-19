@@ -502,6 +502,13 @@ struct SessionSettingsView: View {
             .scrollDisabled(true)
             .frame(width: Style.settingsWidth)
             .fixedSize(horizontal: false, vertical: true)
+            // The toolbar's band and separator are the form's top scroll edge
+            // effect, drawn only once the form counts as scrolled (or on
+            // hover). Video's toolbar inset came out 88.125 pt against an
+            // 88 pt offset, so it was "scrolled" and always banded; the other
+            // tabs were not, and hovering or switching to them flashed the
+            // header. The hard style draws the band at rest on every tab.
+            .scrollEdgeEffectStyle(.hard, for: .top)
     }
 
     @ViewBuilder private var videoRows: some View {

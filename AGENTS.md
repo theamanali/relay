@@ -652,7 +652,14 @@ documented there. What follows is only the mechanics that are easy to break:
   gear's popover (its right/below placement, `showSettings`,
   `settingsFitsRight`) and the folding sections. `NoInitialFocus` still
   clears the bitrate field's first responder once when the window becomes
-  key. Video starts with Resolution and Refresh rate pickers bound to the
+  key. The toolbar's band and separator are each form's top scroll edge
+  effect, drawn only once the form counts as scrolled, or on hover: a probe
+  (2026-10-18) found Video's top inset 88.125 pt against an 88 pt offset
+  (always "scrolled", always banded) and Input's 88/88 (banded on hover
+  only), so hovering and switching tabs flashed the header.
+  `.scrollEdgeEffectStyle(.hard, for: .top)` on every pane draws the band
+  at rest everywhere (user request). `toolbarBackgroundVisibility` and
+  `scrollEdgeEffectHidden` did not change it. Video starts with Resolution and Refresh rate pickers bound to the
   same `PickerModel.mode` as the footer (user request; Refresh rate is
   disabled when the screen offers one rate). Each tab is one untitled
   `.formStyle(.grouped)` Section, like a
