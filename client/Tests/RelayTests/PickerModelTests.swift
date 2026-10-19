@@ -223,6 +223,73 @@ final class PickerModelTests: XCTestCase {
         XCTAssertEqual(connects, 4)
     }
 
+    @MainActor func testReducedSizeOnA1xScreenAsksFirstUnlessSuppressed() async {
+        let keys = [PickerModel.wifiWarningSuppressedKey, PickerModel.largerDesktopWarningSuppressedKey]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { UserDefaults.standard.set(v, forKey: k) } }
+        for k in keys { UserDefaults.standard.set(false, forKey: k) }
+
+        let model = PickerModel()
+        var connects = 0
+        model.connect = { connects += 1 }
+        var overWiFi = false
+        model.connectsOverWiFi = { _ in overWiFi }
+        let paired = host("Desk", key: 1)
+        model.update(hosts: [paired], known: [paired.publicKey!: "Desk"], nicknames: [:])
+        model.selection = "Desk"
+
+        // A 1× screen at Native looks normal: straight through.
+        model.configure(native: CGSize(width: 2560, height: 1440), pointWidth: 2560, maxRefresh: 144,
+                        initial: StreamMode(scale: 1, refresh: 144))
+        XCTAssertNil(model.desktopEnlargement)
+        model.requestConnect()
+        XCTAssertEqual(connects, 1)
+
+        // 75% and 50% there look larger: the alert first.
+        model.setMode(StreamMode(scale: 0.75, refresh: 144))
+        XCTAssertEqual(model.desktopEnlargement.map(PickerModel.enlargementText), "1.3×")
+        model.setMode(StreamMode(scale: 0.5, refresh: 144))
+        XCTAssertEqual(model.desktopEnlargement.map(PickerModel.enlargementText), "2×")
+        model.requestConnect()
+        XCTAssertEqual(model.largerDesktopCandidate?.id, "Desk")
+        XCTAssertEqual(connects, 1)
+
+        // Use Native connects at Native, keeping the rate.
+        model.connectAtNative()
+        XCTAssertNil(model.largerDesktopCandidate)
+        XCTAssertEqual(model.mode, StreamMode(scale: 1, refresh: 144))
+        XCTAssertEqual(connects, 2)
+
+        // Over Wi-Fi as well: the Wi-Fi alert, then this one.
+        overWiFi = true
+        model.setMode(StreamMode(scale: 0.5, refresh: 144))
+        model.requestConnect()
+        XCTAssertNotNil(model.wifiCandidate)
+        XCTAssertNil(model.largerDesktopCandidate)
+        model.confirmWiFiConnect()
+        await Task.yield()
+        XCTAssertNil(model.wifiCandidate)
+        XCTAssertEqual(model.largerDesktopCandidate?.id, "Desk")
+        XCTAssertEqual(connects, 2)
+        model.largerDesktopCandidate = nil
+        overWiFi = false
+
+        // Retina at 50% looks normal (1512 pixels on 1512 points).
+        model.configure(native: CGSize(width: 3024, height: 1964), pointWidth: 1512, maxRefresh: 120,
+                        initial: StreamMode(scale: 0.5, refresh: 120))
+        XCTAssertNil(model.desktopEnlargement)
+        model.requestConnect()
+        XCTAssertEqual(connects, 3)
+
+        // "Do not show this message again".
+        model.configure(native: CGSize(width: 2560, height: 1440), pointWidth: 2560, maxRefresh: 144,
+                        initial: StreamMode(scale: 0.5, refresh: 144))
+        UserDefaults.standard.set(true, forKey: PickerModel.largerDesktopWarningSuppressedKey)
+        model.requestConnect()
+        XCTAssertNil(model.largerDesktopCandidate)
+        XCTAssertEqual(connects, 4)
+    }
+
     @MainActor func testSectionsFoldOnlyWithTwoOrMorePCs() async {
         let model = PickerModel()
         let a = host("A", key: 1), b = host("B", key: 2), c = host("C", key: 3)

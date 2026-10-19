@@ -59,6 +59,9 @@ final class PickerModel {
     var forgetCandidate: Row?
     /// A paired PC about to be connected over Wi-Fi: the picker asks first.
     var wifiCandidate: Row?
+    /// A paired PC about to be connected at a reduced size that this screen
+    /// shows larger than its own UI (a 1× screen): the picker asks first.
+    var largerDesktopCandidate: Row?
     var pickerActive = true
     /// The last session's numbers, for View ▸ Last Session Report.
     var sessionReport: SessionReport?
@@ -79,11 +82,14 @@ final class PickerModel {
     @ObservationIgnored var connectsOverWiFi: (DiscoveredHost) -> Bool = { $0.connectsOverWiFi }
     /// The Wi-Fi alert's "do not show this message again".
     static let wifiWarningSuppressedKey = "SuppressWiFiConnectionWarning"
+    /// The larger-desktop alert's "do not show this message again".
+    static let largerDesktopWarningSuppressedKey = "SuppressLargerDesktopWarning"
 
     /// Every Connect goes through here (button, Return, double-click,
     /// menus). Streaming over Wi-Fi works but is not the best link, so a
     /// paired PC reached that way gets a warning first, unless the user has
-    /// turned it off. Cancel and Pair pass straight through.
+    /// turned it off; so does a reduced size that makes the PC's desktop
+    /// look larger on this screen. Cancel and Pair pass straight through.
     func requestConnect() {
         finishRename()
         if !connecting, let row = selected, row.paired, connectsOverWiFi(row.host),
@@ -91,6 +97,46 @@ final class PickerModel {
             wifiCandidate = row
             return
         }
+        connectUnlessLarger()
+    }
+
+    /// The Wi-Fi alert's Connect: the size check still comes next.
+    func confirmWiFiConnect() {
+        wifiCandidate = nil
+        // One alert at a time: present the next once this one has gone.
+        Task { @MainActor in self.connectUnlessLarger() }
+    }
+
+    private func connectUnlessLarger() {
+        if !connecting, let row = selected, row.paired, desktopEnlargement != nil,
+           !UserDefaults.standard.bool(forKey: Self.largerDesktopWarningSuppressedKey) {
+            largerDesktopCandidate = row
+            return
+        }
+        connect?()
+    }
+
+    /// How much larger the PC's desktop looks than this Mac's own UI at the
+    /// chosen size, when it does: the stream has fewer pixels than the
+    /// screen has points (a reduced size on a 1× screen), and Windows can't
+    /// scale below 100%. Nil when it looks normal (any size on Retina).
+    var desktopEnlargement: Double? {
+        let width = StreamMode.size(native: nativePixelSize, scale: mode.scale).width
+        guard width > 0, screenPointWidth > 0 else { return nil }
+        let larger = screenPointWidth / Double(width)
+        return larger > 1.05 ? larger : nil
+    }
+
+    /// "2×", "1.3×".
+    static func enlargementText(_ larger: Double) -> String {
+        let tenths = (larger * 10).rounded() / 10
+        return tenths == tenths.rounded() ? "\(Int(tenths))×" : String(format: "%.1f×", tenths)
+    }
+
+    /// The larger-desktop alert's other way out: connect at Native instead.
+    func connectAtNative() {
+        largerDesktopCandidate = nil
+        setMode(StreamMode(scale: 1, refresh: mode.refresh))
         connect?()
     }
     @ObservationIgnored var forget: ((DiscoveredHost) -> Void)?

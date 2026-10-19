@@ -791,7 +791,17 @@ documented there. What follows is only the mechanics that are easy to break:
   `SuppressWiFiConnectionWarning` is set by its "Don't ask again". The alert
   lives in its own `WiFiConnectAlert` view because `dialogSuppressionToggle`
   applies to every dialog presented within the modified view (Forget showed
-  the checkbox too). Pairing and Cancel never warn.
+  the checkbox too). Pairing and Cancel never warn. After it (or straight
+  away), `LargerDesktopAlert` (2026-10-18, user request) asks when
+  `PickerModel.desktopEnlargement` is set: the stream's pixel width is
+  under 95% of the screen's width in points (75% / 50% on a 1× screen;
+  never on Retina), so Windows at its 100% floor looks larger. Buttons
+  Connect / Use Native (`connectAtNative`, keeps the rate) / Cancel;
+  suppressed by `SuppressLargerDesktopWarning`. The Wi-Fi alert's Connect
+  calls `confirmWiFiConnect`, which presents this one on the next main
+  actor turn (one alert at a time). Titles are plain Strings: localized
+  interpolation would group "2,560". Checked in the bundled app on the
+  ED273UR at 75%: "Connect at 1920 × 1080?", "about 1.3× larger".
 - Menus are SwiftUI commands in `RelayApp.swift`; contribute to the existing
   View command group to avoid duplicate View menus. Validate against picker
   focus. `StreamView.performKeyEquivalent` still swallows command shortcuts

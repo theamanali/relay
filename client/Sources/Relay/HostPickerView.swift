@@ -49,6 +49,7 @@ struct HostPickerView: View {
         // dialog presented within the view it modifies, and Forget must not
         // offer "Don't ask again".
         .background { WiFiConnectAlert(model: model) }
+        .background { LargerDesktopAlert(model: model) }
     }
 
     /// Hero glyph, title, one-line purpose.
@@ -81,14 +82,47 @@ private struct WiFiConnectAlert: View {
                 isPresented: Binding(get: { model.wifiCandidate != nil }, set: { if !$0 { model.wifiCandidate = nil } }),
                 presenting: model.wifiCandidate
             ) { _ in
-                Button("Connect") {
-                    model.wifiCandidate = nil
-                    model.connect?()
-                }
+                Button("Connect") { model.confirmWiFiConnect() }
                 .keyboardShortcut(.defaultAction)
                 Button("Cancel", role: .cancel) { model.wifiCandidate = nil }
             } message: { _ in
                 Text("Relay works over Wi-Fi, but the picture may lag or drop frames. For the best experience, connect your MacBook directly to your PC with an Ethernet cable.")
+            }
+            .dialogSuppressionToggle(isSuppressed: $suppressed)
+    }
+}
+
+/// A reduced size on a 1× screen makes the PC's desktop look larger than
+/// the Mac's own UI (Windows can't scale below 100%): say so once, with the
+/// system's "Don't ask again", and offer Native instead.
+private struct LargerDesktopAlert: View {
+    @Bindable var model: PickerModel
+    @AppStorage(PickerModel.largerDesktopWarningSuppressedKey) private var suppressed = false
+
+    var body: some View {
+        let size = StreamMode.size(native: model.nativePixelSize, scale: model.mode.scale)
+        let native = StreamMode.size(native: model.nativePixelSize, scale: 1)
+        let larger = model.desktopEnlargement.map(PickerModel.enlargementText) ?? "2×"
+        // Plain Strings: localized interpolation groups digits ("2,560").
+        let title = "Connect at \(size.width) × \(size.height)?"
+        let useNative = "Use Native (\(native.width) × \(native.height))"
+        let message = "On this display, the PC’s desktop will look about \(larger) larger than your Mac’s and slightly blurry. Windows can’t scale below 100%, so Native is the only size that looks normal here."
+        Color.clear
+            .alert(
+                title,
+                isPresented: Binding(get: { model.largerDesktopCandidate != nil },
+                                     set: { if !$0 { model.largerDesktopCandidate = nil } }),
+                presenting: model.largerDesktopCandidate
+            ) { _ in
+                Button("Connect") {
+                    model.largerDesktopCandidate = nil
+                    model.connect?()
+                }
+                .keyboardShortcut(.defaultAction)
+                Button(useNative) { model.connectAtNative() }
+                Button("Cancel", role: .cancel) { model.largerDesktopCandidate = nil }
+            } message: { _ in
+                Text(verbatim: message)
             }
             .dialogSuppressionToggle(isSuppressed: $suppressed)
     }
