@@ -43,27 +43,35 @@ README status and here. Do not create other handoff or retest files.
   process from the same binary (WGC activation fails under SYSTEM). A
   PID-authenticated local pipe transfers only an explicitly duplicated RGB10
   texture handle; keyed-mutex GPU sharing keeps pixels off the CPU. SYSTEM
-  retains cursor, NVENC, keys, input and topology. True 10-bit needs the user's
-  Default desktop; use 8-bit for login/secure screens. Integer XOR fixes the old masked cursor's
+  retains cursor, NVENC, keys, input and topology. In a selected 10-bit session,
+  Winlogon uses temporary DDA/BGRA8/ARGB input and Default uses true FP16/RGB10.
+  The Main10/Rext output and 10-bit VDD stay fixed; desktop changes recreate
+  capture in either direction without reconnecting. This secure-desktop
+  exception was explicitly requested by the user after the first deployment;
+  unknown desktops wait, and Default WGC failures never downgrade. H.264 and
+  unselected 8-bit sessions retain their existing behavior. Integer XOR fixes the old masked cursor's
   replacement pixels being modified by its XOR pass. Capabilities include WGC,
   FP16 load, RGB10 render/blend and ABGR10 input; trials register/map slots and
-  construct the converter. HDR is refused; no silent BGRA8-to-Main10 fallback.
+  construct the converter; 10-bit trials also register/map BGRA8 input with
+  unchanged 10-bit output for Winlogon. HDR is refused.
   On an unchanged physical desktop, native ramps retained 64/64 codes before
   and after GPU conversion/cursor, max error 0; legacy capture retained 16/64,
   max ramp error 2. Actual production 4:2:0 and 4:4:4 10-bit dumps decoded with
   finer precision, correct channel/range controls and unchanged SDR VUI.
-  Windows fmt, 237 unit tests + 2 probe tests + integration, strict clippy and
+  Windows fmt, 239 unit tests + 2 probe tests + integration, strict clippy and
   release build pass; the separate read-only NVENC/WinRT lifetime regression
   also passes. Four ordinary-user no-VDD protocol sessions pass, as does the
   shared-GPU helper diagnostic (64/64 source codes, max error 0). Implemented
-  in `ecb33ee`, installed with release/installed SHA-256
-  `2A36B9CD1AAD29055832DBEF29B8042801968A7645BDA6CC26A1B2466C96F9AA`.
+  in `ecb33ee`, secure-source policy in `c060d0f`, installed with release/installed SHA-256
+  `D63A3F7F8ACF1B19D92897D8E4E7B5B5655E0B3047CB330F4C600CD3D70A517F`.
   Guarded SYSTEM no-VDD sessions passed both chroma modes on the unchanged
-  2560×1440@120 primary; decoded ramps retained 37/47/39/52 and 33/45/27/53
+  2560×1440@120 primary; decoded ramps retained 38/43/35/52 and 36/43/28/54
   R/G/B/gray codes (max errors 5/6), with correct SDR controls/VUI. Normal
   service restored, Running, `enc=q,444,10`; pair-only passed and both capture
-  helpers exited. The harness's blank scene ExitCode and separate dump
-  validation are recorded in SESSION-HANDOFF.md. One unintended exclusive 8-bit test session
+  helpers exited. The latest harness completed successfully after caching the
+  scene process handle fixed its earlier blank ExitCode. Forced secure-input
+  diagnostics passed both 10-bit output chroma modes; actual Winlogon and
+  same-connection desktop switches remain user/Mac qualification. One unintended exclusive 8-bit test session
   restored both physical monitors/layout; details and corrected no-VDD guard
   are in SESSION-HANDOFF.md.
   `precision` + `tools/check-precision.py` reproduce the numeric check.

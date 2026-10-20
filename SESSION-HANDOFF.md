@@ -28,6 +28,8 @@ composition and NVENC input. This is SDR work; HDR remains a separate roadmap
 item. The user sees **8-bit** in Windows Advanced display during a current
 10-bit stream. The implementation, Windows tests and non-exclusive SYSTEM
 installation/precision checks are done (2026-10-19; implementation `ecb33ee`).
+The installed follow-up `c060d0f` implements the requested temporary 8-bit
+lock/login source and automatic promotion to true 10-bit after sign-in.
 Keep this item open for the virtual-display, exclusive/recovery and real-Mac
 qualification below.
 
@@ -48,6 +50,15 @@ qualification below.
   That is client support, not a new real-Mac qualification of this feature.
 
 **Original implementation requirements**
+
+**User amendment after the first deployment (2026-10-19):** when 10-bit is
+selected, show the lock/login screen using an 8-bit source, then recreate
+capture at true 10-bit after sign-in. This authorizes the Winlogon-only
+8-bit-source exception to the original no-downgrade rule below. The display
+and encoded Main10/Rext stream stay at the selected 10-bit depth; only input
+precision changes, so no protocol/client change or display cycle is needed.
+Default still requires true 10-bit capture. H.264 and sessions with 10-bit
+off do not opt into this policy.
 
 1. **Prove the source path on the actual Windows machine first.** Read the
    installed MTT version and the live XML under the registry's `VDDPATH`;
@@ -239,10 +250,10 @@ qualification below.
   `final-caps*`, `install-final*` and `installed-pair-only*`. The numeric method
   and results above are durable; these local diagnostic dumps are not committed.
 
-**Final deployment and SYSTEM verification (2026-10-19 Pacific / 2026-10-20 UTC)**
+**First deployment and SYSTEM verification (2026-10-19 Pacific / 2026-10-20 UTC)**
 
-The helper-backed release (`ecb33ee`) is **installed**. Release and
-`C:\Program Files\Relay\relay-host.exe` both have SHA-256
+The first helper-backed release (`ecb33ee`) was installed. Its release and
+`C:\Program Files\Relay\relay-host.exe` then both had SHA-256
 `2A36B9CD1AAD29055832DBEF29B8042801968A7645BDA6CC26A1B2466C96F9AA`.
 On resuming after the usage limit, fmt, all 237 unit + 2 probe + integration
 tests, the separate NVENC/WinRT lifetime regression, strict clippy and release
@@ -309,11 +320,68 @@ Evidence is in `system-{420,444,scene}.*`, `system-guarded*`,
 `final-normal-worker.txt` and `final-installed-pair-only*` under the ignored
 evidence directory. The earlier cancelled deployment is resolved.
 
-True 10-bit WGC requires a signed-in user's **Default** desktop. There is no
-BGRA8 fallback for login/secure screens; 8-bit retains the existing SYSTEM DDA
-path. The 10-bit path waits as a recoverable unavailable desktop and can resume
-when Default returns. Before-login use should select 8-bit. Secure-desktop,
-sign-out/user-switch recovery and performance still need user qualification.
+**Lock/login source switching update (2026-10-19)**
+
+The user's amendment is implemented in `c060d0f`: a selected HEVC 10-bit session chooses
+`Secure8` on Winlogon, `Desktop10` on Default, and waits on unknown/unreadable
+desktops. Secure8 uses the production DDA/BGRA8/ARGB path with the **same
+10-bit output**; it does not claim 10-bit source precision. Desktop10 still
+requires FP16/RGB10/ABGR10 and refuses unsupported SDR formats. Capture watches
+desktop changes in both modes, including while awaiting the first frame,
+and normal recovery recreates the appropriate source/slots/encoder. The VDD,
+negotiated format, chroma, Main10/Rext profile and VUI remain unchanged. Fresh
+parameter sets and a keyframe use the existing restart path; no reconnect,
+wire or client changes. No 8-bit fallback is enabled for a WGC failure on
+Default. Plain 8-bit/H.264 keep their existing behavior.
+
+Windows fmt, **239 unit tests + 2 probe tests + integration**, strict clippy,
+release build and the read-only NVENC/WinRT lifetime regression pass. Preflight
+now registers/maps **both** RGB10 and BGRA8 inputs with the selected Main10/Rext
+output. New tests cover Winlogon/Default selection, refusal for unknown
+desktops, restart detection in both directions, H.264/8-bit compatibility and
+SDR/format checks for the secure source.
+
+Safe unchanged-desktop release diagnostics forced **only** the secure input
+combination with `RELAY_TEST_FAULT=secure-capture`; they did not lock Windows
+and are not a real Winlogon/transition pass. Actual production secure-source
+4:2:0 / 4:4:4 dumps decode as yuv420p10le / yuv444p10le, correct SDR VUI and
+controls, ramp counts **19/16/16/16 / 18/16/16/16**, max error **10 / 10**,
+mean error **1.965 / 1.947**. With the hook cleared, the true 10-bit path keeps
+**64/64** source/composed codes, max error **0**; decoded counts
+**36/44/31/54** in both chroma modes, max error **5**, mean error
+**1.199 / 1.201**. These are 12-frame Best/200 Mbps/30 fps checks. The secure
+diagnostic's raw 64-code report describes its preliminary WGC reference
+sampling, not the deliberately 8-bit production encode input; the production
+logs explicitly show BGRA8/ARGB. Evidence: `switch-{secure,desktop}-{420,444}.*`.
+
+The updated build is **installed**. Its release and installed SHA-256 match:
+`D63A3F7F8ACF1B19D92897D8E4E7B5B5655E0B3047CB330F4C600CD3D70A517F`.
+The accepted elevation ran `switch-system-guarded.ps1`: the newest SYSTEM
+worker's no-VDD guard passed before both probes. Both sessions exited 0,
+negotiated `0x09` / `0x0d` on the unchanged 2560×1440@120 physical primary,
+and produced valid 10-bit dumps. The scene kept **64/64** source/composed
+codes with zero error. SYSTEM dump decoded counts are **38/43/35/52** /
+**36/43/28/54**, max errors **5 / 6**, mean error **1.309** each, expected SDR
+VUI and correct channel/range controls. The ordinary 8-bit HEVC and H.264
+release diagnostics also pass unchanged: source/composed **16/64**, max
+error **2**, decoded counts **9/12/9/14**, max error **14**, mean error **6.167**.
+
+The two three-second SYSTEM probes received **225 / 225** frames, including
+startup, PC work p50/p95 **2.98/3.96 / 4.74/5.14 ms**, 7/7 clock replies each,
+unknown WGC present timestamps. Extra preflight covers both input depths;
+these short checks do not qualify sustained 3024×1964@120 performance.
+The harness now caches the scene process handle before waiting; the complete
+run recorded **success=True**, resolving its earlier blank ExitCode issue.
+Finally restored the normal service command and worker at **01:44:18 UTC**:
+service Running, `enc=q,444,10`, only supervisor/worker remain, matching
+hashes, `probe --pair-only` exit 0 with the same already-paired identities and
+caps `0x0f`. Evidence: `switch-system-*`, `switch-final-normal-worker.txt`,
+`switch-installed-pair-only*`, `switch-eight.*`, `switch-h264.*`.
+
+Actual lock/login, sign-in, user-switch and real-Mac continuity remain
+pending below; older 8-bit-source lock/recovery tests do not qualify the new
+automatic policy. No exclusive session or actual lock/sign-in was run by the
+agent for this update.
 
 **Still pending — user / Mac / PC follow-up (keep this item open)**
 
@@ -327,11 +395,16 @@ sign-out/user-switch recovery and performance still need user qualification.
    extends rather than blacks out the physical outputs. A Windows label or
    Main10 SPS alone is insufficient. A later elevation prompt for this final
    source probe was cancelled; it has not been silently retried.
-2. User: cursor (normal/masked/monochrome), quick reconnect, lock/unlock,
-   login-screen connect, capture/GPU restart, disconnect and failure restore
+2. User: with **10-bit selected**, connect while locked/before sign-in: the
+   lock/login screen must appear from the logged 8-bit secure source. Sign in
+   without reconnecting: logs must switch to true FP16/RGB10/ABGR10 capture
+   and gradients regain the measured precision. Lock/unlock again in that
+   same connection, and sign out/back in or switch users. Repeat with 10-bit
+   off to check the unchanged 8-bit behavior. Also check cursor
+   (normal/masked/monochrome), quick reconnect, capture/GPU restart, disconnect and failure restore
    with the SYSTEM worker. Check physical monitor colour settings, positions,
    primary, DPI and refresh rates return as before, and that the colour journal
-   is removed only after restoration. The WGC secure-desktop path is **unqualified**;
+   is removed only after restoration. The automatic source transitions are **unqualified**;
    older DDA lock/recovery passes do not qualify this source.
 3. Mac: rebuild current client, verify real VideoToolbox 10-bit output buffers,
    normal colours/gradients and no double cursor. At 3024×1964@120 Fastest,

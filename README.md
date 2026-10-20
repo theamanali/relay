@@ -68,8 +68,9 @@ flowchart LR
    When a Mac connects, the host snapshots the display layout, enables the
    driver's device and makes the virtual monitor the *only* display, at the
    Mac's exact pixel size and refresh rate.
-2. **Capture and encode.** 8-bit sessions use DXGI Desktop Duplication; 10-bit
-   SDR sessions use Windows Graphics Capture FP16 and GPU conversion to RGB10.
+2. **Capture and encode.** 8-bit sessions use DXGI Desktop Duplication; selected
+   10-bit SDR sessions use Windows Graphics Capture FP16 and GPU conversion to
+   RGB10 on the normal desktop, with an 8-bit source on lock/login screens.
    Both are encoded by NVENC in the host; a SYSTEM host uses a signed-in-user
    capture helper from the same binary and shares its RGB10 texture. Frames never
    leave the GPU. Only NVIDIA GPUs are used, and each session is checked
@@ -159,11 +160,14 @@ sets MTT's SDR10bit option before device start, restores its original colour
 switches on cleanup/crash recovery, captures FP16 SDR through Windows Graphics
 Capture, converts linear scRGB to SDR RGB10 on the selected GPU, and composes
 the cursor into RGB10 before NVENC ABGR10 input. SYSTEM uses a signed-in-user
-capture helper with GPU texture sharing; 10-bit needs the user's Default
-desktop, while 8-bit remains the login/secure-screen path. Desktop Duplication remains
-the 8-bit source and supplies cursor information for 10-bit sessions: it
+capture helper with GPU texture sharing on the user's Default desktop.
+With 10-bit selected, lock/login screens temporarily use an 8-bit source;
+sign-in recreates true 10-bit capture automatically, and locking switches back.
+The display and Main10/Rext stream remain 10-bit, so no reconnect is needed.
+Sessions with 10-bit off keep their existing behavior. Desktop Duplication remains
+the 8-bit source and supplies cursor information for true 10-bit desktop capture: it
 returned BGRA8 even when this MTT display reported 10 bits/channel. Unsupported
-capture/conversion fails without an 8-bit-source fallback; HDR remains separate.
+capture/conversion on Default fails without an 8-bit-source fallback; HDR remains separate.
 
 Numeric desktop tests on an unchanged physical display retained **64/64**
 adjacent codes in each native 10-bit R/G/B/gray ramp after capture and GPU
@@ -175,10 +179,9 @@ in an ordinary-user process test. The installed SYSTEM worker passed guarded
 no-VDD 4:2:0 and 4:4:4 sessions: decoded native ramps retain finer precision,
 correct channels/range and unchanged SDR VUI. The normal service is Running
 and advertises 10-bit; installed/release hashes match. Virtual-display source
-qualification, SYSTEM/secure
-desktop recovery and real-Mac performance remain pending in
+qualification, secure-desktop transitions/recovery and real-Mac performance remain pending in
 [SESSION-HANDOFF.md](SESSION-HANDOFF.md). WGC's timestamp is not the protocol's
-DWM LastPresentTime: true 10-bit sessions currently leave Desktop → screen /
+DWM LastPresentTime: FP16 capture currently leaves Desktop → screen /
 content-age timing unknown; other timings remain available. Earlier claims
 that 10-bit was free measured an **8-bit capture encoded into Main10**.
 
