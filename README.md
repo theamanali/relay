@@ -50,7 +50,7 @@ mDNS / Bonjour · Windows services · GitHub Actions
 ```mermaid
 flowchart LR
   subgraph PC["Windows PC: relay-host (Rust)"]
-    VDD["Virtual display driver<br/>monitor at the Mac's size"] --> DDA["DXGI Desktop Duplication"]
+    VDD["Virtual display driver<br/>monitor at the Mac's size and depth"] --> DDA["8-bit: DXGI desktop<br/>10-bit: WGC FP16 + GPU SDR conversion"]
     DDA --> ENC["NVENC HEVC encode"]
     IN["SendInput"]
   end
@@ -68,8 +68,10 @@ flowchart LR
    When a Mac connects, the host snapshots the display layout, enables the
    driver's device and makes the virtual monitor the *only* display, at the
    Mac's exact pixel size and refresh rate.
-2. **Capture and encode.** The virtual monitor is captured with DXGI Desktop
-   Duplication and encoded by NVENC inside the same process, so frames never
+2. **Capture and encode.** 8-bit sessions use DXGI Desktop Duplication; 10-bit
+   SDR sessions use Windows Graphics Capture FP16 and GPU conversion to RGB10.
+   Both are encoded by NVENC in the host; a SYSTEM host uses a signed-in-user
+   capture helper from the same binary and shares its RGB10 texture. Frames never
    leave the GPU. Only NVIDIA GPUs are used, and each session is checked
    against the GPU's NVENC capabilities before any display changes.
 3. **Transport.** One TCP connection with length-prefixed, encrypted frames
@@ -83,6 +85,10 @@ flowchart LR
    frame waiting. Keyboard and trackpad events go back over the same connection.
 
 ## Performance
+
+The measurements below use the original 8-bit desktop source, including
+encoding-only Main10 results. The true 10-bit WGC source is not yet qualified
+on the real Mac.
 
 Per frame at 3024×1964, 120 fps, HEVC, default settings, on the real hardware:
 
@@ -147,6 +153,33 @@ were measured and rejected; both are written up in
   input independence (`client/Tools/ctcheck.swift`).
 
 ## Status
+
+**True 10-bit SDR (implementation; SYSTEM deployment pending, 2026-10-19):** the existing toggle now
+sets MTT's SDR10bit option before device start, restores its original colour
+switches on cleanup/crash recovery, captures FP16 SDR through Windows Graphics
+Capture, converts linear scRGB to SDR RGB10 on the selected GPU, and composes
+the cursor into RGB10 before NVENC ABGR10 input. SYSTEM uses a signed-in-user
+capture helper with GPU texture sharing; 10-bit needs the user's Default
+desktop, while 8-bit remains the login/secure-screen path. Desktop Duplication remains
+the 8-bit source and supplies cursor information for 10-bit sessions: it
+returned BGRA8 even when this MTT display reported 10 bits/channel. Unsupported
+capture/conversion fails without an 8-bit-source fallback; HDR remains separate.
+
+Numeric desktop tests on an unchanged physical display retained **64/64**
+adjacent codes in each native 10-bit R/G/B/gray ramp after capture and GPU
+composition, with zero code error; the 8-bit path retained **16/64**. Both
+Main10 4:2:0 and Rext 4:4:4 production dumps decoded with finer gradients than
+the 8-bit baseline, correct channels and SDR VUI. Windows tests, strict clippy
+and release build pass. The GPU-sharing helper also preserves all 64 codes
+in an ordinary-user process test. Final SYSTEM installation/verification is
+pending Windows elevation; the installed intermediate build currently
+withholds 10-bit. Virtual-display source qualification, SYSTEM/secure
+desktop recovery and real-Mac performance remain pending in
+[SESSION-HANDOFF.md](SESSION-HANDOFF.md). WGC's timestamp is not the protocol's
+DWM LastPresentTime: true 10-bit sessions currently leave Desktop → screen /
+content-age timing unknown; other timings remain available. Earlier claims
+that 10-bit was free measured an **8-bit capture encoded into Main10**.
+
 
 **Display scale (2026-10-18):** the Mac now tells the PC which Windows scale
 to use for the virtual display (PROTOCOL.md "Display scale"): the requested
@@ -327,9 +360,14 @@ at 3024×1964 has not been run yet; see [LATENCY.md](docs/LATENCY.md#encoder-qua
 
 **Next:**
 
+- [ ] Qualify true 10-bit SDR virtual-display capture, secure-desktop/recovery,
+      restoration and real-Mac 3024×1964@120 performance in both chroma modes.
+      Steps and measured source precision are in [SESSION-HANDOFF.md](SESSION-HANDOFF.md).
+
 - [x] Picture options on the real Mac (2026-10-17): Fastest is the only
       preset that keeps 120 fps at 3024×1964 (Balanced 102 fps, Best 86 fps);
-      4:4:4 adds about 3.5 ms, 10-bit nothing measurable; the in-frame HUD
+      4:4:4 adds about 3.5 ms, encoding 8-bit capture into Main10 added
+      nothing measurable (true 10-bit capture is not yet qualified); the in-frame HUD
       costs nothing measurable. See [LATENCY.md](docs/LATENCY.md#picture-options-and-the-hud-on-the-real-mac-2026-10-17)
 
 - [ ] Windows service: repeat reboot-before-login and sign-out/reconnect (one

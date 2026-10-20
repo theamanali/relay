@@ -81,8 +81,8 @@ The **Relay** service runs as LocalSystem and keeps one worker process,
 combination is what lets the host:
 
 - start at boot, before anyone signs in;
-- capture and control the lock and login screens (a normal user process can't
-  open them);
+- capture and control the lock and login screens in 8-bit mode (a normal user
+  process can't open them; true 10-bit requires the user's Default desktop);
 - turn device nodes on and off without a separate elevated helper;
 - restore your monitors if the worker crashes. The service then runs
   `relay-host restore` in the session and starts a new worker, after 5 s, or

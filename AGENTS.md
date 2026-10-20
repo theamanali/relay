@@ -31,6 +31,44 @@ README status and here. Do not create other handoff or retest files.
 
 ## Status
 
+- True 10-bit SDR host implementation (2026-10-19): negotiated `video.ten_bit`
+  reaches VDD attach; SDR10bit/HDRPlus are journaled before override, applied
+  before enable, restored after disable and recovered after a crash. The installed
+  MTT 25.7.23 package is INF 11.30.4.434 (`oem49.inf`), VDDPATH
+  `C:\VirtualDisplayDriver`. Non-exclusive on/off/on tests reported 10/8/10
+  SDR bits/channel, but DuplicateOutput1 still returned BGRA8. Thus true 10-bit
+  uses WGC FP16 linear scRGB, same-GPU sRGB OETF to R10G10B10A2, RGB10 cursor
+  composition/slots and NVENC **ABGR10**. DDA supplies only the pointer there;
+  8-bit/H.264 keep BGRA8/ARGB. SYSTEM uses a signed-in-user capture-source
+  process from the same binary (WGC activation fails under SYSTEM). A
+  PID-authenticated local pipe transfers only an explicitly duplicated RGB10
+  texture handle; keyed-mutex GPU sharing keeps pixels off the CPU. SYSTEM
+  retains cursor, NVENC, keys, input and topology. True 10-bit needs the user's
+  Default desktop; use 8-bit for login/secure screens. Integer XOR fixes the old masked cursor's
+  replacement pixels being modified by its XOR pass. Capabilities include WGC,
+  FP16 load, RGB10 render/blend and ABGR10 input; trials register/map slots and
+  construct the converter. HDR is refused; no silent BGRA8-to-Main10 fallback.
+  On an unchanged physical desktop, native ramps retained 64/64 codes before
+  and after GPU conversion/cursor, max error 0; legacy capture retained 16/64,
+  max ramp error 2. Actual production 4:2:0 and 4:4:4 10-bit dumps decoded with
+  finer precision, correct channel/range controls and unchanged SDR VUI.
+  Windows fmt, 237 unit tests + 2 probe tests + integration, strict clippy and
+  release build pass; the separate read-only NVENC/WinRT lifetime regression
+  also passes. Four ordinary-user no-VDD protocol sessions pass, as does the
+  shared-GPU helper diagnostic (64/64 source codes, max error 0). Final SYSTEM
+  deployment is pending an accepted Windows elevation. The installed
+  intermediate `ABD08DCC…1B3B20D` still withholds 10-bit under SYSTEM; do not
+  call it the final feature build. One unintended exclusive 8-bit test session
+  restored both physical monitors/layout; details and corrected no-VDD guard
+  are in SESSION-HANDOFF.md.
+  `precision` + `tools/check-precision.py` reproduce the numeric check.
+  WGC SystemRelativeTime drives cadence only: wire `present_us` is unknown
+  until a source timestamp matching the protocol's DWM contract is qualified.
+  VDD source precision with the new WGC path, SYSTEM/secure desktop/recovery,
+  exclusive restore and real-Mac 3024×1964@120 performance remain pending in
+  SESSION-HANDOFF.md; older “10-bit free” results are encoding-only baselines.
+
+
 - Platform migration 2026-10-10: Mac SwiftUI/Swift 6, Apple silicon/macOS 14,
   mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
   picker restoration below), isolated
@@ -961,10 +999,11 @@ documented there. What follows is only the mechanics that are easy to break:
   only), then start the service again. Picture options were tested that way on
   2026-10-10 (one UAC prompt for a script that stopped the service, ran the dev
   host on port 18468 until told to stop, then installed).
-- **NVENC (API 12.1) turns the 8-bit ARGB input into HEVC 4:4:4 and/or 10-bit
-  itself:** `chromaFormatIDC = 3`, `pixelBitDepthMinus8 = 2` with
-  `NV_ENC_BUFFER_FORMAT_ARGB` unchanged. No shader conversion is needed, and
-  the 4:4:4 chroma is full resolution (checked against a 2×2-averaged copy). The probe's persisted identity
+- **Historical encoding-only 10-bit path (superseded 2026-10-19):** NVENC
+  (API 12.1) turned the 8-bit ARGB input into HEVC 4:4:4 and/or 10-bit
+  itself: `chromaFormatIDC = 3`, `pixelBitDepthMinus8 = 2` with
+  `NV_ENC_BUFFER_FORMAT_ARGB` unchanged. That path needed no shader conversion;
+  its 4:4:4 chroma was full resolution (checked against a 2×2-averaged copy). The probe's persisted identity
   is paired with it again since the v4 checks (2026-10-08; the list had been empty since
   2026-09-19); `probe --unpair` removes it.
 - **Every stream's VUI is primaries 1, transfer 1, matrix 6, limited range**
