@@ -519,8 +519,8 @@ final class LatencyStats: @unchecked Sendable {
             "\(name)=\(SessionReport.ms(value.p50))/\(SessionReport.ms(value.p95))[n=\(value.count)]"
         }
         let replies = lock.withLock { clockReplies }
-        return String(format: "Timing window: uptime=%.3f fps=%.1f sync=%@ replies=%d ",
-                      Double(nanos) / 1e9, s.presentedFPS, s.clockOffsetMs == nil ? "no" : "yes", replies)
+        return String(format: "Timing window: uptime=%.3f fps=%.1f decoded=%.1f sync=%@ replies=%d ",
+                      Double(nanos) / 1e9, s.presentedFPS, s.decodedFPS, s.clockOffsetMs == nil ? "no" : "yes", replies)
             + [stage("source-age", s.contentAge), stage("pc-work", s.host), stage("encode-send", s.encodeSend),
                stage("receive-screen", s.toScreen), stage("desktop-screen", s.desktopToScreen)].joined(separator: " ")
     }

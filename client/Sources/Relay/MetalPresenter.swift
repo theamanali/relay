@@ -49,6 +49,8 @@ final class MetalPresenter: @unchecked Sendable {
     private var unavailable = 0
     private var gpuFailures = 0
     private var unsupportedFormats = 0
+    /// Presenter queue only; log the actual drawable once per decoder generation.
+    private var loggedDrawableGeneration = -1
     /// Each shown frame: its sequence, when it reached the screen (seconds
     /// on the host clock, the same base as `systemUptime`) and receive → on
     /// screen in ms; on Metal's callback thread. Set before the first frame.
@@ -324,6 +326,9 @@ final class MetalPresenter: @unchecked Sendable {
     @discardableResult
     private func encode(_ image: CVPixelBuffer, luma: MTLTexture, chroma: MTLTexture,
                         into target: MTLTexture, command: MTLCommandBuffer) -> Bool {
+        // The mailbox can change depth while nextDrawable waits. Never draw
+        // a new 10-bit image into a drawable obtained for the old 8-bit stream.
+        guard target.pixelFormat == Self.layerFormat(for: image) else { return false }
         let picture = SIMD2(Float(CVPixelBufferGetWidth(image)), Float(CVPixelBufferGetHeight(image)))
         let bounds = SIMD2(Float(target.width), Float(target.height))
         let fit = min(bounds.x / picture.x, bounds.y / picture.y)
@@ -362,12 +367,13 @@ final class MetalPresenter: @unchecked Sendable {
 
     /// Test hook: the production shader and target format, with unmodified
     /// readback bytes. RGB10 stays packed B:G:R:A = 10:10:10:2.
-    func renderNativeOffscreen(_ image: CVPixelBuffer, width: Int, height: Int) -> [UInt8]? {
+    func renderNativeOffscreen(_ image: CVPixelBuffer, width: Int, height: Int,
+                               targetFormat: MTLPixelFormat? = nil) -> [UInt8]? {
         guard Self.pixelFormats.contains(CVPixelBufferGetPixelFormatType(image)),
               let (luma, chroma) = textures(for: image),
               let lumaTex = CVMetalTextureGetTexture(luma),
               let chromaTex = CVMetalTextureGetTexture(chroma) else { return nil }
-        let format = Self.layerFormat(for: image)
+        let format = targetFormat ?? Self.layerFormat(for: image)
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width, height: height, mipmapped: false)
         desc.usage = [.renderTarget]
         desc.storageMode = .shared
@@ -432,6 +438,12 @@ final class MetalPresenter: @unchecked Sendable {
                 return
             }
 
+            if loggedDrawableGeneration != frame.generation {
+                loggedDrawableGeneration = frame.generation
+                NSLog("MetalPresenter: drawable %@, luma %@, chroma %@",
+                      String(describing: drawable.texture.pixelFormat),
+                      String(describing: lumaTex.pixelFormat), String(describing: chromaTex.pixelFormat))
+            }
             drawable.addPresentedHandler { [weak self] shown in
                 guard let self else { return }
                 let current = self.lock.withLock { () -> Bool in

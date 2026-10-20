@@ -73,6 +73,10 @@ final class DecodedPrecisionTests: XCTestCase {
                 let v = UInt32(bytes[i]) | UInt32(bytes[i+1]) << 8 | UInt32(bytes[i+2]) << 16 | UInt32(bytes[i+3]) << 24
                 return [Int(v >> 20 & 1023), Int(v >> 10 & 1023), Int(v & 1023)]
             }
+            if depth == 10 {
+                XCTAssertNil(metal.renderNativeOffscreen(image, width: 256, height: 128, targetFormat: .bgra8Unorm),
+                             "never reduce a new 10-bit frame into an old drawable during a depth change")
+            }
             let maxCode = depth == 10 ? 1023 : 255
             var error = 0
             for (j, code) in actual.enumerated() {
