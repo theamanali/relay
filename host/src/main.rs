@@ -38,6 +38,10 @@ struct Cli {
     /// Verbose logging (-v info is default, -vv debug, -vvv trace)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+
+    /// Bounded raw source/submit timing diagnostics (off by default).
+    #[arg(long, global = true, hide = true)]
+    source_timing_diagnostics: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -227,6 +231,7 @@ fn main() -> Result<()> {
     // double-click: there is none, and the log goes to a file.
     let has_console = attach_parent_console();
     let cli = Cli::parse();
+    relay_host::source_timing::configure(cli.source_timing_diagnostics);
     // The user capture source has no host state, tray, service or identity
     // duties, and no permission to write the SYSTEM host's log/state.
     if let Some(Command::CaptureSource {
@@ -949,4 +954,41 @@ fn paired_clients(forget: Option<String>) -> Result<()> {
         println!("{}  {}", crypto::fingerprint(key), name);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod diagnostic_cli_tests {
+    use super::*;
+    #[test]
+    fn source_diagnostics_are_opt_in_and_accepted_in_each_process_role() {
+        assert!(
+            !Cli::try_parse_from(["relay-host", "worker"])
+                .unwrap()
+                .source_timing_diagnostics
+        );
+        for args in [
+            vec![
+                "relay-host",
+                "--source-timing-diagnostics",
+                "service",
+                "run",
+            ],
+            vec!["relay-host", "worker", "--source-timing-diagnostics"],
+            vec![
+                "relay-host",
+                "capture-source",
+                "--pipe",
+                "test",
+                "--display",
+                "test",
+                "--width",
+                "1",
+                "--height",
+                "1",
+                "--source-timing-diagnostics",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).unwrap().source_timing_diagnostics);
+        }
+    }
 }

@@ -209,6 +209,51 @@ post-attach revalidation, and the capture adapter/size check. Anything that
 actually changes the displays needs the real machine; `encoder-caps` exercises
 the NVENC calls on it without changing any.
 
+### Source timing diagnostics
+
+`--source-timing-diagnostics` enables bounded local diagnostics for missing
+source timing. It is off by default and changes neither timestamps nor
+validation. For an elevated dev host, with the installed service already
+stopped, add it to the safe primary-monitor command:
+
+```powershell
+target\release\relay-host.exe --no-vdd --port 18468 --source-timing-diagnostics
+```
+
+For SYSTEM, put the flag on the service supervisor's command line
+(`relay-host.exe --source-timing-diagnostics service run`). The supervisor
+passes it explicitly to workers, and each worker passes it to its user WGC
+helper; their environment blocks do not reliably inherit service variables.
+Changing or installing the service is a separate deployment step.
+
+Each process creates `%TEMP%\relay-source-timing-<PID>.log`; the SYSTEM and
+signed-in-user temp directories can differ. The host log reports the worker
+diagnostic path and capture-helper PID. Existing files are not overwritten;
+a logging failure disables diagnostics without failing capture.
+
+A startup source sample and then five-second summaries distinguish
+missing/invalid/future/known source stamps
+at submit; empty/partial helper metadata, mutex contention, rejected or
+backwards records; and known/unknown source stamps in successfully written
+FRAME_TIMING_EXT records. Poll counts are observations, not frame counts.
+Future-source lead has count/mean/max and histogram bounds at
+100/250/500/1,000/2,000/5,000/10,000 µs, plus an overflow bucket.
+
+Match helper sequence/source QPC between helper and submit logs, then local
+capture/picture IDs through encoder output to wire sequence. Samples record
+raw WGC 100 ns time where it exists, converted source QPC/µs, observation/
+acquisition context and submit/send times. Acquisition is never a substitute
+source stamp. The header records QPC frequency; summary `unix_us` is logger
+wall time, while sample/interval times use the host QPC clock.
+
+Sampling selects helper sequence 1 and multiples of 64 (picture multiples
+of 64 on direct/DDA capture), at most 16 samples per stage per interval. Capture
+threads update fixed buffers and `try_send` to an eight-summary queue; a
+separate thread formats/writes after shared GPU slots have been released.
+A stalled logger drops summaries (`dropped_summaries`) instead of waiting
+on video. Files stop at 8 MiB per process; shutdown/crash can omit the last
+partial interval. TCP/TXT and the local GPU-sharing pipe record are unchanged.
+
 ### 10-bit SDR precision
 
 The 10-bit toggle controls the virtual display (SDR10bit=true, HDRPlus=false)
@@ -426,6 +471,7 @@ learns within seconds that the tray forgot it.
 | [`gpu.rs`](src/gpu.rs) | GPU enumeration; telling the real GPU from the driver's look-alike adapter; NVIDIA-only selection |
 | [`nvenc_caps.rs`](src/nvenc_caps.rs) | The NVENC capability record and its checks (pure; filled by `native_nvenc::query_caps`) |
 | [`native_nvenc.rs`](src/native_nvenc.rs) | In-process D3D11/NVENC capture, cadence, capability query, real input resource preflight |
+| [`source_timing.rs`](src/source_timing.rs) | Opt-in bounded async source-timestamp diagnostics and local picture associations |
 | [`sdr_capture.rs`](src/native_nvenc/sdr_capture.rs) | WGC FP16 SDR capture and GPU conversion to RGB10 |
 | [`precision.rs`](src/bin/precision.rs) | Native desktop pixel precision/cursor/dump diagnostic |
 | [`cursor_overlay.rs`](src/cursor_overlay.rs) | Drawing the Windows cursor into the frame on the GPU |

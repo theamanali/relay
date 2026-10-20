@@ -353,7 +353,51 @@ interval. Existing aggregate logs cannot distinguish missing WGC/helper
 metadata from rejected future/invalid source stamps. They do not establish
 the exact cause or justify relaxing validation. Fullscreen Valorant gameplay,
 the matched 8-bit DDA comparison and raw timestamp/rejection diagnostics
-remain pending. Scratch traces are being preserved for the next PC step.
+remain pending. Scratch traces are preserved in the Mac checkout's ignored
+`client/.build/gaming-20261020/` (Mac/PC logs, exact pattern phases and
+`MotionControl.cs`). The user subsequently selected controlled animation/video
+instead of Valorant because the game interferes with injected mouse input;
+the deterministic pattern is the workload for further traces.
+
+The user explicitly expanded the original client-only scope to permit host
+diagnostic changes. `--source-timing-diagnostics` opts into bounded async
+helper/broker/submit/wire counters and raw samples; service → worker → user
+helper propagation is explicit. No TCP/TXT/helper-pipe format change and no
+timestamp/validation correction. Windows verification: 249 library tests
+(3 hardware tests ignored), 2 probe tests, the process-role CLI test and
+pairing integration pass; strict all-target Clippy and release build pass.
+The verified release executable SHA-256 is
+`E0259BAD75C7F9072E54F1342E437277FB96EE9EF7147E2C2DAF990369118025`.
+Read-only NVIDIA encoder-capability checks and non-exclusive capture checks
+pass: direct WGC/RGB10, shared-helper WGC/RGB10, 8-bit HEVC and H.264. Both
+8-bit controls retain 12/12 ordered known source stamps; the RGB10 numeric
+controls retain 64/64 codes with max RGB error 0. These short native encoder
+checks use 30 fps, Best, 200 Mbps, not the affected 120 Hz session settings.
+
+Diagnostics already separate future stamps in short probes: an initial
+direct run had 3/12 future stamps (mean lead 2,221 µs, max 2,337), and an
+initial shared run had 4/12 (mean 1,974, max 3,765). The final build's shared
+run has 11/12 known and 1/12 future (204 µs). No invalid/backwards/rejected
+metadata or dropped diagnostic summaries occurred in those logged runs.
+The full 120 Hz failure's rejection distribution is not established yet.
+
+The final helper/parent trace verifies same-picture raw-clock propagation:
+helper PID 28612 sequence 1 reports raw 100 ns **275767249999**, QPC frequency
+**10000000**, source µs **27576724999**, observation/acquisition µs
+**27576720200** (source is **4,799 µs ahead** at acquisition). Parent PID
+4044 broker consumes that same QPC/sequence; capture ID 2, picture 0 submits
+at **27576727451**, so that particular picture is valid by submit. This
+demonstrates both a raw future-at-acquisition observation and correct
+cross-process conversion/association; it is not evidence that every future
+stamp survives until submit, or proof of why WGC supplies that value.
+Startup samples are queued promptly so short-lived helper processes can
+leave raw evidence; later summaries are bounded to five-second intervals.
+
+The installed service is unchanged (`09E95E2D…E3E276`). A full SYSTEM-worker
+120 Hz controlled-animation trace, wire/Mac correlation and the matched
+8-bit comparison require the next temporary diagnostic deployment. No
+timing correction or universal recovery/measurement claim is made.
+Limits and correlation: `host/README.md#source-timing-diagnostics`.
 
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 

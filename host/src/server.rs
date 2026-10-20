@@ -1302,6 +1302,7 @@ fn pump(
     let mut restart_attempts = 0u32;
     let mut last_reassert: Option<Instant> = None;
     let mut frame_sequence = 0u64;
+    let mut source_reporter = crate::source_timing::Reporter::new("wire");
     let mut congestion = CongestionWindow::new();
 
     loop {
@@ -1493,6 +1494,23 @@ fn pump(
                 last_input_us,
             };
             tx.send(msg::FRAME_TIMING_EXT, 0, &ext.payload())?;
+            if let (Some(reporter), Some(timing)) = (&mut source_reporter, au.timing) {
+                if let Some(trace) = timing.source_trace {
+                    reporter.record(crate::source_timing::Sample {
+                        reason: if ext.present_us == UNKNOWN_TIME {
+                            crate::source_timing::Reason::SentUnknown
+                        } else {
+                            crate::source_timing::Reason::SentKnown
+                        },
+                        trace: trace.trace(),
+                        source_us: (ext.present_us != UNKNOWN_TIME).then_some(ext.present_us),
+                        submit_us: Some(ext.submit_us),
+                        sent_us: Some(ext.sent_us),
+                        wire_sequence: Some(frame_sequence),
+                        observed_us: crate::clock::now_us(),
+                    });
+                }
+            }
         } else if frame_sequence.is_multiple_of(FRAME_TIMING_INTERVAL) {
             let timing = FrameTiming {
                 sequence: frame_sequence,

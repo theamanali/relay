@@ -100,6 +100,7 @@ pub(super) struct Broker {
     texture: ID3D11Texture2D,
     mutex: IDXGIKeyedMutex,
     previous: Option<FrameStamp>,
+    diagnostics: Option<Reporter>,
 }
 
 impl Broker {
@@ -176,7 +177,7 @@ impl Broker {
         let resource: IDXGIResource1 = texture.cast()?;
         let shared = unsafe { resource.CreateSharedHandle(None, 0x80000001, PCWSTR::null()) }?;
         // DXGI_SHARED_RESOURCE_READ | WRITE = 0x80000000 | 1.
-        let args = vec![
+        let mut args = vec![
             "capture-source".into(),
             "--pipe".into(),
             pipe_name,
@@ -187,6 +188,9 @@ impl Broker {
             "--height".into(),
             height.to_string(),
         ];
+        if crate::source_timing::enabled() {
+            args.push("--source-timing-diagnostics".into());
+        }
         let process = crate::service::spawn_capture_user(&args);
         let result = (|| -> Result<Self> {
             let process = process?;
@@ -197,6 +201,7 @@ impl Broker {
                 texture,
                 mutex,
                 previous: None,
+                diagnostics: Reporter::new("broker"),
             };
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
@@ -294,10 +299,39 @@ impl Broker {
                 None,
             )
         }?;
-        let Some(stamp) = FrameStamp::parse(&bytes[..count as usize], self.previous)? else {
+        let parsed = FrameStamp::parse(&bytes[..count as usize], self.previous);
+        if parsed.is_err() {
+            let candidate =
+                (count as usize >= FRAME_LEN && bytes[..8] == *FRAME_TAG).then(|| FrameStamp {
+                    sequence: u64::from_le_bytes(bytes[8..16].try_into().expect("full record")),
+                    present_qpc: i64::from_le_bytes(bytes[16..24].try_into().expect("full record")),
+                });
+            let reason = match candidate {
+                Some(stamp) if stamp.present_qpc <= 0 => Reason::Invalid,
+                Some(stamp)
+                    if self
+                        .previous
+                        .is_some_and(|p| stamp.present_qpc < p.present_qpc) =>
+                {
+                    Reason::Backwards
+                }
+                _ => Reason::Rejected,
+            };
+            self.observe(reason, candidate);
+        }
+        let Some(stamp) = parsed? else {
+            self.observe(
+                if count == 0 {
+                    Reason::Empty
+                } else {
+                    Reason::Partial
+                },
+                None,
+            );
             return Ok(None);
         };
         if !acquire(&self.mutex, 1)? {
+            self.observe(Reason::Busy, Some(stamp));
             return Ok(None);
         }
         // Only this thread reads the pipe; the full record was available
@@ -312,7 +346,24 @@ impl Broker {
         }
         copied?;
         self.previous = Some(stamp);
+        // Recording occurs only after releasing the shared GPU slot.
+        self.observe(Reason::Published, Some(stamp));
         Ok(Some(stamp.present_qpc))
+    }
+    pub(super) fn last_sequence(&self) -> Option<u64> {
+        self.previous.map(|stamp| stamp.sequence)
+    }
+    fn observe(&mut self, reason: Reason, stamp: Option<FrameStamp>) {
+        if let Some(reporter) = &mut self.diagnostics {
+            reporter.record(Sample::capture(
+                reason,
+                Trace {
+                    helper_sequence: stamp.map(|s| s.sequence),
+                    source_qpc: stamp.map(|s| s.present_qpc),
+                    ..Trace::default()
+                },
+            ));
+        }
     }
 }
 impl Drop for Broker {
@@ -377,18 +428,34 @@ pub fn run(pipe_name: &str, display: &str, width: u32, height: u32) -> Result<()
         raise_thread_priority("sdr-user-capture");
         let sleeper = HighResSleeper::new();
         let mut sequence = 0u64;
+        let mut diagnostics = Reporter::new("wgc-helper");
         loop {
             if crate::desktop::input_desktop_name() != desktop {
                 bail!("capture desktop changed");
             }
             unsafe { PeekNamedPipe(handle(&pipe), None, 0, None, None, None) }?;
             if let Some(frame) = capture.latest()? {
+                let timing = frame.timing(crate::clock::qpc_frequency());
+                if timing.is_err() {
+                    if let Some(reporter) = &mut diagnostics {
+                        reporter.record(Sample::capture(Reason::Invalid, Trace::default()));
+                    }
+                }
+                let (raw_100ns, present_qpc) = timing?;
                 let stamp = FrameStamp {
                     sequence: sequence
                         .checked_add(1)
                         .context("capture sequence exhausted")?,
-                    present_qpc: frame.present_qpc(crate::clock::qpc_frequency())?,
+                    present_qpc,
                 };
+                let trace = diagnostics.as_ref().map(|_| Trace {
+                    helper_sequence: Some(stamp.sequence),
+                    raw_100ns: Some(raw_100ns),
+                    source_qpc: Some(present_qpc),
+                    acquired_us: Some(crate::clock::now_us()),
+                    fresh: true,
+                    ..Trace::default()
+                });
                 if acquire(&mutex, 0)? {
                     let published = (|| -> Result<()> {
                         converter.convert(&context, &frame.texture()?)?;
@@ -404,7 +471,14 @@ pub fn run(pipe_name: &str, display: &str, width: u32, height: u32) -> Result<()
                     }
                     published?;
                     sequence = stamp.sequence;
+                    if let (Some(reporter), Some(trace)) = (&mut diagnostics, trace) {
+                        reporter.record(Sample::capture(Reason::Published, trace));
+                    }
+                } else if let (Some(reporter), Some(trace)) = (&mut diagnostics, trace) {
+                    reporter.record(Sample::capture(Reason::Busy, trace));
                 }
+            } else if let Some(reporter) = &mut diagnostics {
+                reporter.record(Sample::capture(Reason::Empty, Trace::default()));
             }
             sleeper.sleep(Duration::from_micros(200));
         }

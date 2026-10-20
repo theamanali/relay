@@ -223,7 +223,11 @@ impl Frame {
         unsafe { access.GetInterface() }.context("WGC D3D11 surface")
     }
     pub(super) fn present_qpc(&self, frequency: i64) -> Result<i64> {
-        system_relative_to_qpc(self.0.SystemRelativeTime()?.Duration, frequency)
+        self.timing(frequency).map(|(_, qpc)| qpc)
+    }
+    pub(super) fn timing(&self, frequency: i64) -> Result<(i64, i64)> {
+        let raw = self.0.SystemRelativeTime()?.Duration;
+        Ok((raw, system_relative_to_qpc(raw, frequency)?))
     }
 }
 

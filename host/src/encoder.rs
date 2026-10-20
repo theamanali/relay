@@ -318,6 +318,8 @@ pub struct EncoderTiming {
     pub present_us: u64,
     /// Host clock when the picture was submitted to the encoder.
     pub submit_us: u64,
+    /// Opt-in local association for diagnostics; not part of any wire record.
+    pub(crate) source_trace: Option<crate::source_timing::TraceTag>,
 }
 
 type Native = crate::native_nvenc::NativeNvenc;

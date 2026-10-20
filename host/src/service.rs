@@ -467,14 +467,17 @@ impl Supervisor {
         let quit_event = create_quit_event(session)?;
         // CreateEnvironmentBlock does not inherit service test variables.
         // Carry this safe diagnostic mode explicitly into the worker CLI.
-        let args: &[&str] = if WORKER_NO_VDD.load(std::sync::atomic::Ordering::Relaxed)
+        let mut args: Vec<&str> = if WORKER_NO_VDD.load(std::sync::atomic::Ordering::Relaxed)
             || crate::test_fault("no-vdd")
         {
-            &["--no-vdd", "worker"]
+            vec!["--no-vdd", "worker"]
         } else {
-            &["worker"]
+            vec!["worker"]
         };
-        let process = match spawn_in_session(session, args) {
+        if crate::source_timing::enabled() {
+            args.push("--source-timing-diagnostics");
+        }
+        let process = match spawn_in_session(session, &args) {
             Ok(p) => p,
             Err(e) => {
                 unsafe {

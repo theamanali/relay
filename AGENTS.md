@@ -125,6 +125,22 @@ README status and here. Do not create other handoff or retest files.
   foreground app/closed video apps; cause remains unresolved. Exact commands/builds,
   real-PC results and remaining user checks are in SESSION-HANDOFF.md.
 
+- Source-timing investigation (2026-10-20): a timed desktop checkerboard
+  reproduces missing source timing outside Valorant: 3,000 encoded pictures,
+  1,485 marked fresh, no known source ages in 25 s, while the Mac remains
+  synced at ~120 fps. Loss is already in PC encoder telemetry. User authorized
+  host diagnostics and selected controlled animation/video instead of game
+  input. `--source-timing-diagnostics` adds opt-in bounded async raw/counter
+  logs across WGC helper/broker/submit/wire, with local picture associations;
+  no wire/TXT/helper-pipe or timestamp-validation change. 249 library tests
+  + 2 probe tests + CLI/integration, strict Clippy, release build, read-only
+  NVENC caps and non-exclusive direct/shared RGB10 plus 8-bit HEVC/H.264
+  checks pass. Final diagnostic release SHA-256 `E0259BAD…69118025`;
+  installed service remains `09E95E2D…E3E276`. Short probes count real
+  future stamps; raw helper sampling confirms correct clock conversion and
+  association. Full SYSTEM/120 Hz diagnostic trace and an evidence-backed
+  correction remain pending in SESSION-HANDOFF.md.
+
 - Platform migration 2026-10-10: Mac SwiftUI/Swift 6, Apple silicon/macOS 14,
   mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
   picker restoration below), isolated

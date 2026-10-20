@@ -46,6 +46,7 @@ use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Qua
 use crate::gpu::{GpuInfo, Luid};
 use crate::nvenc_caps::{codec_label, CodecCaps, EncoderCaps, Profile};
 use crate::protocol::{Codec, UNKNOWN_TIME};
+use crate::source_timing::{self, Reason, Reporter, Sample, Trace};
 pub mod precision;
 mod sdr_capture;
 pub(crate) use sdr_capture::is_system as is_system_process;
@@ -603,6 +604,7 @@ struct CaptureInfo {
     present_us: u64,
     /// Host clock when NvEncEncodePicture returned.
     submit_us: u64,
+    source_trace: Option<source_timing::TraceTag>,
 }
 
 /// WGC can report a compositor timestamp slightly ahead of CPU submission
@@ -675,6 +677,8 @@ struct CaptureLoop {
     /// DWM's QPC present time for content acquired since the last submit, when
     /// DWM reported one (cursor-only updates do not carry a present time).
     pending_present_qpc: Option<i64>,
+    source_reporter: Option<Reporter>,
+    pending_trace: Trace,
     /// GPU work done for the pending content since the last submit.
     pending_work: Duration,
     /// When the next picture goes to NVENC. Steady at `frame_interval`, with
@@ -926,6 +930,12 @@ impl NativeNvenc {
             have_frame: false,
             dirty: false,
             pending_present_qpc: None,
+            source_reporter: Reporter::new(match capture_mode {
+                CaptureMode::Desktop10 => "submit-wgc",
+                CaptureMode::Desktop8 => "submit-dda",
+                CaptureMode::Secure8 => "submit-secure-dda",
+            }),
+            pending_trace: Trace::default(),
             pending_work: Duration::ZERO,
             next_tick: None,
             last_tick_fresh: false,
@@ -1044,6 +1054,7 @@ impl NativeNvenc {
                 encode: completed.encode_latency,
                 present_us: completed.capture.present_us,
                 submit_us: completed.capture.submit_us,
+                source_trace: completed.capture.source_trace,
             });
         }
         let result = completed.result.map(Some);
@@ -1511,7 +1522,14 @@ impl CaptureLoop {
                     .as_ref()
                     .expect("direct converter")
                     .convert(&self.context, &frame.texture()?)?;
-                self.pending_present_qpc = Some(frame.present_qpc(self.qpc_frequency)?);
+                if self.source_reporter.is_some() {
+                    let (raw, qpc) = frame.timing(self.qpc_frequency)?;
+                    self.pending_present_qpc = Some(qpc);
+                    self.pending_trace.raw_100ns = Some(raw);
+                    self.pending_trace.acquired_us = Some(crate::clock::now_us());
+                } else {
+                    self.pending_present_qpc = Some(frame.present_qpc(self.qpc_frequency)?);
+                }
                 true
             } else {
                 false
@@ -1519,6 +1537,10 @@ impl CaptureLoop {
         } else if let Some(capture) = &mut self.broker_capture {
             if let Some(present_qpc) = capture.copy_latest(&self.context, &path.texture)? {
                 self.pending_present_qpc = Some(present_qpc);
+                if self.source_reporter.is_some() {
+                    self.pending_trace.helper_sequence = capture.last_sequence();
+                    self.pending_trace.acquired_us = Some(crate::clock::now_us());
+                }
                 true
             } else {
                 false
@@ -1594,6 +1616,9 @@ impl CaptureLoop {
         // LastPresentTime is 0 when only the cursor changed.
         if info.LastPresentTime != 0 {
             self.pending_present_qpc = Some(info.LastPresentTime);
+            if self.source_reporter.is_some() {
+                self.pending_trace.acquired_us = Some(crate::clock::now_us());
+            }
         }
         self.have_frame = true;
         self.dirty = true;
@@ -1685,6 +1710,30 @@ impl CaptureLoop {
         };
         let age = self.pending_present_qpc.map(|qpc| self.qpc_age(qpc));
         let present_us = frame_present_us(self.pending_present_qpc, submit_us);
+        let source_trace = self.source_reporter.as_mut().map(|reporter| {
+            let trace = Trace {
+                capture_id: reporter.id,
+                picture: self.frame_idx,
+                source_qpc: self.pending_present_qpc,
+                fresh: self.dirty,
+                ..self.pending_trace
+            };
+            let source_us = self.pending_present_qpc.map(crate::clock::qpc_to_us);
+            reporter.record(Sample {
+                reason: source_timing::source_reason(
+                    self.pending_present_qpc,
+                    source_us,
+                    submit_us,
+                ),
+                trace,
+                source_us,
+                submit_us: Some(submit_us),
+                sent_us: None,
+                wire_sequence: None,
+                observed_us: submit_us,
+            });
+            trace.tag()
+        });
         let info = CaptureInfo {
             work: self.pending_work + work_start.elapsed(),
             age: (present_us != UNKNOWN_TIME)
@@ -1695,6 +1744,7 @@ impl CaptureLoop {
             // contract; never substitute acquisition or pipe arrival time.
             present_us,
             submit_us,
+            source_trace,
         };
         if self
             .worker_tx
@@ -1710,6 +1760,7 @@ impl CaptureLoop {
         self.frame_idx = self.frame_idx.wrapping_add(1);
         self.dirty = false;
         self.pending_present_qpc = None;
+        self.pending_trace = Trace::default();
         self.pending_work = Duration::ZERO;
         Ok(age)
     }

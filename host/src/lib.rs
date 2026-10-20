@@ -21,6 +21,7 @@ pub mod protocol;
 pub mod scale;
 pub mod server;
 pub mod service;
+pub mod source_timing;
 pub mod status;
 pub mod sysinfo;
 pub mod topology;
