@@ -232,6 +232,23 @@ README status and here. Do not create other handoff or retest files.
   later times are 2026-10-18 UTC. Detailed Mac evidence:
   `client/README.md#worker-crash-rediscovery-finding-6`. The PC session owns
   updates to `host/NVIDIA-RECOVERY-RETEST.md`.
+  Retested 2026-10-20 Pacific on clean `24533c1`, Relay build 319
+  (`e2c9ee61…a4f50802`), installed host `09E95E2D…E3E276`, home LAN.
+  Idle kill + gap Connect kept the row and streamed without PIN; that dial
+  succeeded, so it did not exercise failed-dial recovery. Mid-session kill
+  reproduced the stale app TXT: reset 01:10:53.468; mDNSResponder TXT
+  remove/add 01:11:00.985; resolve full TXT 01:11:00.986, old browser
+  TXT-less 01:11:00.987; row removed 01:11:03.719; restart 01:11:06.343;
+  generation 2 restored full TXT/key and row 01:11:06.378 (12.9 s after
+  reset, 2.7 s after removal), PIN-free stream 01:11:10.401. PTR never
+  left the auxiliary browse; physical monitors restored normally. The app
+  was relaunched between tests only to capture stderr, never as recovery.
+  Existing `232805f` needs no runtime change for this reproduction. Fresh
+  208 Swift tests, 23 isolated pairing checks and fakehost SIGKILL/restart
+  smoke pass (forced recovery, generation 2, same-key PIN-free verification,
+  other PC preserved; local advertiser cannot reproduce remote flush).
+  Evidence: ignored `client/.build/f6-20261020/`; detailed README results
+  retain the earlier slow PTR-flush case and unproven universal 30 s bound.
 - Phase C (2026-10-17, handoff steps 6–7; `391f815`, `e5b2ecd`, `c537ee5`):
   one native backend. `Encoder::retire` counts teardowns in `RETIREMENTS`
   and `Encoder::spawn` waits up to 3 s for them, then retries `NativeNvenc::spawn`

@@ -399,6 +399,37 @@ the final mid-session repeat; `dns-sd -L` and mDNSResponder logging continued.
 These checks establish recovery without reopening or losing pairing, not a
 universal 30-second bound. Direct TCP to the PC succeeded during the slow case.
 
+Retest on **2026-10-20 Pacific**, home LAN, M3 Pro/macOS 27.0 (26A428),
+clean checkout `24533c1`, existing recovery implementation `232805f`:
+Relay build **319**, binary SHA-256
+`e2c9ee6188beecd298dbf60d7f4ec4877760806be89c5471e4912c3ba4f50802`.
+Installed host SHA-256, read from the PC:
+`09E95E2D9F4B97EC3479F6BCF1D51B8A145E3095EF1B86E13D8BBF22F1E3E276`.
+No runtime change was needed for this retest. Terminal ran simultaneous
+`dns-sd -B _relay._tcp local.`, `dns-sd -L "GAMING-PC" _relay._tcp local.`,
+mDNSResponder `log stream --info` and Relay log captures.
+
+| case | observed result (Pacific time) |
+|---|---|
+| F6b 1, idle kill + Connect in the gap | PC logged worker exit 01:08:08.253, replacement advertising 01:08:13.615 and client accepted 01:08:13.859. Resolver returned full TXT 01:08:14.841; no PTR Rmv. User confirmed the row stayed and streaming resumed without a PIN. This successful dial did not exercise failed-dial recovery. Relay's own diagnostic output was unavailable for this leg; its stderr was redirected before test 2. |
+| F6b 2, mid-session kill, stuck TXT reproduced | Connection reset 01:10:53.468. mDNSResponder delivered TXT remove/add on both interfaces 01:11:00.985; `dns-sd -L` returned full TXT with the same `pk`/`pg` 01:11:00.986, but browser generation 1 reported `txt=false,key=false` 01:11:00.987. Row removed 01:11:03.719; recovery restarted the browser 01:11:06.343; generation 2 returned full TXT/key and the row 01:11:06.378: **12.9 s after reset, 2.7 s after removal**. PTR stayed in `dns-sd -B`. Reconnect streamed 01:11:10.401; user confirmed no PIN and normal physical-monitor restoration. Relay was not reopened between this kill and reconnect. |
+
+The mid-session result independently confirms the app-side stale browser
+TXT result and the existing fix, even with the auxiliary browse active.
+Relay was relaunched once between the two tests solely to capture its stderr;
+this was not needed for recovery. Both real sessions used HEVC 4:4:4 10-bit,
+3024×1964@120, Fastest, 120 Mbps, VSync off. The older slow PTR-flush result
+and the unproven universal 30-second bound above still apply.
+
+Fresh local verification: **208 Swift tests**, all **23** isolated
+`Tools/test-pair-name.sh` checks, and an isolated production-browser smoke
+check passed. The smoke check SIGKILLed fakehost, explicitly triggered
+failed-dial recovery, observed browser generation 2, restarted the same fake
+identity in `--paired` mode and verified it without a PIN. Its saved client
+key survived and GAMING-PC stayed visible through the restart. The local
+advertiser remained alive, so this does not reproduce a remote cache flush.
+Evidence is preserved under ignored `client/.build/f6-20261020/`.
+
 ### `fakehost`: a fake PC
 
 [`Tools/fakehost/main.swift`](Tools/fakehost/main.swift) runs the real v4
