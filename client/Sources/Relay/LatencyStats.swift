@@ -261,7 +261,8 @@ final class LatencyStats: @unchecked Sendable {
         var inputApplied = Stage(LatencyHistogram())
         /// Video data arriving, in Mbps, and the bitrate the PC was asked for.
         var receivedMbps: Double?
-        /// Desktop → screen per frame, oldest first; empty without clock sync.
+        /// Desktop → screen per shown frame, oldest first. Missing-source
+        /// frames carry the last real value only within its rolling window.
         var desktopSparkline: [Double] = []
         /// PC minus Mac, and the delay of the exchange it came from.
         var clockOffsetMs: Double?
@@ -308,12 +309,12 @@ final class LatencyStats: @unchecked Sendable {
     private var desktopSparkline = RecentSamples(capacity: sparklineFrames)
     /// Last completed desktop → screen measurement, carried forward in the
     /// sparkline during static re-encodes so the visual keeps scrolling.
-    private var lastDesktopToScreenMs: Double?
+    private var lastDesktopToScreen: (milliseconds: Double, nanos: UInt64)?
     private var toScreenTimeline = SecondMedians()
     private var desktopTimeline = SecondMedians()
-    /// A frame's PC present (Mac µs) and its Metal presentation meet here,
-    /// whichever arrives first; keyed by the Mac's FRAME sequence.
-    private var pendingShown: [UInt64: (present: Int64?, shown: Int64?)] = [:]
+    /// A frame's timing result (possibly missing PC present) and its Metal
+    /// presentation meet here, in either order; keyed by the Mac's sequence.
+    private var pendingShown: [UInt64: (timingReceived: Bool, present: Int64?, shown: Int64?)] = [:]
     private var sessionToScreen = LatencyHistogram()
     private var sessionDecode = LatencyHistogram()
     private var sessionHost = LatencyHistogram()
@@ -354,7 +355,7 @@ final class LatencyStats: @unchecked Sendable {
             clock = nil
             clockReplies = 0
             desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
-            lastDesktopToScreenMs = nil
+            lastDesktopToScreen = nil
             toScreenTimeline = SecondMedians()
             desktopTimeline = SecondMedians()
             pendingShown = [:]
@@ -384,14 +385,6 @@ final class LatencyStats: @unchecked Sendable {
             sessionToScreen.record(ms)
             sparkline.append(ms)
             toScreenTimeline.record(ms, second: second(of: nanos))
-            // Carry the last real desktop → screen value forward so the
-            // sparkline keeps scrolling during static re-encodes.
-            if desktopToScreen.merged(at: nanos).count > 0, let last = lastDesktopToScreenMs {
-                desktopSparkline.append(last, at: nanos)
-            } else if lastDesktopToScreenMs != nil {
-                lastDesktopToScreenMs = nil
-                desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
-            }
         }
     }
 
@@ -458,8 +451,9 @@ final class LatencyStats: @unchecked Sendable {
             if let ms = timing.encodeSendMs { encodeSend.record(ms, at: nanos); sessionEncodeSend.record(ms) }
             if let ms = timing.contentAgeMs { contentAge.record(ms, at: nanos); sessionContentAge.record(ms) }
             if let ms = timing.sentToReceivedMs { sentToReceived.record(ms, at: nanos); sessionSentToReceived.record(ms) }
-            guard let present = timing.presentMacMicros else { return }
-            join(timing.sequence, present: present, shown: nil, at: nanos)
+            // A missing source stamp is also a completed timing result. Wait
+            // for this frame's presentation before carrying a graph point.
+            join(timing.sequence, timingReceived: true, present: timing.presentMacMicros, shown: nil, at: nanos)
         }
     }
 
@@ -478,26 +472,37 @@ final class LatencyStats: @unchecked Sendable {
     }
 
     /// Under the lock.
-    private func join(_ sequence: UInt64, present: Int64?, shown: Int64?, at nanos: UInt64) {
-        var entry = pendingShown[sequence] ?? (nil, nil)
+    private func join(_ sequence: UInt64, timingReceived: Bool = false, present: Int64?, shown: Int64?, at nanos: UInt64) {
+        var entry = pendingShown[sequence] ?? (false, nil, nil)
+        if timingReceived { entry.timingReceived = true }
         if let present { entry.present = present }
         if let shown { entry.shown = shown }
-        if let p = entry.present, let s = entry.shown {
+        if entry.timingReceived, let s = entry.shown {
             pendingShown[sequence] = nil
-            let ms = Double(s - p) / 1_000
-            guard ms.isFinite, ms >= 0 else { return }
-            if desktopToScreen.merged(at: nanos).count == 0 {
+            // Match LatencyWindow's per-second expiry, using only the last
+            // real measurement. Carried graph points never renew its age.
+            if let last = lastDesktopToScreen,
+               last.nanos / 1_000_000_000 + UInt64(Self.windowSeconds) <= nanos / 1_000_000_000 {
+                lastDesktopToScreen = nil
                 desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
             }
+            guard let p = entry.present else {
+                if let last = lastDesktopToScreen {
+                    desktopSparkline.append(last.milliseconds, at: nanos)
+                }
+                return
+            }
+            let ms = Double(s - p) / 1_000
+            guard ms.isFinite, ms >= 0 else { return }
             desktopToScreen.record(ms, at: nanos)
             sessionDesktopToScreen.record(ms)
-            lastDesktopToScreenMs = ms
+            lastDesktopToScreen = (ms, nanos)
             desktopSparkline.append(ms, at: nanos)
             desktopTimeline.record(ms, second: second(of: nanos))
             return
         }
         pendingShown[sequence] = entry
-        // Replaced frames are never shown, re-encoded ones have no present:
+        // Replaced frames are never shown; some frames have no timing reply:
         // forget anything well behind the newest.
         if pendingShown.count > 256 {
             pendingShown = pendingShown.filter { $0.key + 128 > sequence }

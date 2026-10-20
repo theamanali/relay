@@ -101,7 +101,8 @@ README status and here. Do not create other handoff or retest files.
 
 
 - Mac SDR timing/precision follow-up (2026-10-19; `1181e72`): HUD sync
-  comes from ClockSync state, independently of five-second source samples.
+  comes from ClockSync state, independently of source samples (the rolling
+  window is ten seconds since `4e04071`).
   Synced idle streams use receive → screen with “source timing idle”; fresh
   source timing resumes without reconnecting. Submit → sent is a separate
   Encode & send metric in HUD/report, independent of source/sync; PC work
@@ -114,9 +115,12 @@ README status and here. Do not create other handoff or retest files.
   Isolated fakehost static/moving/recovery/moving/static keeps 21 clock
   replies across an actual two-second frame gap. `f91377a` also rejects a
   drawable of the wrong depth if the mailbox changes streams during its wait.
-  Desktop sparkline points expire in the same five-second window, including
-  after sparse-source idle/resume. 206 Swift tests, debug/release builds and
-  bundle signature verification pass.
+  Desktop sparkline points expire with the rolling window, including
+  after sparse-source idle/resume. The 2026-10-20 correction joins timing
+  (including missing source stamps) and presentation by frame sequence to
+  append one real or carried point per displayed frame, in either callback
+  order. Carried points never enter histograms or renew real sample age.
+  208 Swift tests, debug/release builds and bundle signature verification pass.
   Initial real-PC 8-bit run showed variable presentation stalls despite a
   foreground app/closed video apps; cause remains unresolved. Exact commands/builds,
   real-PC results and remaining user checks are in SESSION-HANDOFF.md.
@@ -873,7 +877,7 @@ documented there. What follows is only the mechanics that are easy to break:
   `NSEvent.timestamp` → `sendRaw` on the connection queue (both
   `systemUptime`). The read pattern is unchanged: no extra read per frame.
   `LatencyStats` records into fixed 0.1 ms histograms (per-second ring for the
-  5 s HUD window, plus whole-session); `takeSessionReport` runs once per
+  10 s HUD window, plus whole-session); `takeSessionReport` runs once per
   STREAM_START on the first end path, logs `Session report:` and opens the
   report window when `showSessionReport` is set (settings: Show session
   report on disconnect; default off and independent of the HUD since

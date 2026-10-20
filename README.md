@@ -190,7 +190,7 @@ submission, remain unknown rather than receiving an invented time. Earlier claim
 that 10-bit was free measured an **8-bit capture encoded into Main10**.
 
 The Mac HUD now uses accepted ClockSync exchanges independently of source
-samples. After the five-second source window empties it shows “Receive →
+samples. After the ten-second source window empties it shows “Receive →
 screen, source timing idle”, then resumes Desktop → screen when fresh content
 returns. Encode & send is submit → sent on the PC clock, independently of
 source time and sync; PC work remains capture + encode + send. Both depths use

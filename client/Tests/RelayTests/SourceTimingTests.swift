@@ -58,6 +58,7 @@ final class SourceTimingTests: XCTestCase {
             stats.recordClock(try XCTUnwrap(clock.best))
             stats.record(try frame(sequence: UInt64(t), present: .max), at: UInt64(t) * second)
             stats.recordPresented(milliseconds: 4, at: UInt64(t) * second)
+            stats.recordShown(sequence: UInt64(t), atMicros: Int64(t) * 1_000_000 + 4_000, at: UInt64(t) * second)
         }
         var hud = stats.hudSnapshot(at: 8 * second)
         XCTAssertEqual(hud.desktopToScreen.p50, 10)
@@ -66,6 +67,7 @@ final class SourceTimingTests: XCTestCase {
             stats.recordClock(try XCTUnwrap(clock.best))
             stats.record(try frame(sequence: UInt64(t), present: .max), at: UInt64(t) * second)
             stats.recordPresented(milliseconds: 4, at: UInt64(t) * second)
+            stats.recordShown(sequence: UInt64(t), atMicros: Int64(t) * 1_000_000 + 4_000, at: UInt64(t) * second)
         }
         hud = stats.hudSnapshot(at: 15 * second)
         XCTAssertNotNil(hud.clockOffsetMs)
@@ -91,6 +93,68 @@ final class SourceTimingTests: XCTestCase {
         XCTAssertNil(hud.encodeSend.p50)
         XCTAssertNotNil(hud.clockDelayMs)
         XCTAssertEqual(StatsHUD.Summary(hud).unsyncedNote, "Receive → screen, source timing idle")
+    }
+
+    func testFreshFramesProduceOneSparklinePointInEitherCallbackOrder() throws {
+        for timingFirst in [true, false] {
+            let stats = LatencyStats()
+            stats.reset(at: 0)
+            stats.recordClock(try XCTUnwrap(synced().best))
+            var expected: [Double] = []
+            for sequence: UInt64 in 1...120 {
+                let present = 4_000_000 + sequence * 8_333
+                let latency: UInt64 = sequence.isMultiple(of: 2) ? 12_000 : 10_000
+                let nanos = (present + latency) * 1_000
+                let timing = try frame(sequence: sequence, present: present, submit: present + 1_000,
+                                       sent: present + 4_000, received: present + 5_000)
+                if timingFirst { stats.record(timing, at: nanos) }
+                // The actual presentation callback records these in this order.
+                stats.recordPresented(milliseconds: 5, at: nanos)
+                stats.recordShown(sequence: sequence, atMicros: Int64(present + latency), at: nanos)
+                if !timingFirst { stats.record(timing, at: nanos) }
+                expected.append(Double(latency) / 1_000)
+            }
+            let hud = stats.hudSnapshot(at: 5_100_000_000)
+            XCTAssertEqual(hud.desktopToScreen.count, 120)
+            XCTAssertEqual(hud.desktopSparkline, expected, "timing first: \(timingFirst)")
+        }
+    }
+
+    func testCarryForwardWaitsForMissingTimingAndNeverEntersMeasurements() throws {
+        for timingFirst in [true, false] {
+            let stats = LatencyStats()
+            stats.reset(stream: .widest, at: 0)
+            stats.recordClock(try XCTUnwrap(synced().best))
+            stats.record(try frame(), at: 4 * second)
+            stats.recordShown(sequence: 1, atMicros: 4_010_000, at: 4 * second)
+            let missing = try frame(sequence: 2, present: .max)
+            if timingFirst { stats.record(missing, at: 5 * second) }
+            stats.recordPresented(milliseconds: 4, at: 5 * second)
+            XCTAssertEqual(stats.hudSnapshot(at: 5 * second).desktopSparkline, [10],
+                           "receive → screen alone must not append a desktop point")
+            stats.recordShown(sequence: 2, atMicros: 5_004_000, at: 5 * second)
+            if !timingFirst {
+                XCTAssertEqual(stats.hudSnapshot(at: 5 * second).desktopSparkline, [10],
+                               "a late timing reply may still supply a real measurement")
+                stats.record(missing, at: 5 * second)
+            }
+            // Timing for a decoded frame that was replaced before presentation.
+            stats.record(try frame(sequence: 3, present: .max), at: 5 * second)
+            var hud = stats.hudSnapshot(at: 5 * second)
+            XCTAssertEqual(hud.desktopSparkline, [10, 10])
+            XCTAssertEqual(hud.desktopToScreen.count, 1)
+            XCTAssertEqual(hud.contentAge.count, 1)
+            // Motion resumes within grace: use the real value once, not a carry.
+            stats.record(try frame(sequence: 4, present: 6_000_000, submit: 6_001_000,
+                                   sent: 6_004_000, received: 6_005_000), at: 6 * second)
+            stats.recordPresented(milliseconds: 5, at: 6 * second)
+            stats.recordShown(sequence: 4, atMicros: 6_012_000, at: 6 * second)
+            hud = stats.hudSnapshot(at: 6 * second)
+            XCTAssertEqual(hud.desktopSparkline, [10, 10, 12])
+            let report = try XCTUnwrap(stats.sessionReport(at: 7 * second, counters: .zero))
+            XCTAssertEqual(report.desktopToScreen.count, 2, "carried values are graph-only")
+            XCTAssertEqual(report.contentAge.count, 2)
+        }
     }
 
     func testMissingAndInvalidSyncDoNotClaimSynchronized() throws {

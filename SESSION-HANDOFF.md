@@ -199,54 +199,79 @@ felt jarring during brief pauses, the sparkline appeared stuck when static, and 
 timing idle" engaged even while playing active games like Valorant.
 Client updates:
 1. Extended `windowSeconds` from 5 to 10 seconds across all rolling latency windows.
-2. In `recordPresented`, carried forward `lastDesktopToScreenMs` into `desktopSparkline`
-   for each presented frame while the rolling window is active, keeping the sparkline scrolling
-   continuously during static re-encodes.
-3. Upon grace-window expiration, cleared stale sparkline points so they do not reappear
-   when motion returns. All 206 tests and `test-pair-name.sh` (22 checks) pass; app bundled.
-Investigation of the Valorant issue revealed that the host's strict `time <= submit_us`
-filter drops WGC compositor VSync targets that lead CPU submit (common under game rendering loops).
-Handed off to PC below.
+2. Carried the last real Desktop → screen value forward in the sparkline during
+   static re-encodes. Review on 2026-10-20 found that `recordPresented` also
+   appended a carry for fresh frames: the actual callback order produced 239
+   points for 120 displayed frames. The correction joins each frame's timing
+   result (including a missing source stamp) with its presentation by sequence.
+   A completed join appends either the real measurement or one carried graph
+   point, in either callback order. Carrying never enters histograms/report
+   measurements or extends the real sample's ten-second grace window.
+3. Upon grace-window expiration, cleared stale sparkline points so they do not
+   reappear when motion returns.
 
-### → PC: allow bounded lead for WGC compositor timestamps during gaming (2026-10-19)
+Correction verification (2026-10-20): **208 Swift tests pass**. New regressions
+check 120 real frames → 120 graph points with exact values in both callback
+orders, delayed missing-source timing, replaced frames, motion returning
+within grace, and graph-only carries staying out of report histograms.
+The moving/static/recovery test now exercises both actual presentation calls
+and still checks expiration/resume. Isolated `test-pair-name.sh` passes,
+including the 18-second source/recovery cycle with 21 clock replies and 949
+received frames. Release bundle/signature verification pass. Real-PC gaming
+traces and the existing exclusive qualification remain pending; this Mac
+correction changes no host runtime, protocol or timestamp validation.
+
+The Valorant cause remains unverified. The earlier host diagnostic established
+that WGC can supply a timestamp later than CPU submission on this stack, but
+did not establish why gaming loses source timing or quantify its rejection
+rate. The earlier prescribed tolerance/clamping fix is withdrawn; investigate
+on the PC as described below.
+
+### → PC: investigate missing WGC source timing during gaming (2026-10-20)
 
 **What is needed and why:**
 During fast-paced 3D gaming (e.g. Valorant), the Mac HUD frequently switches to
 "Receive → screen, source timing idle" even though the game is rendering actively at
 high frame rates (60–120+ fps) and video is streaming smoothly.
-Root cause analysis:
-1. In `native_nvenc.rs::frame_present_us`, WGC's `SystemRelativeTime` is the DWM
-   compositor's target VSync timestamp. Under fast rendering and tight frame pacing,
-   this timestamp frequently leads the CPU's `submit_us` by 1–2 ms (a 1,557 µs lead
-   was previously documented in this file).
-2. The host currently enforces `.filter(|&time| time <= submit_us).unwrap_or(UNKNOWN_TIME)`.
-   If `time > submit_us` by even 1 µs, the host marks `present_us = UNKNOWN_TIME`. During
-   Valorant, this filter drops nearly 100% of timestamps.
-3. Once the Mac receives `UNKNOWN_TIME` for the duration of its rolling window (now 10 s),
-   it declares source timing idle.
-4. Additionally, if the game runs in Exclusive Fullscreen or Hardware Independent Flip,
-   DWM can be bypassed, causing DXGI/DDA `LastPresentTime = 0` or WGC to omit composition
-   stamps.
+Microsoft documents `SystemRelativeTime` as the QPC time at which the
+compositor rendered the frame, not as a target VSync timestamp
+([API documentation](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.direct3d11captureframe.systemrelativetime)).
+The earlier 1,557 µs lead is an observation, not evidence of target-VSync
+semantics. `frame_present_us` deliberately rejects stamps after `submit_us`;
+whether this explains the game's missing samples, and at what rate, is unknown.
+Missing/reused source frames, timestamp conversion, helper metadata and
+capture/presentation modes also need to be distinguished with actual traces.
 
 **Steps for the PC session:**
-1. In `host/src/native_nvenc.rs::frame_present_us`, allow WGC compositor timestamps to
-   lead `submit_us` within a bounded window (e.g. up to `MAX_LEAD_US = 20_000`, 20 ms,
-   covering over 1 frame at 60 Hz and 2 frames at 120 Hz).
-2. For content age (`submit_us - present_us`): if `present_us > submit_us`, clamp content
-   age to `0` (or `Duration::ZERO`), reflecting that the frame was captured fresh from
-   the graphics pipeline before display scanout, rather than discarding `present_us`.
-3. Pass the valid `present_us` in `FRAME_TIMING_EXT`.
-4. (Optional/Secondary): If DWM reports `0` (e.g. exclusive fullscreen bypassing DWM),
-   evaluate using the GPU texture acquisition timestamp (`acquire_qpc`) as an active
-   fallback when fresh frames are acquired, rather than leaving `present_us` as `UNKNOWN_TIME`.
-5. Update `docs/PROTOCOL.md` to reflect that `present_us` may lead `submit_us` by up to
-   20 ms for WGC compositor targets, with content age clamped to 0.
-6. Verify with `cargo test`, `probe --timing`, clippy, and install with `install-host.ps1 -SkipDriver`.
-7. Once landed and installed, hand off to Mac to update `FrameEndToEnd.init` tolerance.
+1. Add bounded/opt-in diagnostics around the production WGC/helper → NVENC
+   timing path. For the same picture record raw WGC 100 ns time, converted
+   host QPC µs, helper sequence where applicable, CPU submit/send time and
+   the reason a source stamp is unavailable. Keep acquisition time separate
+   as diagnostic context, never as a substitute source time.
+2. During user-run Valorant sessions and matched desktop controls, record
+   stream depth/chroma, actual capture path, windowed/fullscreen mode, fps
+   and timestamps of static/moving phases. Count fresh/known, reused/missing,
+   future, invalid/backwards and helper-rejected stamps. For future stamps,
+   report lead distribution/max and sample count; correlate the same phases
+   with Mac timing logs and its ten-second source window.
+3. Verify clock-unit conversion and per-picture timestamp association before
+   choosing a fix. Start with non-exclusive `--no-vdd` checks; the user runs
+   exclusive VDD sessions. Keep unknown timing unknown, retain
+   `present_us ≤ submit_us ≤ sent_us`, and preserve current host/client
+   validation. Do not introduce a 20 ms allowance, zero-age clamp or
+   acquisition-time fallback based on the current evidence.
+4. Record traces/results and an evidence-backed next step here. If a code
+   correction is justified, run Windows fmt, tests, strict clippy and release
+   build, plus appropriate probe checks. Install only a verified correction
+   using the existing installer, record hashes, and hand off any required
+   Mac follow-up. Any justified protocol change still goes host → spec →
+   client; this investigation does not pre-author a new timing contract.
 
 **What counts as done:**
-Host tests pass, host installed, and probe/Mac sessions during Valorant or high-FPS rendering
-preserve valid `present_us` without dropping into `UNKNOWN_TIME` or triggering "source timing idle".
+Reproducible traces explain which path loses source timing during active
+gaming, with measured rejection counts/reasons and comparison controls.
+Record the validated correction or remaining blocker here; do not call
+invented source times or merely suppressing “source timing idle” a pass.
 
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 

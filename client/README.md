@@ -150,11 +150,15 @@ Resolution and Refresh rate choices as the footer:
   across both machines; a PC without clock sync shows the Mac's own share,
   receive → screen), with frame rate, p95, skipped frames per second when
   there are any, and a sparkline.
-  A healthy synchronized clock with no source samples in the last five
+  A healthy synchronized clock with no source samples in the last ten
   seconds shows “Receive → screen, source timing idle”. Fresh content resumes
   Desktop → screen on the same connection; the app never substitutes receipt
   time for source time or keeps expired measurements current. “Clock not
   synced” is reserved for a stream without an accepted clock exchange.
+  Each displayed frame adds one sparkline point: its real Desktop → screen
+  measurement, or the last real value carried through a missing-source frame
+  while that measurement remains in the window. Carried points affect only
+  the graph, not percentiles or session-report measurements.
   Encode & send measures PC submit → sent even without source timing or sync;
   PC work separately includes capture + encode + send.
   ⌃⌥⌘L cycles Off → Compact → Detailed; Detailed adds where the time goes: a
@@ -300,7 +304,7 @@ Mac decoder/rendering evidence, not Windows desktop-capture or panel proof.
 
 For user-run PC qualification, start the bundled executable with
 `RELAY_TIMING_LOG=1 ./Relay.app/Contents/MacOS/Relay > /tmp/relay-real-mac.log 2>&1`.
-This logs one five-second-window snapshot per second, with p50/p95 and sample
+This logs one ten-second-window snapshot per second, with p50/p95 and sample
 counts for source age, PC work, encode/send, receive → screen and Desktop →
 screen, plus fps and accepted clock-reply count. Replies can log through a
 capture gap. Decoder generations log their actual CVPixelBuffer format; the
