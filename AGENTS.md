@@ -55,10 +55,15 @@ README status and here. Do not create other handoff or retest files.
   Windows fmt, 237 unit tests + 2 probe tests + integration, strict clippy and
   release build pass; the separate read-only NVENC/WinRT lifetime regression
   also passes. Four ordinary-user no-VDD protocol sessions pass, as does the
-  shared-GPU helper diagnostic (64/64 source codes, max error 0). Final SYSTEM
-  deployment is pending an accepted Windows elevation. The installed
-  intermediate `ABD08DCC…1B3B20D` still withholds 10-bit under SYSTEM; do not
-  call it the final feature build. One unintended exclusive 8-bit test session
+  shared-GPU helper diagnostic (64/64 source codes, max error 0). Implemented
+  in `ecb33ee`, installed with release/installed SHA-256
+  `2A36B9CD1AAD29055832DBEF29B8042801968A7645BDA6CC26A1B2466C96F9AA`.
+  Guarded SYSTEM no-VDD sessions passed both chroma modes on the unchanged
+  2560×1440@120 primary; decoded ramps retained 37/47/39/52 and 33/45/27/53
+  R/G/B/gray codes (max errors 5/6), with correct SDR controls/VUI. Normal
+  service restored, Running, `enc=q,444,10`; pair-only passed and both capture
+  helpers exited. The harness's blank scene ExitCode and separate dump
+  validation are recorded in SESSION-HANDOFF.md. One unintended exclusive 8-bit test session
   restored both physical monitors/layout; details and corrected no-VDD guard
   are in SESSION-HANDOFF.md.
   `precision` + `tools/check-precision.py` reproduce the numeric check.

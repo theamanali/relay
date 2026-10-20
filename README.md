@@ -154,7 +154,7 @@ were measured and rejected; both are written up in
 
 ## Status
 
-**True 10-bit SDR (implementation; SYSTEM deployment pending, 2026-10-19):** the existing toggle now
+**True 10-bit SDR (host implemented and installed, 2026-10-19):** the existing toggle now
 sets MTT's SDR10bit option before device start, restores its original colour
 switches on cleanup/crash recovery, captures FP16 SDR through Windows Graphics
 Capture, converts linear scRGB to SDR RGB10 on the selected GPU, and composes
@@ -171,9 +171,11 @@ composition, with zero code error; the 8-bit path retained **16/64**. Both
 Main10 4:2:0 and Rext 4:4:4 production dumps decoded with finer gradients than
 the 8-bit baseline, correct channels and SDR VUI. Windows tests, strict clippy
 and release build pass. The GPU-sharing helper also preserves all 64 codes
-in an ordinary-user process test. Final SYSTEM installation/verification is
-pending Windows elevation; the installed intermediate build currently
-withholds 10-bit. Virtual-display source qualification, SYSTEM/secure
+in an ordinary-user process test. The installed SYSTEM worker passed guarded
+no-VDD 4:2:0 and 4:4:4 sessions: decoded native ramps retain finer precision,
+correct channels/range and unchanged SDR VUI. The normal service is Running
+and advertises 10-bit; installed/release hashes match. Virtual-display source
+qualification, SYSTEM/secure
 desktop recovery and real-Mac performance remain pending in
 [SESSION-HANDOFF.md](SESSION-HANDOFF.md). WGC's timestamp is not the protocol's
 DWM LastPresentTime: true 10-bit sessions currently leave Desktop → screen /

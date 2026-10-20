@@ -20,15 +20,16 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
-### → PC: true 10-bit SDR display and capture when 10-bit color is enabled (2026-10-19)
+### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 
 **User request:** make the existing Mac **10-bit color** setting select a
 10-bit Windows virtual display and preserve that precision through capture,
 composition and NVENC input. This is SDR work; HDR remains a separate roadmap
 item. The user sees **8-bit** in Windows Advanced display during a current
-10-bit stream. The implementation and user-process/shared-GPU Windows checks are done
-(2026-10-19; implementation `ecb33ee`). Final SYSTEM installation/verification
-is pending an accepted Windows administrator prompt; do not mark this item complete.
+10-bit stream. The implementation, Windows tests and non-exclusive SYSTEM
+installation/precision checks are done (2026-10-19; implementation `ecb33ee`).
+Keep this item open for the virtual-display, exclusive/recovery and real-Mac
+qualification below.
 
 **Before this implementation (source audit from the Mac handoff)**
 
@@ -213,7 +214,7 @@ is pending an accepted Windows administrator prompt; do not mark this item compl
   test requires the newest worker's explicit no-VDD log before any probe.
   This unintended session does not qualify 10-bit exclusive behavior.
 - Earlier candidate installed with `tools/install-host.ps1 -SkipDriver`,
-  **2026-10-19 07:58:53 UTC** (superseded; final SYSTEM verification pending). Release and `%ProgramFiles%\Relay\relay-host.exe` SHA-256:
+  **2026-10-19 07:58:53 UTC** (superseded; final deployment recorded below). Release and `%ProgramFiles%\Relay\relay-host.exe` SHA-256:
   **`F5164D7BF0937E327F819D78511E465A25648D6EDD37D0E5199EC8A6A98CC225`**.
   That candidate ran with 10-bit withheld under SYSTEM, so it was not a
   completed service implementation. Service **Running**, installed-service `probe --pair-only` passed (v4,
@@ -238,24 +239,21 @@ is pending an accepted Windows administrator prompt; do not mark this item compl
   `final-caps*`, `install-final*` and `installed-pair-only*`. The numeric method
   and results above are durable; these local diagnostic dumps are not committed.
 
-**Current deployment / outstanding PC step**
+**Final deployment and SYSTEM verification (2026-10-19 Pacific / 2026-10-20 UTC)**
 
-The helper-backed release (`ecb33ee`) is built but **has not been installed or
-verified as SYSTEM**. Its SHA-256 is
+The helper-backed release (`ecb33ee`) is **installed**. Release and
+`C:\Program Files\Relay\relay-host.exe` both have SHA-256
 `2A36B9CD1AAD29055832DBEF29B8042801968A7645BDA6CC26A1B2466C96F9AA`.
 On resuming after the usage limit, fmt, all 237 unit + 2 probe + integration
 tests, the separate NVENC/WinRT lifetime regression, strict clippy and release
 build passed again. The sandboxed attempt could not open loopback sockets or
 rename a temporary journal; the unrestricted rerun passed all checks.
-The user authorized reopening elevation, but Windows again returned
-"operation was canceled by the user" (2026-10-19 Pacific / 2026-10-20 UTC).
-The guarded script never started; no service command or display changed in
-that retry. The installed
-intermediate candidate is SHA-256
-`ABD08DCC1DCD5073206A5AA58DFE38015BC0B76AE8AD1EA1295662B011B3B20D`;
-its SYSTEM WGC activation still fails and it honestly advertises `enc=q,444`
-with 10-bit withheld. It is not the final feature build. The earlier `F516…`
-hash above is historical, not the current or proposed final binary.
+Two earlier elevation attempts were cancelled before their guarded script
+started; the user then requested another prompt and accepted it at
+**18:28:43 Pacific / 01:28:43 UTC**. The intermediate candidate SHA-256
+`ABD08DCC1DCD5073206A5AA58DFE38015BC0B76AE8AD1EA1295662B011B3B20D`
+withheld 10-bit under SYSTEM and is now superseded, as is the earlier `F516…`
+candidate. Neither hash denotes the final feature build.
 
 While elevation was pending, `RELAY_TEST_FAULT=capture-broker relay-host
 capture-probe --dump ...` tested the exact helper/pipe/shared-texture path as
@@ -270,17 +268,46 @@ error **1.218**, correct SDR VUI/range/channels. Evidence:
 `release-broker-user.*`. New regression covers positive-HRESULT keyed-mutex
 timeout versus actual ownership.
 
-The reviewable local script `host/target/system-guarded.ps1` installs the new
-release, temporarily uses the exact SCM binary command
-`"C:\Program Files\Relay\relay-host.exe" --no-vdd service run`, and checks
-that the latest SYSTEM worker logs no-VDD **before** any probe. It holds a
-native ramp on the unchanged primary, captures 10-bit 4:2:0 and 4:4:4 dumps,
-then restores the original SCM command and normal service in finally. Resume
-after the local Windows elevation is accepted (the user already authorized
-reopening it; check the pending prompt-visibility reply before retrying). Decode the
-`system-420/444` dumps against their copied scene CSV, confirm `enc=q,444,10`
-on the restored normal worker, recheck hashes/pairings/no orphan helper, then
-replace this pending paragraph with final results and installed SHA-256.
+The local script `host/target/system-guarded.ps1` installed with
+`tools/install-host.ps1 -SkipDriver`, temporarily used the exact SCM command
+`"C:\Program Files\Relay\relay-host.exe" --no-vdd service run`,
+and proved the latest SYSTEM worker was in no-VDD mode **before** any probe.
+Both persisted-pairing sessions exited 0 and negotiated `0x09` / `0x0d`,
+capturing the unchanged **2560×1440@120** physical primary at Fastest,
+120 Mbps. No virtual display was attached, no physical display colour/DPI/mode
+was changed, and no input test was requested. Both sessions launched the
+signed-in-user WGC source successfully (PIDs **21200 / 17160**) and logged
+FP16 desktop → shared RGB10 → SYSTEM RGB10 cursor/slots → NVENC ABGR10.
+
+The native scene's actual source/composition samples were **64/64** for each
+ramp, max error **0**, and all cursor/range/channel controls passed. The
+**SYSTEM service dumps**, decoded against that scene's CSV by
+`tools/check-precision.py`, retained **37/47/39/52** (4:2:0) and
+**33/45/27/53** (4:4:4) R/G/B/gray codes. Maximum RGB errors were **5 / 6**;
+mean absolute errors **1.350 / 1.354**. Both have the expected SDR
+`tv / smpte170m / bt709 / bt709` VUI and correct black/white/primary controls.
+These are actual service capture/encode results, not merely format labels.
+
+The three-second probes received **272 / 273 frames**, including ~0.76 s
+startup (90.4 / 90.9 fps over the full interval); PC work p50/p95 was
+**2.99/3.94 / 4.62/6.01 ms**. This is a short, mostly static precision check,
+**not** sustained 3024×1964@120 performance qualification. All 7 clock replies
+arrived per session; DWM present timestamps remained unknown as intended.
+
+The test harness then read a **blank** PowerShell `Process.ExitCode` for the
+finished scene and recorded `success=False` / `native scene failed ()`.
+It had already completed both successful probes, scene pixel checks, CSV
+and production dump. The CSV was copied to each service dump afterwards and
+both were independently decoded/validated as above. Do not describe the
+whole harness as an exit-0 run. Its finally restored
+`"C:\Program Files\Relay\relay-host.exe" service run` and restarted the normal
+service at **01:29:19 UTC**. Final checks: service **Running**, normal VDD
+configuration, `ten_bit: true` and `enc=q,444,10`, both source PIDs gone,
+only supervisor/worker remain, matching hashes, installed-service
+`probe --pair-only` exit 0 (same identity, already paired, caps `0x0f`).
+Evidence is in `system-{420,444,scene}.*`, `system-guarded*`,
+`final-normal-worker.txt` and `final-installed-pair-only*` under the ignored
+evidence directory. The earlier cancelled deployment is resolved.
 
 True 10-bit WGC requires a signed-in user's **Default** desktop. There is no
 BGRA8 fallback for login/secure screens; 8-bit retains the existing SYSTEM DDA
