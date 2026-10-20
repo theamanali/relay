@@ -86,6 +86,52 @@ impl InputFormat {
     }
 }
 
+/// The selected output depth stays fixed for the whole session. Only a
+/// selected HEVC 10-bit session may temporarily capture Winlogon in 8-bit.
+/// Default must use WGC/RGB10; a WGC failure is never permission to downgrade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureMode {
+    Desktop8,
+    Desktop10,
+    Secure8,
+}
+
+impl CaptureMode {
+    fn for_depth(ten_bit: bool) -> Self {
+        if ten_bit {
+            Self::Desktop10
+        } else {
+            Self::Desktop8
+        }
+    }
+
+    fn for_desktop(cfg: &EncoderConfig, desktop: &str) -> Result<Self> {
+        if InputFormat::for_config(cfg) != InputFormat::Rgb10 {
+            return Ok(Self::Desktop8);
+        }
+        if desktop.eq_ignore_ascii_case("Default") {
+            Ok(Self::Desktop10)
+        } else if desktop.eq_ignore_ascii_case("Winlogon") {
+            Ok(Self::Secure8)
+        } else {
+            Err(anyhow::Error::new(crate::encoder::DesktopNotCapturable)
+                .context("10-bit capture is waiting for the Default or Winlogon desktop"))
+        }
+    }
+
+    fn input_format(self) -> InputFormat {
+        InputFormat::for_depth(self == Self::Desktop10)
+    }
+
+    fn ten_bit_output(self) -> bool {
+        self != Self::Desktop8
+    }
+
+    fn desktop_changed(self, captured: &str, current: &str) -> bool {
+        self.ten_bit_output() && !captured.eq_ignore_ascii_case(current)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct UnsupportedCaptureFormat;
 impl std::fmt::Display for UnsupportedCaptureFormat {
@@ -120,23 +166,25 @@ pub(crate) fn check_virtual_sdr10(location: &crate::display::OutputLocation) -> 
 }
 
 fn validate_capture_format(
-    ten_bit: bool,
+    mode: CaptureMode,
     bits: u32,
     colour: windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_TYPE,
     format: DXGI_FORMAT,
 ) -> Result<()> {
-    let valid = if ten_bit {
-        // DDA is cursor-only here; WGC supplies native FP16 independently of
-        // connector precision, including on an unchanged 8-bit dev monitor.
-        colour == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
-    } else {
-        format == DXGI_FORMAT_B8G8R8A8_UNORM
+    let valid = match mode {
+        // DDA is cursor-only; WGC supplies FP16 independently of the connector.
+        CaptureMode::Desktop10 => colour == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+        CaptureMode::Secure8 => {
+            colour == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
+                && format == DXGI_FORMAT_B8G8R8A8_UNORM
+        }
+        CaptureMode::Desktop8 => format == DXGI_FORMAT_B8G8R8A8_UNORM,
     };
     if valid {
         return Ok(());
     }
     Err(anyhow::Error::new(UnsupportedCaptureFormat).context(format!(
-        "requested {}-bit SDR; display {bits} bits/channel, {colour:?}, duplication {format:?}; need SDR colour space for FP16 -> RGB10 capture (HDR is not tone mapped)", if ten_bit { 10 } else { 8 })))
+        "capture {mode:?}, selected {}-bit SDR; display {bits} bits/channel, {colour:?}, duplication {format:?}; HDR is not tone mapped", if mode.ten_bit_output() { 10 } else { 8 })))
 }
 
 /// Open a short-lived NVENC session on a D3D11 device for the selected GPU and
@@ -372,8 +420,8 @@ impl Drop for CapsSession {
 
 /// Configure an encoder exactly as a session would at `cfg`'s size and frame
 /// rate, then tear it down: a driver that refuses Relay's configuration is
-/// found before any display is touched. No Desktop Duplication and no input
-/// resources.
+/// found before any display is touched. Registers/maps real input resources;
+/// selected 10-bit trials cover both RGB10 and the Winlogon BGRA8 input.
 pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
     if crate::test_fault("trial") {
         bail!(
@@ -381,6 +429,21 @@ pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
             crate::TEST_FAULT_VAR
         );
     }
+    for &input_format in trial_input_formats(cfg) {
+        trial_input(gpu, cfg, input_format)?;
+    }
+    Ok(())
+}
+
+fn trial_input_formats(cfg: &EncoderConfig) -> &'static [InputFormat] {
+    if InputFormat::for_config(cfg) == InputFormat::Rgb10 {
+        &[InputFormat::Rgb10, InputFormat::Bgra8]
+    } else {
+        &[InputFormat::Bgra8]
+    }
+}
+
+fn trial_input(gpu: &GpuInfo, cfg: &EncoderConfig, input_format: InputFormat) -> Result<()> {
     let device = create_device_for(gpu.luid)?;
     let mut trial = TrialSession(Some(EncoderSession {
         api: NvApi::load()?,
@@ -389,7 +452,7 @@ pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
         width: cfg.width,
         height: cfg.height,
         fps: cfg.fps.max(1),
-        input_format: InputFormat::for_config(cfg),
+        input_format,
         slots: Vec::new(),
     }));
     let session = trial.0.as_mut().expect("trial session present");
@@ -585,6 +648,7 @@ struct CaptureLoop {
     broker_capture: Option<capture_source::Broker>,
     cursor_dirty: bool,
     capture_desktop: String,
+    capture_mode: CaptureMode,
     width: u32,
     height: u32,
     frame_interval: Duration,
@@ -693,30 +757,35 @@ impl NativeNvenc {
         if cfg.cross_adapter() {
             bail!("native NVENC requires capture and encode on the same DXGI adapter");
         }
-        if InputFormat::for_config(cfg) == InputFormat::Rgb10
-            && crate::desktop::input_desktop_name() != "Default"
-        {
-            return Err(anyhow::Error::new(crate::encoder::DesktopNotCapturable)
-                .context("true 10-bit SDR capture waits for the signed-in user's Default desktop; use 8-bit for login/secure screens"));
-        }
-
         let api = NvApi::load()?;
         // Desktop Duplication only opens from a thread on the input desktop;
         // a SYSTEM worker may bind to Winlogon (lock/login screen), a user
         // process may not — that failure shows up as E_ACCESSDENIED below.
-        match crate::desktop::bind_input_desktop() {
-            Ok(name) => log::debug!("capture bound to the {name} desktop"),
-            Err(e) => log::debug!("not bound to the input desktop: {e:#}"),
+        let capture_desktop = match crate::desktop::bind_input_desktop() {
+            Ok(name) => {
+                log::debug!("capture bound to the {name} desktop");
+                name
+            }
+            Err(e) => {
+                log::debug!("not bound to the input desktop: {e:#}");
+                crate::desktop::input_desktop_name()
+            }
+        };
+        let mut capture_mode = CaptureMode::for_desktop(cfg, &capture_desktop)?;
+        // Exercise the secure input/output combination without locking the
+        // user's computer. This diagnostic never changes the real desktop.
+        if capture_mode.ten_bit_output() && crate::test_fault("secure-capture") {
+            capture_mode = CaptureMode::Secure8;
         }
-        let (device, context, duplication, adapter_luid, width, height) = create_capture(
-            cfg.capture_adapter_idx,
-            cfg.output_idx,
-            cfg.codec == Codec::Hevc && cfg.ten_bit,
-        )?;
+        if capture_mode == CaptureMode::Secure8 {
+            log::info!("selected 10-bit SDR: temporary 8-bit DXGI source/composition on {capture_desktop}, NVENC ARGB input -> unchanged 10-bit output; recreate true 10-bit capture when Default returns");
+        }
+        let (device, context, duplication, adapter_luid, width, height) =
+            create_capture(cfg.capture_adapter_idx, cfg.output_idx, capture_mode)?;
         // On every start and restart: the index may have moved to another
         // adapter, or the output changed size since STREAM_START.
         crate::encoder::check_capture(cfg, adapter_luid, width, height)?;
-        let input_format = InputFormat::for_config(cfg);
+        let input_format = capture_mode.input_format();
         let composition_texture = create_texture(&device, width, height, input_format.dxgi())?;
         let cursor = CursorOverlay::new(&device, &composition_texture, width, height)?;
         let precision = if input_format == InputFormat::Rgb10 {
@@ -833,7 +902,8 @@ impl NativeNvenc {
             sdr_capture: None,
             broker_capture: None,
             cursor_dirty: false,
-            capture_desktop: crate::desktop::input_desktop_name(),
+            capture_desktop,
+            capture_mode,
             width,
             height,
             frame_interval: Duration::from_secs_f64(1.0 / f64::from(session.fps)),
@@ -1064,9 +1134,9 @@ impl EncoderSession {
                 Codec::Hevc => {
                     let hevc = &mut config.encodeCodecConfig.hevcConfig;
                     signal_colour(&mut hevc.hevcVUIParameters);
-                    // The input stays 8-bit ARGB (its depth comes from the
-                    // buffer format); NVENC converts it to 4:4:4 or 4:2:0
-                    // and to the output depth itself.
+                    // Input depth comes from bufferFormat, independently of
+                    // selected output depth. Secure desktops use ARGB8 even
+                    // in a Main10/Rext session; Default uses ABGR10 there.
                     hevc.set_chromaFormatIDC(if full_color { 3 } else { 1 });
                     hevc.set_pixelBitDepthMinus8(if ten_bit { 2 } else { 0 });
                     hevc.set_outputAUD(1);
@@ -1230,6 +1300,11 @@ impl CaptureLoop {
         if let Ok(name) = crate::desktop::bind_input_desktop() {
             log::debug!("capture thread on the {name} desktop");
         }
+        if self.desktop_changed() {
+            let _ = self.events_tx.try_send(OutputEvent::CaptureLost);
+            self.worker_tx.take();
+            return self;
+        }
         let direct = self
             .precision
             .as_ref()
@@ -1303,16 +1378,35 @@ impl CaptureLoop {
     /// thread waiting in `AcquireNextFrame` holds the D3D11 device lock, and
     /// NVENC's DirectX input pass then cannot finish the previous picture until
     /// the wait returns (measured: encode time became one frame interval).
+    fn desktop_changed(&self) -> bool {
+        self.capture_mode.ten_bit_output()
+            && self
+                .capture_mode
+                .desktop_changed(&self.capture_desktop, &crate::desktop::input_desktop_name())
+    }
+
     fn step(&mut self) -> Result<bool> {
-        if self.precision.is_some() && self.capture_desktop != crate::desktop::input_desktop_name()
-        {
+        if self.desktop_changed() {
+            log::info!(
+                "input desktop changed from {}; recreating selected-depth capture",
+                self.capture_desktop
+            );
             return Ok(false);
         }
         let slot_index = self.wait_for_free_slot()?;
 
+        let mut desktop_check = Instant::now();
         let tick = loop {
             if self.stop.load(Ordering::Relaxed) {
                 return Ok(true);
+            }
+            // Also detect a switch while waiting for the very first picture.
+            // Bound polling avoids opening the input desktop every 200 us.
+            if desktop_check.elapsed() >= Duration::from_millis(10) {
+                if self.desktop_changed() {
+                    return Ok(false);
+                }
+                desktop_check = Instant::now();
             }
             let mut info: DXGI_OUTDUPL_FRAME_INFO = unsafe { zeroed() };
             let mut resource: Option<IDXGIResource> = None;
@@ -1336,6 +1430,9 @@ impl CaptureLoop {
             }
         };
 
+        if self.desktop_changed() {
+            return Ok(false);
+        }
         let fresh = self.dirty;
         let lead = self.submit(slot_index)?;
 
@@ -1870,7 +1967,7 @@ fn nv_check_raw(
 fn create_capture(
     adapter_idx: u32,
     output_idx: u32,
-    ten_bit: bool,
+    mode: CaptureMode,
 ) -> Result<(
     ID3D11Device,
     ID3D11DeviceContext,
@@ -1932,11 +2029,11 @@ fn create_capture(
         let colour = output6.GetDesc1().context("IDXGIOutput6::GetDesc1")?;
         log::info!(
             "display: requested {}-bit SDR, active {} bits/channel, colour space {:?}",
-            if ten_bit { 10 } else { 8 },
+            if mode.ten_bit_output() { 10 } else { 8 },
             colour.BitsPerColor,
             colour.ColorSpace
         );
-        let duplication = if ten_bit {
+        let duplication = if mode == CaptureMode::Desktop10 {
             // DDA supplies cursor shapes/positions only for a 10-bit session.
             // Probe native formats but never feed its BGRA8 desktop to NVENC.
             let output5: IDXGIOutput5 = output.cast().context("IDXGIOutput5")?;
@@ -1970,18 +2067,18 @@ fn create_capture(
         let dupe_desc = duplication.GetDesc();
         log::info!(
             "duplication {}: {:?}; composition/slot {:?}; NVENC input {:?}, output {}-bit SDR",
-            if ten_bit {
+            if mode == CaptureMode::Desktop10 {
                 "(cursor only; WGC FP16 desktop)"
             } else {
                 "(desktop)"
             },
             dupe_desc.ModeDesc.Format,
-            InputFormat::for_depth(ten_bit).dxgi(),
-            InputFormat::for_depth(ten_bit).nvenc(),
-            if ten_bit { 10 } else { 8 }
+            mode.input_format().dxgi(),
+            mode.input_format().nvenc(),
+            if mode.ten_bit_output() { 10 } else { 8 }
         );
         validate_capture_format(
-            ten_bit,
+            mode,
             colour.BitsPerColor,
             colour.ColorSpace,
             dupe_desc.ModeDesc.Format,
@@ -2259,6 +2356,86 @@ fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
 mod tests {
     use super::*;
 
+    fn config(codec: Codec, ten_bit: bool) -> EncoderConfig {
+        EncoderConfig {
+            capture_adapter_idx: 0,
+            capture_luid: Luid { low: 0, high: 0 },
+            encode_luid: Luid { low: 0, high: 0 },
+            output_idx: 0,
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_mbps: 120,
+            codec,
+            gop: 120,
+            quality: Quality::Balanced,
+            full_color: false,
+            ten_bit,
+            intra_refresh: false,
+        }
+    }
+
+    #[test]
+    fn selected_ten_bit_uses_secure_eight_bit_only_on_winlogon() {
+        let cfg = config(Codec::Hevc, true);
+        for (desktop, expected) in [
+            ("Default", CaptureMode::Desktop10),
+            ("Winlogon", CaptureMode::Secure8),
+            ("default", CaptureMode::Desktop10),
+        ] {
+            let mode = CaptureMode::for_desktop(&cfg, desktop).unwrap();
+            assert_eq!(mode, expected);
+            assert!(mode.ten_bit_output());
+        }
+        // An unreadable/unrecognised desktop is not permission to downgrade.
+        for desktop in ["", "unavailable", "Other"] {
+            let error = CaptureMode::for_desktop(&cfg, desktop).unwrap_err();
+            assert!(crate::encoder::is_desktop_not_capturable(&error));
+        }
+        assert_eq!(CaptureMode::Secure8.input_format(), InputFormat::Bgra8);
+        assert_eq!(CaptureMode::Desktop10.input_format(), InputFormat::Rgb10);
+        assert_eq!(
+            trial_input_formats(&cfg),
+            &[InputFormat::Rgb10, InputFormat::Bgra8]
+        );
+        // No mutation of the negotiated output while changing input precision.
+        assert!(cfg.ten_bit);
+        assert_eq!(
+            profile_guid(cfg.codec, false, cfg.ten_bit),
+            NV_ENC_HEVC_PROFILE_MAIN10_GUID
+        );
+        assert_eq!(
+            profile_guid(cfg.codec, true, cfg.ten_bit),
+            NV_ENC_HEVC_PROFILE_FREXT_GUID
+        );
+    }
+
+    #[test]
+    fn desktop_switches_restart_both_halves_of_a_selected_ten_bit_session() {
+        let cfg = config(Codec::Hevc, true);
+        for (before, after) in [
+            ("Winlogon", "Default"),
+            ("Default", "Winlogon"),
+            ("Default", ""),
+        ] {
+            let mode = CaptureMode::for_desktop(&cfg, before).unwrap();
+            assert!(mode.desktop_changed(before, after));
+            assert!(!mode.desktop_changed(before, before));
+        }
+        for cfg in [
+            config(Codec::Hevc, false),
+            config(Codec::H264, true),
+            config(Codec::H264, false),
+        ] {
+            for desktop in ["Default", "Winlogon", ""] {
+                let mode = CaptureMode::for_desktop(&cfg, desktop).unwrap();
+                assert_eq!(mode, CaptureMode::Desktop8);
+                assert!(!mode.desktop_changed(desktop, "Winlogon"));
+            }
+            assert_eq!(trial_input_formats(&cfg), &[InputFormat::Bgra8]);
+        }
+    }
+
     #[test]
     #[ignore = "requires NVIDIA NVENC and Windows Graphics Capture; read-only, no display changes"]
     fn capability_query_and_input_trials_can_repeat_without_invalidating_driver_state() {
@@ -2294,7 +2471,7 @@ mod tests {
             DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_R16G16B16A16_FLOAT,
         };
         assert!(validate_capture_format(
-            true,
+            CaptureMode::Desktop10,
             10,
             DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
             DXGI_FORMAT_R10G10B10A2_UNORM
@@ -2303,7 +2480,7 @@ mod tests {
         // DDA may be 8-bit: in this mode it supplies cursor metadata only.
         for format in [DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT] {
             assert!(validate_capture_format(
-                true,
+                CaptureMode::Desktop10,
                 8,
                 DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
                 format
@@ -2311,7 +2488,7 @@ mod tests {
             .is_ok());
         }
         let e = validate_capture_format(
-            true,
+            CaptureMode::Desktop10,
             10,
             DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
             DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -2320,12 +2497,33 @@ mod tests {
         .context("recovery");
         assert!(is_unsupported_capture(&e));
         assert!(validate_capture_format(
-            false,
+            CaptureMode::Desktop8,
             8,
             DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
             DXGI_FORMAT_B8G8R8A8_UNORM
         )
         .is_ok());
+        assert!(validate_capture_format(
+            CaptureMode::Secure8,
+            10,
+            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        )
+        .is_ok());
+        for (colour, format) in [
+            (
+                DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+            ),
+            (
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                DXGI_FORMAT_R16G16B16A16_FLOAT,
+            ),
+        ] {
+            assert!(is_unsupported_capture(
+                &validate_capture_format(CaptureMode::Secure8, 10, colour, format).unwrap_err()
+            ));
+        }
         assert_eq!(
             InputFormat::Rgb10.nvenc(),
             NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR10
@@ -2339,8 +2537,11 @@ mod tests {
     #[test]
     #[ignore = "requires an interactive Windows desktop; duplicates the primary output, no display changes"]
     fn a_second_duplication_starts_once_the_first_is_released() {
-        let first = create_capture(0, 0, false).expect("first duplication of the primary output");
-        let busy = create_capture(0, 0, false).map(|_| ()).unwrap_err();
+        let first = create_capture(0, 0, CaptureMode::Desktop8)
+            .expect("first duplication of the primary output");
+        let busy = create_capture(0, 0, CaptureMode::Desktop8)
+            .map(|_| ())
+            .unwrap_err();
         assert!(crate::encoder::is_output_busy(&busy), "{busy:#}");
         let release = thread::spawn(move || {
             thread::sleep(Duration::from_millis(300));
@@ -2350,7 +2551,7 @@ mod tests {
         let second = crate::encoder::retry_output_busy(
             Duration::from_secs(2),
             Duration::from_millis(50),
-            || create_capture(0, 0, false),
+            || create_capture(0, 0, CaptureMode::Desktop8),
         );
         release.join().unwrap();
         assert!(second.is_ok(), "{:#}", second.err().unwrap());

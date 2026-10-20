@@ -81,8 +81,9 @@ The **Relay** service runs as LocalSystem and keeps one worker process,
 combination is what lets the host:
 
 - start at boot, before anyone signs in;
-- capture and control the lock and login screens in 8-bit mode (a normal user
-  process can't open them; true 10-bit requires the user's Default desktop);
+- capture and control the lock and login screens with an 8-bit source (a normal
+  user process can't open them); a selected 10-bit session promotes capture to
+  true 10-bit after sign-in without reconnecting;
 - turn device nodes on and off without a separate elevated helper;
 - restore your monitors if the worker crashes. The service then runs
   `relay-host restore` in the session and starts a new worker, after 5 s, or
@@ -221,16 +222,23 @@ Ten-bit sessions therefore capture FP16 linear scRGB with Windows Graphics
 Capture, exclude its cursor, use a GPU sRGB OETF into R10G10B10A2, compose the
 DXGI pointer there, and register slots as **ABGR10** (R is in the low 10 bits).
 When DuplicateOutput1 is unsupported, classic duplication supplies only the
-pointer; the desktop remains FP16. No BGRA8 conversion precedes encoding. A SYSTEM worker starts a signed-in-user
+pointer; the Default desktop remains FP16 without a BGRA8 conversion. A SYSTEM worker starts a signed-in-user
 `capture-source` process from the same binary, because WGC activation itself
 requires that user's CaptureService (impersonation is insufficient). The local
 pipe checks the exact child PID before duplicating only an RGB10 texture
 handle; a keyed mutex transfers GPU ownership. Pixel data stays on the GPU,
 and topology, input, cursor composition, NVENC and keys stay with SYSTEM.
 The helper has no host-state or tray duties and dies with capture teardown.
-True 10-bit needs the signed-in user's Default desktop; select 8-bit for login
-or secure screens. Desktop changes remain recoverable without an 8-bit-source
-fallback.
+With 10-bit selected, Winlogon (lock/login/UAC) uses the existing SYSTEM
+DDA/BGRA8 cursor/composition/ARGB input path temporarily. The virtual display,
+chroma, selected output depth, Main10/Rext profile and VUI stay fixed. On
+Default, capture is recreated at true FP16/RGB10/ABGR10; locking recreates the
+8-bit secure source. This happens within the same connection through normal
+capture recovery and fresh parameter sets/keyframe. Preflight registers/maps
+both input formats with the selected 10-bit output. Unknown desktops wait;
+WGC failure on Default never permits an 8-bit downgrade. Ordinary 8-bit and
+H.264 sessions keep their existing behavior. Actual secure-desktop transitions
+and real-Mac continuity remain user checks in SESSION-HANDOFF.md.
 Normal, masked and monochrome cursors
 are supported; XOR uses integer operations on the destination's native codes.
 Eight-bit sessions retain Desktop Duplication/BGRA8/ARGB. The capability record

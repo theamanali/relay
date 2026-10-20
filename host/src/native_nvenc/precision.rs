@@ -142,8 +142,11 @@ pub fn run(
         location.adapter_luid == gpu.luid,
         "diagnostic requires selected NVIDIA GPU"
     );
-    let (device, context, duplication, _, width, height) =
-        create_capture(location.adapter_index, location.output_index, ten_bit)?;
+    let (device, context, duplication, _, width, height) = create_capture(
+        location.adapter_index,
+        location.output_index,
+        CaptureMode::for_depth(ten_bit),
+    )?;
     let format = InputFormat::for_depth(ten_bit).dxgi();
     unsafe {
         let old_dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
