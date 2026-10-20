@@ -347,7 +347,8 @@ Mac windows from 01:25:43.589 through 01:25:59.639 have
 encode/send remain populated (~7.0 and 6.8 ms p50).
 
 This reproduces the missing source measurement under objective desktop
-motion outside Valorant. Loss is already present in PC encoder telemetry,
+motion with Valorant minimized (the game process remained running). This
+does not rule out a background game/anti-cheat contribution. Loss is already present in PC encoder telemetry,
 before transmission; Mac presentation loss is not required to explain this
 interval. Existing aggregate logs cannot distinguish missing WGC/helper
 metadata from rejected future/invalid source stamps. They do not establish

@@ -126,7 +126,7 @@ README status and here. Do not create other handoff or retest files.
   real-PC results and remaining user checks are in SESSION-HANDOFF.md.
 
 - Source-timing investigation (2026-10-20): a timed desktop checkerboard
-  reproduces missing source timing outside Valorant: 3,000 encoded pictures,
+  reproduces missing source timing with Valorant minimized: 3,000 encoded pictures,
   1,485 marked fresh, no known source ages in 25 s, while the Mac remains
   synced at ~120 fps. Loss is already in PC encoder telemetry. User authorized
   host diagnostics and selected controlled animation/video instead of game
