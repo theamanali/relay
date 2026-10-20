@@ -23,10 +23,18 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 ### → Mac: distinguish missing source timing from clock sync; show encode/send independently (2026-10-19)
 
 The user reports no image age / encode & send detail and "clock not synced"
-in 10-bit sessions. PC source audit: `StatsHUD.Presentation.init` uses
+in 10-bit sessions. **Update:** the host now supplies valid WGC source stamps
+through the same `present_us` contract as 8-bit, per the user's instruction
+to keep identical Mac metrics/labels. No Mac runtime change or rebuild is
+required to consume them. Installed SYSTEM checks and the bounded future-
+timestamp case are recorded under "Unified 10-bit timing" below. This Mac
+follow-up still covers frames genuinely lacking source timing.
+
+PC source audit: `StatsHUD.Presentation.init` uses
 `desktopToScreen.p50 != nil` to decide both whether end-to-end data exists
 and whether the clock is synced. A WGC frame deliberately has unknown
-`present_us`; this makes the message misleading even with a valid clock.
+`present_us` on repeated/invalid-source pictures; this makes the message
+misleading even with a valid clock.
 `clockOffsetMs` / `clockDelayMs` already distinguish actual sync. The
 `contentAge.p50.map` also hides the numerical encode/send detail whenever
 source presentation time is absent. Host FRAME_TIMING_EXT still supplies
@@ -35,12 +43,14 @@ timings before examining the present stamp. Guarded PC probes kept 7/7 clock
 replies and received valid work / submit→sent metrics with unknown present.
 That establishes host/protocol availability, not this Mac's measured sync.
 
-Mac-owned follow-up (PC has not edited `client/`):
+Mac-owned follow-up (PC updated only the two source-timestamp comments in
+`client/`; no Swift logic/UI change):
 
 1. In `StatsHUD.swift`, use actual clock state for "clock not synced".
    With a valid clock but no source presentation time, explain that source
    timing is unavailable and show receive → screen. Never manufacture image
-   age / desktop → screen from receive time or label WGC capture as DWM present.
+   age / desktop → screen from receive time. Keep the existing user-facing
+   labels for both 8-bit and 10-bit, as explicitly requested by the user.
 2. Show PC work independently of content age. For the separate **encode &
    send** duration, derive `sentMicros - submitMicros` in `FrameEndToEnd`
    whenever both stamps are known and ordered: it uses one host clock and
@@ -52,11 +62,10 @@ Mac-owned follow-up (PC has not edited `client/`):
    timing; source transitions without stale image-age/end-to-end values. Run
    Swift tests, fakehost checks and a bundled real 10-bit PC session.
 
-True WGC image-age / compositor-to-screen timing remains the separate
-qualification item below. The current wire defines `present_us` as DWM
-LastPresentTime. WGC SystemRelativeTime is a documented compositor-render QPC
-timestamp, but substituting it needs validated semantics and coordinated
-host/spec/client work. This handoff does not change the wire contract.
+Real-Mac image-age / Desktop → screen confirmation remains below. The
+generalized source-timestamp definition is in PROTOCOL.md and both sides'
+comments: DDA LastPresentTime or WGC compositor SystemRelativeTime, with the
+same host QPC base and existing 68-byte message. No separate WGC UI label.
 
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 
@@ -488,11 +497,12 @@ successful final checks. No exclusive test or actual lock/sign-in was run by
 the agent for this cursor correction. Reconnect from the Mac to verify the
 pointer in the real VDD stream; that visual check is still pending.
 
-The WGC DWM present timestamp remains **unknown**. Clock requests/replies and
+At `20ea60a`, the WGC DWM present timestamp remained **unknown**. Clock requests/replies and
 encode/send telemetry still work independently; the Mac HUD bug/follow-up is
 the separate Open item above. Host logging now says source age is unavailable
 instead of reporting a fabricated **0.00 ms** when no samples are known, and
-averages known ages over their actual sample count. No wire/client change.
+averages known ages over their actual sample count. No wire/client change
+at that revision; the unified timing update below supersedes this restriction.
 
 Read-only audit of the user's installed `D63A3F7F…` session: 01:48:29 UTC
 active VDD **10-bit SDR** at 3024×1964@120; 01:48:33 Winlogon BGRA8/ARGB
@@ -507,6 +517,86 @@ actual VDD native-ramp precision and the fixed cursor still need user checks.
 
 References: [WGC cursor inclusion](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.iscursorcaptureenabled),
 [DDA pointer composition](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api#updating-the-desktop-pointer).
+
+**Unified 10-bit timing (2026-10-19 Pacific / 2026-10-20 UTC; `792bca7`)**
+
+The user explicitly requested the same Mac timing rows/labels as 8-bit.
+WGC SystemRelativeTime now feeds the existing `present_us` field, converted
+from 100 ns units to the host's QPC clock. Direct capture keeps it with the
+converted frame. The SYSTEM user's helper writes a tagged 24-byte sequence
+and source-QPC record before publishing key 1 of the RGB10 texture. The
+host peeks a complete record without blocking, acquires key 1, consumes the
+metadata and GPU pixels together, then returns key 0. A new pipe/process/
+texture resets the sequence on recovery. Partial records, bad tags, duplicate/
+skipped sequences, backwards/nonpositive times and helper errors cannot be
+mistaken for a new frame. Conversion failures never publish a valid slot.
+Pixels remain GPU-only; timestamps ride each picture through NVENC's output
+queue. Re-encodes without a fresh source remain unknown, just like 8-bit.
+
+The first production timing diagnostic caught WGC source stamps **later
+than CPU submission**, including a measured 1,557 us lead, despite the API's
+documented QPC/compositor clock. This is not a clock-sync failure. The final
+build retains raw source time for cadence but excludes such a stamp from
+wire timing and age statistics for that picture. It never fabricates zero
+age, uses pipe/arrival time as the source, or delays video to make timestamps
+fit. A focused regression covers this case. Unknown samples still carry
+submit/send/work/clock telemetry. PROTOCOL.md and both sides' timestamp
+comments now describe source time from either capture API. The 68-byte
+layout, capability byte, Mac calculations and HUD labels are unchanged;
+**the existing Mac app can consume this host fix without rebuilding**.
+Client edits are comments only; Swift builds/tests remain Mac-owned.
+
+Windows fmt, **243 unit tests + 2 probe tests + integration**, strict
+all-target clippy and release build pass. The first sandboxed test attempt
+was denied loopback/temp-file access; rerunning with normal OS access passed.
+New tests cover WGC time-unit conversion across frequencies/long uptime,
+fragmented metadata, sequence/clock/error validation, and future/reused
+source stamps. The enhanced production diagnostic verifies ordered source/
+submit times in actual emitted access units and requires known WGC samples.
+
+Release direct 4:2:0 / 4:4:4 and GPU-sharing helper diagnostics all pass:
+**64/64 R/G/B/gray source and composed codes, max error 0**. Actual pointer
+pixels: direct **93/144**, helper **209/260**, zero trails. Production timing
+had **5/12, 10/12 and 8/12** known source stamps, all ordered; other pictures
+were repeated or had unusable source times. Decoded ramps retained
+**38/44/31/54, 37/44/31/54 and 38/44/31/54** codes, max error **6**, mean
+error **1.226 / 1.216 / 1.226**, expected SDR channels/range/VUI. Ordinary
+8-bit HEVC and H.264 remain **16/64** captured codes, decoded **9/12/9/14**,
+max error **14**, mean **6.167**. The secure-input simulation also passes
+with 12/12 ordered source stamps and unchanged 10-bit output; this is not
+an actual lock/sign-in test.
+
+The verified build is **installed**; release and installed SHA-256 both:
+`09E95E2D9F4B97EC3479F6BCF1D51B8A145E3095EF1B86E13D8BBF22F1E3E276`.
+The accepted elevation ran `timing-system-guarded.ps1`. It required a **new**
+worker's explicit no-VDD startup proof, then rechecked that worker before
+each probe. Both five-second SYSTEM probes exit 0 with video_format
+**0x09 / 0x0d** on the unchanged 2560×1440@120 physical primary:
+
+| SYSTEM check | 4:2:0 10-bit | 4:4:4 10-bit |
+|---|---:|---:|
+| Frames / EXT records | 467 / 466 | 466 / 465 |
+| Known source stamps / out of order | 9 / 0 | 99 / 0 |
+| Source → submit p50 / p95, ms | 7.079 / 16.473 | 2.964 / 3.281 |
+| Submit → sent p50 / p95, ms | 3.024 / 4.048 | 4.556 / 5.794 |
+| PC work p50 / p95, ms | 3.25 / 4.28 | 4.76 / 6.01 |
+| Clock requests / retained samples (limit 8) | 9 / 8 | 9 / 8 |
+| Best offset / delay, us | +5 / 39 | -2 / 59 |
+
+The native scene still retains **64/64** codes, zero error, visible cursor
+and no trails. SYSTEM dumps decode **36/40/35/52 / 34/44/32/54** codes, max
+error **6 / 6**, mean **1.438 / 1.292**, correct SDR controls/VUI. Short
+static-scene checks, startup-inclusive fps and sparse known timestamps do
+not qualify sustained 3024×1964@120 latency/performance.
+
+The harness completed **success=True**; the normal service command was
+restored and a normal worker started at **02:34:23 UTC**, service Running,
+`enc=q,444,10`, installed hash matching release. Pair-only passes with the
+same identities and caps `0x0f`; no display is requested by that check.
+Evidence is under ignored `host/target/precision-evidence/timing-*` and
+`host/target/timing-{tests,clippy,release-build}.txt`. No exclusive display
+session, actual lock/sign-in or Mac runtime test was run for this update.
+The user/Mac qualification and unknown-source HUD follow-up stay open.
 
 **Still pending — user / Mac / PC follow-up (keep this item open)**
 
@@ -536,11 +626,13 @@ References: [WGC cursor inclusion](https://learn.microsoft.com/en-us/uwp/api/win
    compare fps, PC work, receive → screen and input latency for both chroma
    modes against 8-bit. All earlier “10-bit free” measurements used the old
    8-bit source and must not be treated as a result for WGC/FP16 capture.
-4. PC + Mac: qualify a content-present timestamp for WGC before restoring its
-   Desktop → screen/content-age rows. Do not substitute SystemRelativeTime
-   for LastPresentTime without checking semantics; any contract change follows
-   host/spec/client rollout. This does not block pixel precision, but the new
-   path's full desktop-to-screen latency remains unmeasured.
+4. Mac + user: verify the existing Desktop → screen, image-age and encode/send
+   rows against the installed unified-timing host, in both chroma modes and
+   across secure/Default transitions. Keep the same labels as 8-bit; no Mac
+   upgrade is required for valid stamps. Host no-VDD timing is verified below,
+   but real-Mac source-to-screen latency, the exclusive VDD source and actual
+   desktop switches remain unqualified. The separate Mac unknown-source HUD
+   follow-up is still open.
 
 **Verification and acceptance**
 

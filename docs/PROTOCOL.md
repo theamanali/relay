@@ -495,7 +495,7 @@ follows every FRAME instead of FRAME_TIMING. 68 bytes:
 | offset | field | type | meaning |
 |---|---|---|---|
 | 0 | `sequence` | u64 | as FRAME_TIMING |
-| 8 | `present_us` | u64 | DWM's `LastPresentTime` of the newest desktop frame in this picture; `u64::MAX` when the tick re-encoded unchanged content or only the cursor moved |
+| 8 | `present_us` | u64 | source desktop frame time on the host QPC clock: Desktop Duplication's `LastPresentTime`, or WGC's compositor `SystemRelativeTime` converted from 100 ns units; `u64::MAX` without a valid fresh source timestamp |
 | 16 | `submit_us` | u64 | when `NvEncEncodePicture` returned for this picture |
 | 24 | `sent_us` | u64 | after the FRAME was written to the socket |
 | 32 | `capture_us` | u32 | as FRAME_TIMING |
@@ -506,7 +506,18 @@ follows every FRAME instead of FRAME_TIMING. 68 bytes:
 | 52 | `inputs_applied` | u64 | input messages (`0x90`–`0x93`) the host handled since the client's first TIME_REQUEST |
 | 60 | `last_input_us` | u64 | when the `inputs_applied`-th of them was handled (after `SendInput` returned); `u64::MAX` before any |
 
-On a fresh picture `present_us ≤ submit_us ≤ sent_us`. `inputs_applied`
+When `present_us` is known, `present_us ≤ submit_us ≤ sent_us`. Re-encoding
+without a fresh source frame leaves it unknown. Desktop Duplication reports
+no desktop timestamp for a cursor-only update; WGC includes the cursor in
+its captured frame and may supply a fresh compositor timestamp for it. A
+source timestamp later than `submit_us` is also unknown for that picture:
+the host neither clamps it to submission/arrival time nor delays video to
+make it fit. WGC has exhibited this case on the tested Windows/driver stack.
+
+Both sources use the same fields, clock sync, calculations and Mac HUD
+labels. No new message, capability or client upgrade is needed. The source
+point is the desktop/compositor frame, not the application's original draw
+call or physical display scanout. `inputs_applied`
 counts every input message read after the first TIME_REQUEST, including ones
 not applied (Observe, or a payload too short); a client counts every input
 message it sends after its first TIME_REQUEST, and TCP's ordering makes the

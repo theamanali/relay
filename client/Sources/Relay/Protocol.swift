@@ -241,8 +241,9 @@ enum Proto {
         static let unknown = UInt64.max
 
         let sequence: UInt64
-        /// DWM's present of the newest desktop frame in this picture;
-        /// `unknown` on a re-encoded or cursor-only tick.
+        /// Source desktop frame time: DDA LastPresentTime or WGC compositor
+        /// SystemRelativeTime on the host clock. `unknown` without a valid
+        /// fresh stamp (re-encode, DDA cursor-only, or source after submit).
         let presentMicros: UInt64
         let submitMicros: UInt64
         let sentMicros: UInt64

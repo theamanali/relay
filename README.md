@@ -180,15 +180,19 @@ no-VDD 4:2:0 and 4:4:4 sessions: decoded native ramps retain finer precision,
 correct channels/range and unchanged SDR VUI. The normal service is Running
 and advertises 10-bit; installed/release hashes match. Virtual-display source
 qualification, secure-desktop transitions/recovery and real-Mac performance remain pending in
-[SESSION-HANDOFF.md](SESSION-HANDOFF.md). WGC's timestamp is not the protocol's
-DWM LastPresentTime: FP16 capture currently leaves Desktop → screen /
-content-age timing unknown; other timings remain available. Earlier claims
+[SESSION-HANDOFF.md](SESSION-HANDOFF.md). WGC's compositor timestamp now travels
+with its exact shared GPU frame and uses the existing Mac frame-timing fields,
+calculations and labels, just like 8-bit. Installed SYSTEM no-VDD tests in both
+10-bit chroma modes received valid source age/encode-send timing with zero
+ordering violations; real-Mac HUD/end-to-end confirmation remains pending.
+Repeated frames without a new source timestamp, and WGC stamps later than
+submission, remain unknown rather than receiving an invented time. Earlier claims
 that 10-bit was free measured an **8-bit capture encoded into Main10**.
 
 The Mac HUD currently confuses missing source-present timing with an unsynced
-clock and hides its encode/send detail with image age. A targeted Mac follow-up
-is open in SESSION-HANDOFF.md; those display issues are not fixed by claiming
-a source timestamp the host cannot yet qualify.
+clock and hides its encode/send detail with image age when source timing is
+unavailable. That Mac follow-up remains open in SESSION-HANDOFF.md. Valid
+10-bit source timestamps now feed the existing HUD without a client upgrade.
 
 
 **Display scale (2026-10-18):** the Mac now tells the PC which Windows scale

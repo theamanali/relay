@@ -61,15 +61,15 @@ README status and here. Do not create other handoff or retest files.
   and after GPU conversion/cursor, max error 0; legacy capture retained 16/64,
   max ramp error 2. Actual production 4:2:0 and 4:4:4 10-bit dumps decoded with
   finer precision, correct channel/range controls and unchanged SDR VUI.
-  Windows fmt, 239 unit tests + 2 probe tests + integration, strict clippy and
+  Windows fmt, 243 unit tests + 2 probe tests + integration, strict clippy and
   release build pass; the separate read-only NVENC/WinRT lifetime regression
   also passes. Four ordinary-user no-VDD protocol sessions pass, as does the
   shared-GPU helper diagnostic (64/64 source codes, max error 0). Implemented
   in `ecb33ee`, secure-source policy in `c060d0f`, actual WGC cursor fix in
-  `20ea60a`, installed with release/installed SHA-256
-  `225B3B78C71922910C7B8B946973ABB992B640EAE9E5BBE40B671BC5AA80188A`.
+  `20ea60a`, then unified source timing in `792bca7`; installed with release/installed SHA-256
+  `09E95E2D9F4B97EC3479F6BCF1D51B8A145E3095EF1B86E13D8BBF22F1E3E276`.
   Guarded SYSTEM no-VDD sessions passed both chroma modes on the unchanged
-  2560×1440@120 primary; latest decoded ramps retained 37/41/38/51 and 33/46/30/54
+  2560×1440@120 primary; latest decoded ramps retained 36/40/35/52 and 34/44/32/54
   R/G/B/gray codes (max errors 6/6), with correct SDR controls/VUI. Actual
   pointer pixels and zero trails pass in direct and GPU-shared capture;
   disabling the WGC cursor makes the negative control fail. Normal
@@ -81,8 +81,17 @@ README status and here. Do not create other handoff or retest files.
   restored both physical monitors/layout; details and corrected no-VDD guard
   are in SESSION-HANDOFF.md.
   `precision` + `tools/check-precision.py` reproduce the numeric check.
-  WGC SystemRelativeTime drives cadence only: wire `present_us` is unknown
-  until a source timestamp matching the protocol's DWM contract is qualified.
+  WGC SystemRelativeTime now uses the same `present_us`/Mac calculations and
+  HUD labels as 8-bit, per the user. The helper publishes a tagged sequence +
+  source QPC record before releasing the RGB10 slot; the host consumes both
+  before returning ownership. New helpers reset pipe/sequence; partial,
+  mismatched, backwards and error records cannot supply a timestamp. Preserve
+  the raw stamp for cadence, but omit it from wire/stats if later than submit
+  (observed on this stack); never invent 0 age, substitute pipe/arrival time
+  or delay video. Re-encodes without fresh source stay unknown. Installed
+  SYSTEM probes received 9/99 known source stamps in 466/465 timing records,
+  zero out of order; clock/work telemetry remained available. No wire layout,
+  capability or Mac runtime change. Real-Mac HUD/performance remains pending.
   Logs report unknown source age as unavailable, not 0 ms. The Mac HUD's
   false "clock not synced" label and hidden encode/send detail have a targeted
   Mac-owned Open item; do not confuse absent source timing with clock failure.

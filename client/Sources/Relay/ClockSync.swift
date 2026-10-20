@@ -77,7 +77,8 @@ struct InputLedger: Sendable {
 struct FrameEndToEnd: Equatable, Sendable {
     /// This Mac's FRAME sequence (the one the presenter reports).
     var sequence: UInt64
-    /// DWM's present in Mac µs; nil on a re-encoded tick or before sync.
+    /// Source desktop frame time in Mac µs (DDA or WGC); nil without a
+    /// valid source stamp or before sync. Both use the same HUD metrics.
     var presentMacMicros: Int64?
     /// Present → submitted to NVENC: how old the content was at encode.
     var contentAgeMs: Double?
