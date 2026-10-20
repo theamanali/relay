@@ -243,8 +243,9 @@ both input formats with the selected 10-bit output. Unknown desktops wait;
 WGC failure on Default never permits an 8-bit downgrade. Ordinary 8-bit and
 H.264 sessions keep their existing behavior. Actual secure-desktop transitions
 and real-Mac continuity remain user checks in SESSION-HANDOFF.md.
-Normal, masked and monochrome cursors
-are supported; XOR uses integer operations on the destination's native codes.
+The 8-bit/secure DDA overlay supports normal, masked and monochrome cursors;
+XOR uses integer operations on the destination's native codes. True 10-bit
+cursor composition is performed by Windows in the WGC source instead.
 Eight-bit sessions retain Desktop Duplication/BGRA8/ARGB. The capability record
 requires FP16 shader load, RGB10 render/blend, WGC support and NVENC ABGR10;
 preflight initializes, registers and maps the real input and creates the SDR

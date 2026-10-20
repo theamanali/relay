@@ -20,6 +20,44 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
+### → Mac: distinguish missing source timing from clock sync; show encode/send independently (2026-10-19)
+
+The user reports no image age / encode & send detail and "clock not synced"
+in 10-bit sessions. PC source audit: `StatsHUD.Presentation.init` uses
+`desktopToScreen.p50 != nil` to decide both whether end-to-end data exists
+and whether the clock is synced. A WGC frame deliberately has unknown
+`present_us`; this makes the message misleading even with a valid clock.
+`clockOffsetMs` / `clockDelayMs` already distinguish actual sync. The
+`contentAge.p50.map` also hides the numerical encode/send detail whenever
+source presentation time is absent. Host FRAME_TIMING_EXT still supplies
+capture/encode/send, submit and sent stamps; HostConnection forwards basic
+timings before examining the present stamp. Guarded PC probes kept 7/7 clock
+replies and received valid work / submit→sent metrics with unknown present.
+That establishes host/protocol availability, not this Mac's measured sync.
+
+Mac-owned follow-up (PC has not edited `client/`):
+
+1. In `StatsHUD.swift`, use actual clock state for "clock not synced".
+   With a valid clock but no source presentation time, explain that source
+   timing is unavailable and show receive → screen. Never manufacture image
+   age / desktop → screen from receive time or label WGC capture as DWM present.
+2. Show PC work independently of content age. For the separate **encode &
+   send** duration, derive `sentMicros - submitMicros` in `FrameEndToEnd`
+   whenever both stamps are known and ordered: it uses one host clock and
+   needs neither clock sync nor `presentMicros`. Record/expose it in
+   `LatencyStats` and the HUD even while image age is unknown. Keep it distinct
+   from basic capture+encode+send work; do not silently rename their sum.
+3. Tests: synced + unknown present; genuinely unsynced; valid encode/send with
+   unknown present and no sync; broken/unknown stamps; ordinary 8-bit DWM
+   timing; source transitions without stale image-age/end-to-end values. Run
+   Swift tests, fakehost checks and a bundled real 10-bit PC session.
+
+True WGC image-age / compositor-to-screen timing remains the separate
+qualification item below. The current wire defines `present_us` as DWM
+LastPresentTime. WGC SystemRelativeTime is a documented compositor-render QPC
+timestamp, but substituting it needs validated semantics and coordinated
+host/spec/client work. This handoff does not change the wire contract.
+
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 
 **User request:** make the existing Mac **10-bit color** setting select a
@@ -124,6 +162,12 @@ off do not opt into this policy.
    must follow AGENTS.md's host-first/spec/client sequence.
 
 **PC implementation and measured results (2026-10-19)**
+
+The initial method below excluded the WGC cursor and relied on DDA pointer
+metadata. The user's real VDD session exposed a missing cursor; the later
+cursor correction section supersedes that cursor ownership. Earlier numeric
+ramp evidence remains valid, but artificial CursorOverlay checks alone did
+not qualify actual pointer visibility on the VDD.
 
 - Installed driver: `oem49.inf`, MTT `11.30.4.434`, matching the cached
   `VirtualDisplayDriver-25.7.23-x64.zip` INF. Registry VDDPATH is
@@ -382,6 +426,87 @@ Actual lock/login, sign-in, user-switch and real-Mac continuity remain
 pending below; older 8-bit-source lock/recovery tests do not qualify the new
 automatic policy. No exclusive session or actual lock/sign-in was run by the
 agent for this update.
+
+**Cursor correction and timing diagnosis (2026-10-19; `20ea60a`)**
+
+The user reports no cursor on the real 10-bit VDD session, and missing image
+age / encode-send / desktop-to-screen HUD values with "clock not synced".
+The initial WGC source explicitly excluded its cursor and relied on DDA's
+separate pointer shape/visibility. That is insufficient when DDA has already
+baked the pointer into the BGRA8 desktop that this path discards. The fix
+enables **WGC cursor capture in FP16**, including in the user helper, and
+never updates/draws a DDA overlay on true 10-bit frames. DDA now observes
+output loss/recovery only there. Windows owns the single pointer composition;
+GPU SDR conversion, RGB10 sharing/slots and ABGR10 input retain precision.
+The 8-bit/secure paths keep their existing DDA cursor behavior.
+
+`precision --cursor-check` now compares **actual Windows cursor pixels** at
+two positions with the known native RGB10 test image, and verifies the old
+position is clean after moving. It restores the pointer on success/error and
+pumps test-window messages so a long held scene stays responsive. The release
+direct paths detected **93 / 144** changed pixels; the shared-GPU helper path
+detected **13 / 260**; both positions had **zero trail pixels**. Counts depend
+on which cursor frame arrives; the test requires visible pixels, not those
+exact counts. A negative control with `omit-wgc-cursor` fails with "WGC cursor
+missing or left trails", reproducing the old source setting. Synthetic
+CursorOverlay shapes alone would not have caught this regression.
+
+All native 10-bit ramps still retain **64/64** source/composed codes with
+maximum error **0**. Release 4:2:0, 4:4:4 and helper production dumps decode
+with **38/44/31/54** R/G/B/gray codes, max error **5**, mean errors
+**1.199 / 1.193 / 1.199**, correct SDR controls/VUI. Ordinary 8-bit HEVC and
+H.264 remain **16/64** source codes (max error 2), decoded **9/12/9/14**,
+max error 14 / mean 6.167. Windows fmt, 239 unit + 2 probe + integration,
+strict clippy, release and the separate NVENC lifetime/input trial pass.
+Evidence: `cursor-direct*`, `cursor-broker*`, `cursor-negative*`,
+`cursor-release-{420,444,broker,eight,h264}.*` under the ignored evidence folder.
+
+The cursor build is installed; release/installed SHA-256 both equal
+`225B3B78C71922910C7B8B946973ABB992B640EAE9E5BBE40B671BC5AA80188A`.
+The first installation's guarded SYSTEM test stopped **before any probe** on
+a PowerShell log Substring/argument type error. Its finally restored the
+normal service. Pair-only passes, service Running, `enc=q,444,10`, no helper
+left behind. The corrected log reader casts a joined string and integer
+index. The accepted SYSTEM-only retest then completed **success=True** without
+reinstalling. The newest no-VDD worker guard passed before both exit-0 probes.
+The scene retained **64/64** codes, max error 0, and actual cursor checks
+detected **93 / 144** changed pixels with zero trails. SYSTEM 4:2:0 / 4:4:4
+dumps decode with **37/41/38/51 / 33/46/30/54** ramp codes, max errors **6 / 6**,
+mean errors **1.404 / 1.346**, expected SDR VUI and channel/range controls.
+Both kept **7/7** clock replies while DWM present stayed unknown; independent
+submit → sent p50/p95 **2.798/3.005 / 4.508/4.967 ms**, PC work
+**2.97/3.19 / 4.70/5.18 ms**. These directly demonstrate encode/send and clock
+telemetry do not depend on a source-present stamp. They do not prove this
+Mac's UI consumes or labels them correctly.
+
+Normal service restored at **02:11:19 UTC**, Running, `enc=q,444,10`, only
+supervisor/worker remain, hashes still match, pair-only exit 0 with the same
+already-paired identities and caps `0x0f`. `cursor-system-guarded-first-*`
+preserves the failed harness evidence; `cursor-system-*`,
+`cursor-final-normal-worker.txt`, `cursor-installed-pair-only*` preserve the
+successful final checks. No exclusive test or actual lock/sign-in was run by
+the agent for this cursor correction. Reconnect from the Mac to verify the
+pointer in the real VDD stream; that visual check is still pending.
+
+The WGC DWM present timestamp remains **unknown**. Clock requests/replies and
+encode/send telemetry still work independently; the Mac HUD bug/follow-up is
+the separate Open item above. Host logging now says source age is unavailable
+instead of reporting a fabricated **0.00 ms** when no samples are known, and
+averages known ages over their actual sample count. No wire/client change.
+
+Read-only audit of the user's installed `D63A3F7F…` session: 01:48:29 UTC
+active VDD **10-bit SDR** at 3024×1964@120; 01:48:33 Winlogon BGRA8/ARGB
+source with unchanged 10-bit output (recovered in 1.2 s); 01:52:40 Default
+RGB10/helper source (1.5 s), same TCP session until normal restore at
+01:53:34. Both physical devices/layout and original VDD color tags restored.
+The cause of that Winlogon interval (lock/login/UAC) was not independently
+recorded, so it does not qualify reboot-before-login or user-switch behavior.
+Later 8-bit / 10-bit sessions also restore normally. Host logs show steady
+120 fps on the true 10-bit source, but Mac screen latency/buffer precision,
+actual VDD native-ramp precision and the fixed cursor still need user checks.
+
+References: [WGC cursor inclusion](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.iscursorcaptureenabled),
+[DDA pointer composition](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api#updating-the-desktop-pointer).
 
 **Still pending — user / Mac / PC follow-up (keep this item open)**
 

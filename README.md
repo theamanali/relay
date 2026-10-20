@@ -158,14 +158,14 @@ were measured and rejected; both are written up in
 **True 10-bit SDR (host implemented and installed, 2026-10-19):** the existing toggle now
 sets MTT's SDR10bit option before device start, restores its original colour
 switches on cleanup/crash recovery, captures FP16 SDR through Windows Graphics
-Capture, converts linear scRGB to SDR RGB10 on the selected GPU, and composes
-the cursor into RGB10 before NVENC ABGR10 input. SYSTEM uses a signed-in-user
+Capture including Windows' cursor composition, then converts linear scRGB to
+SDR RGB10 on the selected GPU before NVENC ABGR10 input. SYSTEM uses a signed-in-user
 capture helper with GPU texture sharing on the user's Default desktop.
 With 10-bit selected, lock/login screens temporarily use an 8-bit source;
 sign-in recreates true 10-bit capture automatically, and locking switches back.
 The display and Main10/Rext stream remain 10-bit, so no reconnect is needed.
 Sessions with 10-bit off keep their existing behavior. Desktop Duplication remains
-the 8-bit source and supplies cursor information for true 10-bit desktop capture: it
+the 8-bit source and observes output loss/recovery for true 10-bit desktop capture: it
 returned BGRA8 even when this MTT display reported 10 bits/channel. Unsupported
 capture/conversion on Default fails without an 8-bit-source fallback; HDR remains separate.
 
@@ -184,6 +184,11 @@ qualification, secure-desktop transitions/recovery and real-Mac performance rema
 DWM LastPresentTime: FP16 capture currently leaves Desktop → screen /
 content-age timing unknown; other timings remain available. Earlier claims
 that 10-bit was free measured an **8-bit capture encoded into Main10**.
+
+The Mac HUD currently confuses missing source-present timing with an unsynced
+clock and hides its encode/send detail with image age. A targeted Mac follow-up
+is open in SESSION-HANDOFF.md; those display issues are not fixed by claiming
+a source timestamp the host cannot yet qualify.
 
 
 **Display scale (2026-10-18):** the Mac now tells the PC which Windows scale

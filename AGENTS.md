@@ -37,13 +37,16 @@ README status and here. Do not create other handoff or retest files.
   MTT 25.7.23 package is INF 11.30.4.434 (`oem49.inf`), VDDPATH
   `C:\VirtualDisplayDriver`. Non-exclusive on/off/on tests reported 10/8/10
   SDR bits/channel, but DuplicateOutput1 still returned BGRA8. Thus true 10-bit
-  uses WGC FP16 linear scRGB, same-GPU sRGB OETF to R10G10B10A2, RGB10 cursor
-  composition/slots and NVENC **ABGR10**. DDA supplies only the pointer there;
+  uses WGC FP16 linear scRGB with Windows cursor composition, same-GPU sRGB
+  OETF to R10G10B10A2, RGB10 slots and NVENC **ABGR10**. DDA observes output recovery there;
   8-bit/H.264 keep BGRA8/ARGB. SYSTEM uses a signed-in-user capture-source
   process from the same binary (WGC activation fails under SYSTEM). A
   PID-authenticated local pipe transfers only an explicitly duplicated RGB10
   texture handle; keyed-mutex GPU sharing keeps pixels off the CPU. SYSTEM
-  retains cursor, NVENC, keys, input and topology. In a selected 10-bit session,
+  retains NVENC, keys, input and topology; the user helper captures the cursor
+  with its FP16 desktop. DDA pointer metadata can omit a cursor already baked
+  into its discarded BGRA8 image, so WGC includes it and no DDA overlay is
+  drawn on true 10-bit frames. In a selected 10-bit session,
   Winlogon uses temporary DDA/BGRA8/ARGB input and Default uses true FP16/RGB10.
   The Main10/Rext output and 10-bit VDD stay fixed; desktop changes recreate
   capture in either direction without reconnecting. This secure-desktop
@@ -62,11 +65,14 @@ README status and here. Do not create other handoff or retest files.
   release build pass; the separate read-only NVENC/WinRT lifetime regression
   also passes. Four ordinary-user no-VDD protocol sessions pass, as does the
   shared-GPU helper diagnostic (64/64 source codes, max error 0). Implemented
-  in `ecb33ee`, secure-source policy in `c060d0f`, installed with release/installed SHA-256
-  `D63A3F7F8ACF1B19D92897D8E4E7B5B5655E0B3047CB330F4C600CD3D70A517F`.
+  in `ecb33ee`, secure-source policy in `c060d0f`, actual WGC cursor fix in
+  `20ea60a`, installed with release/installed SHA-256
+  `225B3B78C71922910C7B8B946973ABB992B640EAE9E5BBE40B671BC5AA80188A`.
   Guarded SYSTEM no-VDD sessions passed both chroma modes on the unchanged
-  2560×1440@120 primary; decoded ramps retained 38/43/35/52 and 36/43/28/54
-  R/G/B/gray codes (max errors 5/6), with correct SDR controls/VUI. Normal
+  2560×1440@120 primary; latest decoded ramps retained 37/41/38/51 and 33/46/30/54
+  R/G/B/gray codes (max errors 6/6), with correct SDR controls/VUI. Actual
+  pointer pixels and zero trails pass in direct and GPU-shared capture;
+  disabling the WGC cursor makes the negative control fail. Normal
   service restored, Running, `enc=q,444,10`; pair-only passed and both capture
   helpers exited. The latest harness completed successfully after caching the
   scene process handle fixed its earlier blank ExitCode. Forced secure-input
@@ -77,6 +83,9 @@ README status and here. Do not create other handoff or retest files.
   `precision` + `tools/check-precision.py` reproduce the numeric check.
   WGC SystemRelativeTime drives cadence only: wire `present_us` is unknown
   until a source timestamp matching the protocol's DWM contract is qualified.
+  Logs report unknown source age as unavailable, not 0 ms. The Mac HUD's
+  false "clock not synced" label and hidden encode/send detail have a targeted
+  Mac-owned Open item; do not confuse absent source timing with clock failure.
   VDD source precision with the new WGC path, SYSTEM/secure desktop/recovery,
   exclusive restore and real-Mac 3024×1964@120 performance remain pending in
   SESSION-HANDOFF.md; older “10-bit free” results are encoding-only baselines.
