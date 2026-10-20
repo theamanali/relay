@@ -319,6 +319,42 @@ until actual correlated results exist.
 Record the validated correction or remaining blocker here; do not call
 invented source times or merely suppressing “source timing idle” a pass.
 
+**Matched desktop-motion evidence (2026-10-20 Pacific; investigation open)**
+
+Existing runtime, no code or validation changes: Mac build 319 on clean
+`980bc5c`, M3 Pro/macOS 27.0 (26A428), installed PC executable SHA-256
+`09E95E2D9F4B97EC3479F6BCF1D51B8A145E3095EF1B86E13D8BBF22F1E3E276`.
+The real session used Ethernet, HEVC 4:4:4 10-bit, 3024×1964@120, Fastest,
+120 Mbps and VSync off. PC log confirms signed-in-user WGC/shared RGB10;
+Mac `RELAY_TIMING_LOG=1` records the corresponding windows.
+
+At the user's request, a temporary borderless WinForms checkerboard provided
+an automatic static 10 s → horizontal motion 30 s → static 15 s control,
+with UTC phase boundaries and measured paint counts. It does not inject
+input, alter Relay or change display modes. At 200% scaling its 1512×982
+logical client filled the 3024×1964 desktop. Motion ran
+**01:25:31.322–01:26:01.331 Pacific**, 1,921 paints / 30.009 s = **64.014 Hz**;
+the stream remained 120 Hz. Do not label the workload itself 120 fps.
+An earlier attempted window-drag phase failed input injection and is excluded.
+
+Five disjoint 600-frame PC batches ending 01:25:39.725 / :44.725 /
+:49.725 / :54.725 / :59.725 cover 25 s wholly within the motion phase:
+**3,000 encoded frames, 1,485 marked fresh, 1,515 reused, zero known source
+ages in all five batches** (`source presentation time unknown`). Matching
+Mac windows from 01:25:43.589 through 01:25:59.639 have
+`source-age[n=0]`, `desktop-screen[n=0]`, `sync=yes`, accepted clock replies
+417→432, decoded 119.9–120.0 fps and shown 119.9–120.0 fps. PC-work and
+encode/send remain populated (~7.0 and 6.8 ms p50).
+
+This reproduces the missing source measurement under objective desktop
+motion outside Valorant. Loss is already present in PC encoder telemetry,
+before transmission; Mac presentation loss is not required to explain this
+interval. Existing aggregate logs cannot distinguish missing WGC/helper
+metadata from rejected future/invalid source stamps. They do not establish
+the exact cause or justify relaxing validation. Fullscreen Valorant gameplay,
+the matched 8-bit DDA comparison and raw timestamp/rejection diagnostics
+remain pending. Scratch traces are being preserved for the next PC step.
+
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 
 **User request:** make the existing Mac **10-bit color** setting select a
