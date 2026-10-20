@@ -200,6 +200,11 @@ and correct black/white/RGB controls for all four HEVC formats plus H.264/8-bit.
 This proves the Mac decode/shader/target path, not exclusive PC/VDD capture or
 physical-panel precision. Real-PC qualification remains in SESSION-HANDOFF.md.
 
+Video settings also offer **Extra frames**, off by default: request 20% above
+the selected refresh rate (120 → 144 fps), up to 240 fps, on the next connection.
+Automatic bitrate follows the request, while the HUD/report retain the selected
+Mac cadence for latency budgets. Real-PC benefit remains to be measured.
+
 
 **Display scale (2026-10-18):** the Mac now tells the PC which Windows scale
 to use for the virtual display (PROTOCOL.md "Display scale"): the requested

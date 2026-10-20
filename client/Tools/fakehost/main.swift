@@ -283,7 +283,8 @@ func describeHello(_ payload: Data) -> String {
         ext += ", no display scale"
     }
     let size = p.count >= 6 ? "\(UInt16(p[2]) << 8 | UInt16(p[3]))x\(UInt16(p[4]) << 8 | UInt16(p[5])), " : ""
-    return "\(size)codecs 0b\(String(codecs, radix: 2)), \(ext)"
+    let refresh = p.count >= 8 ? "\(UInt16(p[6]) << 8 | UInt16(p[7])) fps, " : ""
+    return "\(size)\(refresh)codecs 0b\(String(codecs, radix: 2)), \(ext)"
 }
 
 func serve(_ fd: Int32) {

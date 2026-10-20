@@ -269,8 +269,9 @@ enum StatsHUD {
     static func streamRows(_ s: StreamInfo, receivedMbps: Double?) -> [(String, String)] {
         var rows = [("Video", "\(s.codec) \(s.width)×\(s.height) @ \(s.fps) Hz")]
         if !s.format.isEmpty { rows.append(("Picture", s.format)) }
-        // VSync off is the default; only the exception takes a row.
-        if s.vsync { rows.append(("Display", "VSync on")) }
+        if let refresh = s.displayRefresh, s.fps > refresh {
+            rows.append(("Display", "\(refresh) Hz, VSync \(s.vsync ? "on" : "off")"))
+        } else if s.vsync { rows.append(("Display", "VSync on")) }
         if let link = s.link { rows.append(("Link", link)) }
         rows.append(("Data", "\(receivedMbps.map { String(format: "%.0f", $0) } ?? "––") of \(s.bitrateMbps) Mbps"))
         return rows

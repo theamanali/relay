@@ -928,7 +928,18 @@ documented there. What follows is only the mechanics that are easy to break:
   the footer fits), following the window between displays. A user-reported
   stream at 2560×1440@144 to an external monitor worked on the real PC;
   165 Hz has not been streamed. `--max-fps` picks the highest offered rate
-  at or under it.
+  at or under it. Optional **Extra frames** (2026-10-20) is a persisted switch
+  below Refresh rate in Video, default off: `SessionPrefs.requestedRefresh`
+  asks for ceil(selected × 1.2), capped at 240 and any explicit `--max-fps`.
+  Both the picker bitrate preview and the connection use this requested
+  rate; Windows' VDD/encoder use the existing CLIENT_HELLO refresh field.
+  The selected Mac cadence stays separate in `StreamInfo.displayRefresh`
+  for HUD/report budgets and the Display row. Carries and FPS counting are
+  unchanged; oversupplying can intentionally replace frames. 211 Swift
+  tests, 24 isolated loopback checks, release bundle/signature and live
+  Settings checks pass (120 → 144,
+  60 → 72, dynamic bitrate, restored to off). Real-PC 144-on-120 latency,
+  pacing, load and restore remain pending in SESSION-HANDOFF.md.
 - Build arm64 only, minimum macOS 26 (raised from 14 on 2026-10-18, user
   decision: 14 was never tested, and every Apple silicon Mac runs 26;
   swift-tools-version 6.2). Latest stable OS is the

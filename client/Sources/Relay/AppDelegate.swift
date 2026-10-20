@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
     private var pendingSession: (screen: NSScreen, mode: StreamMode)?
     /// Remembered options, with this launch's flags applied on top.
     private var prefs = SessionPrefs()
+    /// The selected Mac cadence for this connection, before extra frames.
+    private var sessionRefresh = 60
     /// Opens SwiftUI's picker window. SwiftUI opens it by itself only when
     /// LaunchServices starts the app (Finder, Dock, `open`); started directly
     /// (`Relay.app/Contents/MacOS/Relay --scale 0.75`) a binary built against
@@ -104,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         view = StreamView(frame: screen.frame)
         view.delegate = self
         pickerModel.prefs = prefs
+        pickerModel.maxStreamFPS = options.maxFPSGiven ? options.maxFPS : 240
         applyPrefs()
         view.attach(videoLayer: renderer.layer)
         // Decoded frames land on VideoToolbox threads; hop to main for the view.
@@ -523,7 +526,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
         opts.requestedWidth = w
         opts.requestedHeight = h
         opts.displayScale = UInt16(clamping: prefs.requestedDisplayScale(pixelWidth: w, pointWidth: screen.frame.width))
-        opts.requestedRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
+        sessionRefresh = min(mode.refresh, Self.maxRefresh(of: screen))
+        opts.requestedRefresh = prefs.requestedRefresh(
+            displayRefresh: sessionRefresh,
+            maxFPS: options.maxFPSGiven ? options.maxFPS : 240)
         opts.wantsInput = prefs.forwardInput
         opts.requestedBitrateMbps = prefs.bitrateAutomatic
             ? VideoBitrate.automatic(width: w, height: h, refresh: opts.requestedRefresh,
@@ -678,7 +684,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StreamViewDelegate, NS
             width: stream.width, height: stream.height, fps: stream.fps, bitrateMbps: stream.bitrateMbps,
             format: stream.formatSettings.joined(separator: ", "),
             link: options.fixedHost == nil ? currentHost?.connectLink : nil,
-            vsync: prefs.preventTearing))
+            vsync: prefs.preventTearing,
+            displayRefresh: sessionRefresh))
         sessionReportPending = true
     }
 
