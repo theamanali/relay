@@ -50,14 +50,24 @@ final class SourceTimingTests: XCTestCase {
         stats.record(try frame(), at: 4 * second)
         stats.recordShown(sequence: 1, atMicros: 4_010_000, at: 4 * second)
         XCTAssertEqual(stats.hudSnapshot(at: 4 * second).desktopToScreen.p50, 10)
-        // More than five seconds of repeats and then a capture gap. Replies
+        // More than ten seconds of repeats and then a capture gap. Replies
         // continue; neither the clock nor the stream is reset by static video.
-        for t in 5...12 {
+        // During the grace window, the sparkline carries the previous frame's
+        // latency forward on every presented frame so it doesn't freeze.
+        for t in 5...8 {
             stats.recordClock(try XCTUnwrap(clock.best))
             stats.record(try frame(sequence: UInt64(t), present: .max), at: UInt64(t) * second)
             stats.recordPresented(milliseconds: 4, at: UInt64(t) * second)
         }
-        var hud = stats.hudSnapshot(at: 12 * second)
+        var hud = stats.hudSnapshot(at: 8 * second)
+        XCTAssertEqual(hud.desktopToScreen.p50, 10)
+        XCTAssertEqual(hud.desktopSparkline, [10, 10, 10, 10, 10], "sparkline carries forward previous latency")
+        for t in 9...15 {
+            stats.recordClock(try XCTUnwrap(clock.best))
+            stats.record(try frame(sequence: UInt64(t), present: .max), at: UInt64(t) * second)
+            stats.recordPresented(milliseconds: 4, at: UInt64(t) * second)
+        }
+        hud = stats.hudSnapshot(at: 15 * second)
         XCTAssertNotNil(hud.clockOffsetMs)
         XCTAssertNil(hud.contentAge.p50)
         XCTAssertNil(hud.desktopToScreen.p50)
@@ -67,14 +77,15 @@ final class SourceTimingTests: XCTestCase {
         XCTAssertEqual(StatsHUD.Summary(hud).unsyncedNote, "Receive → screen, source timing idle")
         XCTAssertTrue(StatsHUD.Summary(hud).groups[0].detail.contains("encode & send 3.0"))
         // Fresh content after a source/recovery transition, same connection.
-        stats.record(try frame(sequence: 13, present: 13_000_000, submit: 13_002_000,
-                               sent: 13_005_000, received: 13_006_000), at: 13 * second)
-        stats.recordShown(sequence: 13, atMicros: 13_012_000, at: 13 * second)
-        hud = stats.hudSnapshot(at: 13 * second)
+        stats.record(try frame(sequence: 16, present: 16_000_000, submit: 16_002_000,
+                               sent: 16_005_000, received: 16_006_000), at: 16 * second)
+        stats.recordShown(sequence: 16, atMicros: 16_012_000, at: 16 * second)
+        hud = stats.hudSnapshot(at: 16 * second)
         XCTAssertEqual(hud.desktopToScreen.p50, 12)
         XCTAssertEqual(hud.contentAge.p50, 2)
+        XCTAssertEqual(hud.desktopSparkline, [12], "expired source points must not reappear when motion returns")
         XCTAssertNil(StatsHUD.Summary(hud).unsyncedNote)
-        hud = stats.hudSnapshot(at: 19 * second)
+        hud = stats.hudSnapshot(at: 27 * second)
         XCTAssertNil(hud.desktopToScreen.p50)
         XCTAssertNil(hud.contentAge.p50)
         XCTAssertNil(hud.encodeSend.p50)

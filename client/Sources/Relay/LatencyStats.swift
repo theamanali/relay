@@ -146,18 +146,34 @@ struct ByteWindow: Sendable {
 /// The newest `capacity` values, oldest first when read.
 struct RecentSamples: Sendable {
     private var values: [Double]
+    private var times: [UInt64]
     private var next = 0
     private var filled = false
 
-    init(capacity: Int) { values = Array(repeating: 0, count: capacity) }
+    init(capacity: Int) {
+        values = Array(repeating: 0, count: capacity)
+        times = Array(repeating: 0, count: capacity)
+    }
 
-    mutating func append(_ value: Double) {
+    mutating func append(_ value: Double, at nanos: UInt64 = 0) {
         values[next] = value
+        times[next] = nanos
         next = (next + 1) % values.count
         if next == 0 { filled = true }
     }
 
     var ordered: [Double] { filled ? Array(values[next...] + values[..<next]) : Array(values[..<next]) }
+
+    /// Same per-second expiry as LatencyWindow, including sparse source data.
+    func ordered(at nanos: UInt64, seconds: Int) -> [Double] {
+        let now = nanos / 1_000_000_000
+        let indices = filled ? Array(next..<values.count) + Array(0..<next) : Array(0..<next)
+        return indices.compactMap { i in
+            let second = times[i] / 1_000_000_000
+            return second <= now && second + UInt64(seconds) > now ? values[i] : nil
+        }
+    }
+
 }
 
 /// What was streamed, for the HUD's detail view and the session report.
@@ -264,7 +280,7 @@ final class LatencyStats: @unchecked Sendable {
     /// keyframe, decoder start-up and the encoder settling would skew the
     /// HUD and the session report.
     static let warmUp: UInt64 = 3_000_000_000
-    static let windowSeconds = 5
+    static let windowSeconds = 10
     static let sparklineFrames = 480
 
     private let lock = NSLock()
@@ -290,6 +306,9 @@ final class LatencyStats: @unchecked Sendable {
     private var clock: ClockSync.Sample?
     private var clockReplies = 0
     private var desktopSparkline = RecentSamples(capacity: sparklineFrames)
+    /// Last completed desktop → screen measurement, carried forward in the
+    /// sparkline during static re-encodes so the visual keeps scrolling.
+    private var lastDesktopToScreenMs: Double?
     private var toScreenTimeline = SecondMedians()
     private var desktopTimeline = SecondMedians()
     /// A frame's PC present (Mac µs) and its Metal presentation meet here,
@@ -335,6 +354,7 @@ final class LatencyStats: @unchecked Sendable {
             clock = nil
             clockReplies = 0
             desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
+            lastDesktopToScreenMs = nil
             toScreenTimeline = SecondMedians()
             desktopTimeline = SecondMedians()
             pendingShown = [:]
@@ -364,6 +384,14 @@ final class LatencyStats: @unchecked Sendable {
             sessionToScreen.record(ms)
             sparkline.append(ms)
             toScreenTimeline.record(ms, second: second(of: nanos))
+            // Carry the last real desktop → screen value forward so the
+            // sparkline keeps scrolling during static re-encodes.
+            if desktopToScreen.merged(at: nanos).count > 0, let last = lastDesktopToScreenMs {
+                desktopSparkline.append(last, at: nanos)
+            } else if lastDesktopToScreenMs != nil {
+                lastDesktopToScreenMs = nil
+                desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
+            }
         }
     }
 
@@ -458,9 +486,13 @@ final class LatencyStats: @unchecked Sendable {
             pendingShown[sequence] = nil
             let ms = Double(s - p) / 1_000
             guard ms.isFinite, ms >= 0 else { return }
+            if desktopToScreen.merged(at: nanos).count == 0 {
+                desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
+            }
             desktopToScreen.record(ms, at: nanos)
             sessionDesktopToScreen.record(ms)
-            desktopSparkline.append(ms)
+            lastDesktopToScreenMs = ms
+            desktopSparkline.append(ms, at: nanos)
             desktopTimeline.record(ms, second: second(of: nanos))
             return
         }
@@ -485,7 +517,7 @@ final class LatencyStats: @unchecked Sendable {
         lock.withLock {
             let shown = toScreen.merged(at: nanos)
             let decoded = decode.merged(at: nanos)
-            // The window holds the current second and the four before it.
+            // The window holds the current second and the nine before it.
             let windowStart = (nanos / 1_000_000_000).saturatingSubtract(UInt64(Self.windowSeconds - 1)) * 1_000_000_000
             let elapsed = Double(nanos - min(nanos, max(measuringFrom, windowStart))) / 1_000_000_000
             func rate(_ h: LatencyHistogram) -> Double { elapsed > 0.05 ? Double(h.count) / elapsed : 0 }
@@ -501,7 +533,7 @@ final class LatencyStats: @unchecked Sendable {
                 sentToReceived: Stage(sentToReceived.merged(at: nanos)),
                 inputApplied: Stage(inputApplied.merged(at: nanos)),
                 receivedMbps: elapsed > 0.05 ? Double(received.total(at: nanos)) * 8 / elapsed / 1e6 : nil,
-                desktopSparkline: desktopToScreen.merged(at: nanos).count > 0 ? desktopSparkline.ordered : [],
+                desktopSparkline: desktopToScreen.merged(at: nanos).count > 0 ? desktopSparkline.ordered(at: nanos, seconds: Self.windowSeconds) : [],
                 clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
                 clockDelayMs: clock.map { Double($0.delay) / 1_000 },
                 sparkline: sparkline.ordered,

@@ -150,6 +150,13 @@ Resolution and Refresh rate choices as the footer:
   across both machines; a PC without clock sync shows the Mac's own share,
   receive → screen), with frame rate, p95, skipped frames per second when
   there are any, and a sparkline.
+  A healthy synchronized clock with no source samples in the last five
+  seconds shows “Receive → screen, source timing idle”. Fresh content resumes
+  Desktop → screen on the same connection; the app never substitutes receipt
+  time for source time or keeps expired measurements current. “Clock not
+  synced” is reserved for a stream without an accepted clock exchange.
+  Encode & send measures PC submit → sent even without source timing or sync;
+  PC work separately includes capture + encode + send.
   ⌃⌥⌘L cycles Off → Compact → Detailed; Detailed adds where the time goes: a
   bar split into PC, Network and Mac, each with its parts (image age and
   encode & send; one-way network; decode and display), then input → PC
@@ -280,6 +287,26 @@ Pending release/hardware checks are tracked in the
 swift test
 ./Tools/test-pair-name.sh
 ```
+
+Controlled decoder precision is checked by `DecodedPrecisionTests`: versioned
+lossless SDR YUV fixtures go through the actual hardware `VideoRenderer` and
+production Metal shader, with packed RGB10 target readback before any 8-bit
+conversion. Regenerate with `python3 Tools/generate-precision-fixtures.py`
+(requires ffmpeg with libx265/libx264). On the M3 Pro/macOS 27.0, both 10-bit
+chroma modes preserved all 64 consecutive luma codes 400–463 and all 64 RGB10
+gray ramp levels, max RGB error 0; both 8-bit modes and H.264 preserved the
+17-code quantized controls. Black, white and RGB channel tests pass. This is
+Mac decoder/rendering evidence, not Windows desktop-capture or panel proof.
+
+For user-run PC qualification, start the bundled executable with
+`RELAY_TIMING_LOG=1 ./Relay.app/Contents/MacOS/Relay > /tmp/relay-real-mac.log 2>&1`.
+This logs one five-second-window snapshot per second, with p50/p95 and sample
+counts for source age, PC work, encode/send, receive → screen and Desktop →
+screen, plus fps and accepted clock-reply count. Replies can log through a
+capture gap. Decoder generations log their actual CVPixelBuffer format; the
+presenter logs actual texture/drawable formats. Logging is opt-in and makes no
+connection by itself. The user starts exclusive VDD sessions. Record static
+and moving phases separately; zero source samples remain unavailable.
 
 The unit tests cover:
 

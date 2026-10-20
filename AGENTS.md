@@ -93,12 +93,33 @@ README status and here. Do not create other handoff or retest files.
   zero out of order; clock/work telemetry remained available. No wire layout,
   capability or Mac runtime change. Real-Mac HUD/performance remains pending.
   Logs report unknown source age as unavailable, not 0 ms. The Mac HUD's
-  false "clock not synced" label and hidden encode/send detail have a targeted
-  Mac-owned Open item; do not confuse absent source timing with clock failure.
+  false "clock not synced" label and hidden encode/send detail are fixed on
+  the Mac (follow-up below); real-PC qualification remains open.
   VDD source precision with the new WGC path, SYSTEM/secure desktop/recovery,
   exclusive restore and real-Mac 3024×1964@120 performance remain pending in
   SESSION-HANDOFF.md; older “10-bit free” results are encoding-only baselines.
 
+
+- Mac SDR timing/precision follow-up (2026-10-19; `1181e72`): HUD sync
+  comes from ClockSync state, independently of five-second source samples.
+  Synced idle streams use receive → screen with “source timing idle”; fresh
+  source timing resumes without reconnecting. Submit → sent is a separate
+  Encode & send metric in HUD/report, independent of source/sync; PC work
+  retains capture + encode + send. Unknown/future/reversed stamps do not
+  create source-to-screen measurements. Local M3 Pro/macOS 27.0 hardware
+  decode + native Metal RGB10 readback preserves 64/64 consecutive 10-bit
+  codes, max gray RGB error 0; 8-bit controls retain 17/64. HEVC all four
+  depth/chroma formats and H.264/8-bit pass channel/range controls. This is
+  decoder/render-target proof, not exclusive VDD or physical-panel precision.
+  Isolated fakehost static/moving/recovery/moving/static keeps 21 clock
+  replies across an actual two-second frame gap. `f91377a` also rejects a
+  drawable of the wrong depth if the mailbox changes streams during its wait.
+  Desktop sparkline points expire in the same five-second window, including
+  after sparse-source idle/resume. 206 Swift tests, debug/release builds and
+  bundle signature verification pass.
+  Initial real-PC 8-bit run showed variable presentation stalls despite a
+  foreground app/closed video apps; cause remains unresolved. Exact commands/builds,
+  real-PC results and remaining user checks are in SESSION-HANDOFF.md.
 
 - Platform migration 2026-10-10: Mac SwiftUI/Swift 6, Apple silicon/macOS 14,
   mandatory Metal/hardware decoding implemented. 107 unit tests (112 after the
@@ -807,9 +828,9 @@ documented there. What follows is only the mechanics that are easy to break:
   review): median + fps on one line, then "p95:" under the median and
   "N skipped/s" (decoded − shown, only past 1/s or 5 %) under the fps; no
   description line (the report still uses `Summary.label`), no divider
-  before the sparkline; only without clock sync a 10 pt caption
-  ("Receive → screen, clock not synced", `Summary.unsyncedNote`) sits
-  under the p95 line, since nothing else names the measure. The sparkline plots each point column's worst
+  before the sparkline. A receive-fallback caption (`Summary.unsyncedNote`)
+  says “clock not synced” only without an accepted exchange, or “source timing
+  idle” when source samples have expired while sync remains healthy. The sparkline plots each point column's worst
   frame (`columnMaxima`) and labels the budget "25 ms" on a chip. Detailed
   = a proportional bar (PC/Network/Mac split, not budget-scaled: user
   decision; short segments get 4 pt) and three groups (PC = content age +

@@ -189,10 +189,16 @@ Repeated frames without a new source timestamp, and WGC stamps later than
 submission, remain unknown rather than receiving an invented time. Earlier claims
 that 10-bit was free measured an **8-bit capture encoded into Main10**.
 
-The Mac HUD currently confuses missing source-present timing with an unsynced
-clock and hides its encode/send detail with image age when source timing is
-unavailable. That Mac follow-up remains open in SESSION-HANDOFF.md. Valid
-10-bit source timestamps now feed the existing HUD without a client upgrade.
+The Mac HUD now uses accepted ClockSync exchanges independently of source
+samples. After the five-second source window empties it shows “Receive →
+screen, source timing idle”, then resumes Desktop → screen when fresh content
+returns. Encode & send is submit → sent on the PC clock, independently of
+source time and sync; PC work remains capture + encode + send. Both depths use
+the same labels. Local hardware decoder/Metal precision checks preserve 64/64
+consecutive 10-bit ramp codes (versus 17 at 8-bit), with zero ramp RGB error
+and correct black/white/RGB controls for all four HEVC formats plus H.264/8-bit.
+This proves the Mac decode/shader/target path, not exclusive PC/VDD capture or
+physical-panel precision. Real-PC qualification remains in SESSION-HANDOFF.md.
 
 
 **Display scale (2026-10-18):** the Mac now tells the PC which Windows scale

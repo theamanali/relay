@@ -20,7 +20,7 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
-### → Mac: distinguish missing source timing from clock sync; show encode/send independently (2026-10-19)
+### → user / Mac: verify fixed SDR timing HUD on installed host (2026-10-19)
 
 The user reports no image age / encode & send detail and "clock not synced"
 in 10-bit sessions. **Update:** the host now supplies valid WGC source stamps
@@ -66,6 +66,187 @@ Real-Mac image-age / Desktop → screen confirmation remains below. The
 generalized source-timestamp definition is in PROTOCOL.md and both sides'
 comments: DDA LastPresentTime or WGC compositor SystemRelativeTime, with the
 same host QPC base and existing 68-byte message. No separate WGC UI label.
+
+**Mac implementation / local evidence (2026-10-19 Pacific)**
+
+`1181e72` fixes the Mac HUD/state separation and adds independent submit →
+sent to `FrameEndToEnd`, rolling/session histograms, report Details/Markdown
+and HUD detail. PC work still sums basic capture/encode/send. A healthy clock
+with an empty source window falls back to receive → screen with “source timing
+idle”; no time is manufactured, no expired percentile is retained, and the
+clock is not reset by static content. Unknown, zero, oversized, reversed and
+future source/cross-clock stamps are rejected independently of valid host-local
+encode/send. Negative screen samples cannot enter sparklines/timelines.
+Both depths/chroma modes use identical timing logic and labels.
+
+Baseline: `swift test` on `dc31425`: **198 passed**. Local updated suite:
+`cd client; swift test` — **206 passed**, including static >5 s, moving/static,
+missing/invalid sync, host-local timing without source/sync, future/reversed
+stamps, old 8-bit timing and recovery. `swift build`, `./bundle.sh` (arm64
+release, ad-hoc strict signature verification) pass. `./Tools/test-pair-name.sh`
+— **23 PASS** with isolated temporary identities: new 18 s source cycle has
+initial static 6 s, moving 2 s, capture gap 2 s, recovered moving 2 s and
+final static 6 s. **21 accepted clock replies**, including during the gap;
+**949 received frames**, two codec configs, fresh source resumes on the same
+connection, encode/send remains available during static content. These are
+synthetic source/recovery transitions, not an actual Windows desktop switch.
+
+`DecodedPrecisionTests` uses versioned lossless 256×128 SDR fixtures generated
+by `python3 client/Tools/generate-precision-fixtures.py` (ffmpeg/libx265/libx264).
+The actual hardware-only VideoRenderer decodes them; tests compare numeric
+CVPixelBuffer luma to the controlled source, then use production texture views,
+shader/range/matrix and packed native render-target readback. On **M3 Pro,
+macOS 27.0 (26A428)**:
+
+| Stream | Actual buffer | Source codes → decoded codes | Native gray levels | Max RGB code error |
+|---|---|---|---|---|
+| HEVC 8-bit 4:2:0 | 420v | 17 → 17 | 17 | 0 |
+| HEVC 8-bit 4:4:4 | 444v | 17 → 17 | 17 | 0 |
+| HEVC 10-bit 4:2:0 | x420 | 64 → 64 | 64 | 0 |
+| HEVC 10-bit 4:4:4 | x444 | 64 → 64 | 64 | 0 |
+| H.264 8-bit 4:2:0 | 420v | 17 → 17 | 17 | 0 |
+
+The 10-bit source has **consecutive** codes 400–463, finer than expanded 8-bit;
+controls are limited-range black/white and BT.601 RGB patches matching host
+matrix=6. All controls pass. The 10-bit planes use r16Unorm/rg16Unorm,
+float shader math and bgr10a2Unorm; 8-bit uses r8Unorm/rg8Unorm/bgra8Unorm.
+HUD BGRA8 is blended only in its quad, not an intermediate video surface.
+**This is decoder/shader/render-target proof, not PC capture precision or
+WindowServer/panel precision.** Actual exclusive VDD ramp, cursor shapes and
+secure/Default recovery remain pending user/PC evidence below.
+
+Real-PC measurement preparation: Chrome/other known video apps are closed
+(CUA inventory); Mac on AC, lowpowermode=0. Start executable with
+`RELAY_TIMING_LOG=1 ./Relay.app/Contents/MacOS/Relay > /tmp/relay-real-mac.log 2>&1`.
+One-second diagnostics expose five-second p50/p95 windows **and counts**, sync
+and reply count, without extra frame reads/copies. Decoder generations log
+actual pixel buffers. User controls every exclusive connect/disconnect.
+Target fixed at 3024×1964@120, Fastest, **120 Mbps**, VSync off, Ethernet,
+automatic display scale 200%; each comparison has static/moving/static phases.
+Installed host hash supplied by the user:
+`09E95E2D9F4B97EC3479F6BCF1D51B8A145E3095EF1B86E13D8BBF22F1E3E276`
+(`792bca7`, documented by `dc31425`); not independently hashed from this Mac.
+The precision audit follow-up `f91377a` rejects a render target of the wrong
+depth: a frame can change while `nextDrawable()` waits, so a new 10-bit image
+must never be drawn into a drawable obtained for an old 8-bit stream. That
+one mismatched frame is dropped; subsequent frames use the selected format.
+A focused regression tries the 8-bit target with both true 10-bit fixtures and
+requires refusal. Actual drawable/luma/chroma formats are logged per generation.
+The final **206 tests**, `swift build`, bundle/signature verification all pass.
+
+Initial user-run HEVC 8-bit 4:2:0 session, **20:55:59–20:58:13 Pacific**:
+release app version **312**, binary SHA-256
+`2b29fa2ad1732a9077afcc06764caf72a07a41e3391e61e3ca6599ec78743973`
+(`1181e72` runtime changes, built before committing); actual **420v** decoded
+buffer and BGRA8 renderer. User confirms Relay remained foreground and no Mac
+video apps reopened. Measured after warm-up, **2:12**, **71.4 fps** shown,
+**41.3% skipped**; p50/p95 in ms: source age **1.3/8.2**, PC work **5.9/6.6**,
+encode/send **5.8/6.4**, receive → decode **2.8/3.3**, receive → screen
+**12.2/32.0**, Desktop → screen **20.0/43.7**. Clock stayed healthy (best delay
+**0.492 ms**). Toward the end a five-second window recovered to **117.1 fps**,
+receive → screen **4.0/7.2 ms** without a code/settings change. The cause of
+this variable Mac presentation slowdown is **unresolved**; do not silently
+exclude it or call the run a clean performance baseline. Exact static/moving
+phase boundaries were not tagged, so these are whole-session measurements.
+Colors/cursor observations were not supplied by the user's “done” reply.
+
+Mac-only presentation control, **20:59:46–21:00:09 Pacific**, final runtime
+against loopback fakehost: `fakehost 18469 accept --clip full.hevc --size
+3024x1964 --fps 120`, native-size testsrc2 HEVC generated with ffmpeg/libx265,
+then isolated `CFFIXED_USER_HOME` client `--host 127.0.0.1:18469 --pin 000000
+--no-input`, timing logging enabled. Stable windows reached **120 fps** with
+receive → screen **3.7/4.0 ms**; whole measured **20 s**, **107.3 fps**,
+receive → screen **3.8/18.8 ms**, receive → decode **2.5/2.7 ms**. Some late
+presentation stalls also occurred here; this is not proof they are resolved
+or that the Windows path caused the initial slowdown. Isolated state and the
+fakehost process were retired. No Windows connection was made by that test.
+
+Final user-test app version **313**, runtime `1181e72` + `f91377a`, binary
+SHA-256 `0dfadb0597578a0d456b9574fc4c78d416cb6f7cf9232c0d57eb66564d28e9fc`.
+Opened the normal picker with `RELAY_TIMING_LOG=1`, log
+`/tmp/relay-real-mac-final.log`; the user was asked to repeat the same baseline
+before the remaining modes. Evidence logs are copied under ignored
+`client/.build/qualification-20261019/`. Further results and remaining user/PC
+checks follow here; none of the remaining exclusive checks is marked passed.
+
+Repeat 8-bit 4:2:0, **21:02:09–21:03:45 Pacific**, final version 313:
+**1:33 measured**, **113.0 fps** shown, **6.8% skipped**; p50/p95 ms:
+source age **0.9/8.2**, PC work **5.9/6.9**, encode/send **5.8/6.9**,
+receive → decode **2.6/3.1**, receive → screen **3.9/10.8**, Desktop → screen
+**12.5/26.0**. Best sync delay **0.527 ms**, accepted replies continue to
+**92**. Actual **420v → r8Unorm/rg8Unorm → bgra8Unorm drawable** logged.
+Presentation varies despite decode staying at 120 fps; the last window shows
+**120.0 fps**, receive → screen **3.5/4.2 ms**. The user reports colors,
+black/white levels and cursor looked correct with no duplicate/trails. This
+is visual feedback, not an end-to-end native-ramp or exhaustive cursor-shape
+qualification. No 8-bit 4:4:4 session had started by the time local validation
+finished. The next picker was prepared with Full color on, 10-bit off; **the
+user must click Connect**, since an agent must not start an exclusive VDD
+session. Keep the other three HEVC modes, real-PC H.264, native VDD precision,
+all secure/Default transitions, cursor-shape checks and comparable phase
+measurements **pending** until actual results are recorded.
+
+A final sparse-source correction timestamps the Desktop → screen sparkline
+points and expires them with the same per-second window as percentiles.
+After >5 s idle, old points cannot reappear when one fresh picture returns;
+the focused source-timing suite and complete 206-test suite pass. This does
+not alter clock sync, presentation scheduling or the measured latency values.
+Version 313 above was used for both final-build runtime controls; the next
+bundle adds this graph-history expiry only.
+
+Follow-up (2026-10-19): The user reported that the transition to "source timing idle"
+felt jarring during brief pauses, the sparkline appeared stuck when static, and "source
+timing idle" engaged even while playing active games like Valorant.
+Client updates:
+1. Extended `windowSeconds` from 5 to 10 seconds across all rolling latency windows.
+2. In `recordPresented`, carried forward `lastDesktopToScreenMs` into `desktopSparkline`
+   for each presented frame while the rolling window is active, keeping the sparkline scrolling
+   continuously during static re-encodes.
+3. Upon grace-window expiration, cleared stale sparkline points so they do not reappear
+   when motion returns. All 206 tests and `test-pair-name.sh` (22 checks) pass; app bundled.
+Investigation of the Valorant issue revealed that the host's strict `time <= submit_us`
+filter drops WGC compositor VSync targets that lead CPU submit (common under game rendering loops).
+Handed off to PC below.
+
+### → PC: allow bounded lead for WGC compositor timestamps during gaming (2026-10-19)
+
+**What is needed and why:**
+During fast-paced 3D gaming (e.g. Valorant), the Mac HUD frequently switches to
+"Receive → screen, source timing idle" even though the game is rendering actively at
+high frame rates (60–120+ fps) and video is streaming smoothly.
+Root cause analysis:
+1. In `native_nvenc.rs::frame_present_us`, WGC's `SystemRelativeTime` is the DWM
+   compositor's target VSync timestamp. Under fast rendering and tight frame pacing,
+   this timestamp frequently leads the CPU's `submit_us` by 1–2 ms (a 1,557 µs lead
+   was previously documented in this file).
+2. The host currently enforces `.filter(|&time| time <= submit_us).unwrap_or(UNKNOWN_TIME)`.
+   If `time > submit_us` by even 1 µs, the host marks `present_us = UNKNOWN_TIME`. During
+   Valorant, this filter drops nearly 100% of timestamps.
+3. Once the Mac receives `UNKNOWN_TIME` for the duration of its rolling window (now 10 s),
+   it declares source timing idle.
+4. Additionally, if the game runs in Exclusive Fullscreen or Hardware Independent Flip,
+   DWM can be bypassed, causing DXGI/DDA `LastPresentTime = 0` or WGC to omit composition
+   stamps.
+
+**Steps for the PC session:**
+1. In `host/src/native_nvenc.rs::frame_present_us`, allow WGC compositor timestamps to
+   lead `submit_us` within a bounded window (e.g. up to `MAX_LEAD_US = 20_000`, 20 ms,
+   covering over 1 frame at 60 Hz and 2 frames at 120 Hz).
+2. For content age (`submit_us - present_us`): if `present_us > submit_us`, clamp content
+   age to `0` (or `Duration::ZERO`), reflecting that the frame was captured fresh from
+   the graphics pipeline before display scanout, rather than discarding `present_us`.
+3. Pass the valid `present_us` in `FRAME_TIMING_EXT`.
+4. (Optional/Secondary): If DWM reports `0` (e.g. exclusive fullscreen bypassing DWM),
+   evaluate using the GPU texture acquisition timestamp (`acquire_qpc`) as an active
+   fallback when fresh frames are acquired, rather than leaving `present_us` as `UNKNOWN_TIME`.
+5. Update `docs/PROTOCOL.md` to reflect that `present_us` may lead `submit_us` by up to
+   20 ms for WGC compositor targets, with content age clamped to 0.
+6. Verify with `cargo test`, `probe --timing`, clippy, and install with `install-host.ps1 -SkipDriver`.
+7. Once landed and installed, hand off to Mac to update `FrameEndToEnd.init` tolerance.
+
+**What counts as done:**
+Host tests pass, host installed, and probe/Mac sessions during Valorant or high-FPS rendering
+preserve valid `present_us` without dropping into `UNKNOWN_TIME` or triggering "source timing idle".
 
 ### → user / Mac: qualify true 10-bit SDR (host implemented and installed 2026-10-19)
 
