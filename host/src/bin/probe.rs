@@ -360,7 +360,8 @@ fn main() -> Result<()> {
     // When each input message after the first TIME_REQUEST was sent.
     let mut input_sent_us: Vec<u64> = Vec::new();
     let mut last_inputs_applied = 0u64;
-    let (mut ext_frames, mut fresh, mut reused, mut out_of_order) = (0u64, 0u64, 0u64, 0u64);
+    let (mut ext_frames, mut fresh, mut unknown_present, mut out_of_order) =
+        (0u64, 0u64, 0u64, 0u64);
     let (mut present_submit, mut submit_sent, mut sent_received, mut input_applied) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
@@ -467,7 +468,7 @@ fn main() -> Result<()> {
                         out_of_order += 1;
                     }
                 } else {
-                    reused += 1;
+                    unknown_present += 1;
                 }
                 let sent_to_received = frame_received_us
                     .take()
@@ -490,7 +491,7 @@ fn main() -> Result<()> {
                 println!(
                     "frame {:>5} {}: present→submit {} ms, submit→sent {:.3} ms, sent→received {} ms, inputs {}",
                     t.sequence,
-                    if is_fresh { "fresh " } else { "reused" },
+                    if is_fresh { "DWM present known" } else { "DWM present unknown" },
                     show(present_to_submit),
                     ms(submit_to_sent),
                     show(sent_to_received),
@@ -587,7 +588,7 @@ fn main() -> Result<()> {
             None => println!("clock: {time_requests} TIME_REQUESTs, no TIME_REPLY"),
         }
         println!(
-            "FRAME_TIMING_EXT on {ext_frames} frames: {fresh} fresh, {reused} reused (present = u64::MAX), {out_of_order} fresh out of order (present > submit or submit > sent)"
+            "FRAME_TIMING_EXT on {ext_frames} frames: {fresh} with DWM present, {unknown_present} without DWM present (u64::MAX), {out_of_order} known-present frames out of order (present > submit or submit > sent)"
         );
         for (label, values) in [
             ("present → submit", &mut present_submit),

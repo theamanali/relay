@@ -283,7 +283,10 @@ pub fn stop_service() -> Result<()> {
 // --- the service process ---------------------------------------------------
 
 /// Entry point for `relay-host service run`: hands the thread to the SCM.
-pub fn run() -> Result<()> {
+static WORKER_NO_VDD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn run(no_vdd: bool) -> Result<()> {
+    WORKER_NO_VDD.store(no_vdd, std::sync::atomic::Ordering::Relaxed);
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
         .context("connecting to the service control manager (this is meant to be started by SCM)")
 }
@@ -462,7 +465,16 @@ impl Supervisor {
 
     fn spawn_worker(&mut self, session: u32) -> Result<()> {
         let quit_event = create_quit_event(session)?;
-        let process = match spawn_in_session(session, &["worker"]) {
+        // CreateEnvironmentBlock does not inherit service test variables.
+        // Carry this safe diagnostic mode explicitly into the worker CLI.
+        let args: &[&str] = if WORKER_NO_VDD.load(std::sync::atomic::Ordering::Relaxed)
+            || crate::test_fault("no-vdd")
+        {
+            &["--no-vdd", "worker"]
+        } else {
+            &["worker"]
+        };
+        let process = match spawn_in_session(session, args) {
             Ok(p) => p,
             Err(e) => {
                 unsafe {
@@ -532,6 +544,21 @@ pub struct Process {
 }
 
 impl Process {
+    pub(crate) fn duplicate_handle_into(&self, source: HANDLE) -> Result<HANDLE> {
+        let mut handle = HANDLE::default();
+        unsafe {
+            windows::Win32::Foundation::DuplicateHandle(
+                GetCurrentProcess(),
+                source,
+                self.handle,
+                &mut handle,
+                0,
+                false,
+                windows::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+            )
+        }?;
+        Ok(handle)
+    }
     /// `Some(code)` once it has exited.
     pub fn exit_code(&self) -> Option<u32> {
         let mut code = 0u32;
@@ -564,6 +591,95 @@ impl Process {
             let _ = TerminateProcess(self.handle, 1);
         }
     }
+}
+
+/// WGC needs a real user process, not a SYSTEM process impersonating a user.
+/// Only the capture-source command uses this; no handles are inherited.
+pub(crate) fn spawn_capture_user(args: &[String]) -> Result<Process> {
+    if !crate::native_nvenc::is_system_process()? {
+        // Exercise the same GPU sharing path without service installation.
+        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::process::CommandExt;
+        let child = std::process::Command::new(std::env::current_exe()?)
+            .args(args)
+            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let mut copy = HANDLE::default();
+        unsafe {
+            windows::Win32::Foundation::DuplicateHandle(
+                GetCurrentProcess(),
+                HANDLE(child.as_raw_handle()),
+                GetCurrentProcess(),
+                &mut copy,
+                0,
+                false,
+                windows::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+            )
+        }?;
+        return Ok(Process {
+            handle: copy,
+            pid: child.id(),
+        });
+    }
+    let session = crate::desktop::process_session_id()?;
+    let mut token = HANDLE::default();
+    unsafe { windows::Win32::System::RemoteDesktop::WTSQueryUserToken(session, &mut token) }
+        .context("10-bit SDR capture requires a signed-in Windows user")?;
+    let result = (|| -> Result<Process> {
+        let exe = std::env::current_exe()?;
+        let mut command = format!("\"{}\"", exe.display());
+        for arg in args {
+            anyhow::ensure!(
+                !arg.contains(['\"', ' ']),
+                "invalid internal capture argument"
+            );
+            command.push(' ');
+            command.push_str(arg);
+        }
+        let mut command: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+        let desktop: Vec<u16> = "winsta0\\default".encode_utf16().chain(Some(0)).collect();
+        let mut env = std::ptr::null_mut();
+        unsafe { CreateEnvironmentBlock(&mut env, token, false) }?;
+        let mut process = PROCESS_INFORMATION::default();
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: PWSTR(desktop.as_ptr() as *mut _),
+            ..Default::default()
+        };
+        let created = unsafe {
+            CreateProcessAsUserW(
+                token,
+                PCWSTR::null(),
+                PWSTR(command.as_mut_ptr()),
+                None,
+                None,
+                false,
+                CREATE_UNICODE_ENVIRONMENT,
+                Some(env),
+                PCWSTR::null(),
+                &startup,
+                &mut process,
+            )
+        };
+        unsafe {
+            let _ = DestroyEnvironmentBlock(env);
+        }
+        created.context("starting the signed-in user's SDR capture source")?;
+        unsafe {
+            let _ = CloseHandle(process.hThread);
+        }
+        Ok(Process {
+            handle: process.hProcess,
+            pid: process.dwProcessId,
+        })
+    })();
+    unsafe {
+        let _ = CloseHandle(token);
+    }
+    result
 }
 
 impl Drop for Process {

@@ -614,13 +614,14 @@ pub fn acquire_display(
     want: Mode,
     lock_physical: bool,
     scale: Option<u16>,
+    ten_bit: bool,
 ) -> Result<Source> {
     if driver.is_some() {
         return crate::desktop::with_input_desktop("acquire display", || {
-            acquire_display_bound(driver, gpu, want, lock_physical, scale)
+            acquire_display_bound(driver, gpu, want, lock_physical, scale, ten_bit)
         });
     }
-    acquire_display_bound(driver, gpu, want, lock_physical, scale)
+    acquire_display_bound(driver, gpu, want, lock_physical, scale, ten_bit)
 }
 
 fn acquire_display_bound(
@@ -629,6 +630,7 @@ fn acquire_display_bound(
     want: Mode,
     lock_physical: bool,
     scale: Option<u16>,
+    ten_bit: bool,
 ) -> Result<Source> {
     let Some(driver) = driver else {
         let monitor = display::primary().ok_or_else(|| anyhow!("no primary display"))?;
@@ -678,7 +680,7 @@ fn acquire_display_bound(
     snapshot.save()?;
     log::info!("display layout saved: {}", snapshot.describe());
 
-    let (attachment, monitor) = driver.attach(want, gpu)?;
+    let (attachment, monitor) = driver.attach(want, gpu, ten_bit)?;
     // From here on the lease guarantees restore + removal even if activation fails.
     let mut lease = DisplayLease {
         driver: Some((Arc::clone(driver), attachment)),
@@ -730,6 +732,9 @@ fn acquire_display_bound(
         }
     }
     let location = display::dxgi_output_for(&name)?;
+    if ten_bit {
+        crate::native_nvenc::check_virtual_sdr10(&location)?;
+    }
     if location.adapter_luid != gpu.luid {
         log::warn!(
             "virtual display {} is rendered by '{}' instead of the selected '{}'; \
@@ -981,6 +986,16 @@ fn handle_session(
             return Err(e.context("session preflight refused the stream (no display was changed)"));
         }
     };
+    log::info!(
+        "display depth: client requested {}-bit, negotiated {}-bit SDR ({})",
+        if hello.video_flags.unwrap_or(0) & video_flags::TEN_BIT != 0 {
+            10
+        } else {
+            8
+        },
+        if plan.video.ten_bit { 10 } else { 8 },
+        crate::nvenc_caps::codec_label(plan.codec)
+    );
     if !encoder_caps.video_caps(cfg.intra_refresh).hevc && hello.codecs & Codec::Hevc.bit() != 0 {
         log::info!("client offers HEVC, but this GPU's HEVC encoder is not usable: using H.264");
     }
@@ -1011,6 +1026,7 @@ fn handle_session(
         want,
         cfg.lock_physical,
         scale::requested(hello.display_scale),
+        plan.video.ten_bit,
     )?;
     let placement = source.placement;
     let actual = Mode {
@@ -1128,6 +1144,12 @@ fn handle_session(
     // and gives up after ENCODER_RECOVERY_TIMEOUT unless the desktop refused.
     let mut encoder = match Encoder::spawn(&encoder_config) {
         Ok(e) => e,
+        Err(e) if crate::native_nvenc::is_unsupported_capture(&e) => {
+            drop(displays_on);
+            drop(source);
+            refuse_stream(&mut tx, &mut rx, stop_reason::ENCODER_FAILED);
+            return Err(e.context("capture precision refused (layout restored)"));
+        }
         Err(e) => {
             log::warn!(
                 "native capture did not start ({}: {e:#}); the session starts without a picture and retries",
@@ -1301,6 +1323,12 @@ fn pump(
             result => {
                 let failure = match result {
                     Ok(None) => "capture backend ended".to_string(),
+                    Err(error) if crate::native_nvenc::is_unsupported_capture(&error) => {
+                        let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
+                        return Err(
+                            error.context("capture precision changed; ending and restoring layout")
+                        );
+                    }
                     Err(error) => format!("{error:#}"),
                     Ok(Some(_)) => unreachable!(),
                 };
@@ -1365,6 +1393,14 @@ fn pump(
                     recovery.source.location.adapter_index;
                 recovery.encoder_config.capture_luid = recovery.source.location.adapter_luid;
                 recovery.encoder_config.output_idx = recovery.source.location.output_index;
+                if recovery.driver.is_some() && recovery.encoder_config.ten_bit {
+                    if let Err(e) =
+                        crate::native_nvenc::check_virtual_sdr10(&recovery.source.location)
+                    {
+                        let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
+                        return Err(e.context("virtual display lost 10-bit SDR; restoring layout"));
+                    }
+                }
                 thread::sleep(ENCODER_RESTART_DELAY);
                 if let Some(end) = ending.check(tx) {
                     return Ok(end);
@@ -1381,6 +1417,12 @@ fn pump(
                                 crate::desktop::input_desktop_name()
                             );
                         }
+                    }
+                    Err(error) if crate::native_nvenc::is_unsupported_capture(&error) => {
+                        let _ = tx.send(msg::STREAM_STOP, 0, &[stop_reason::ENCODER_FAILED]);
+                        return Err(
+                            error.context("capture restart lost SDR precision; restoring layout")
+                        );
                     }
                     Err(error) if crate::encoder::is_desktop_not_capturable(&error) => {
                         if desktop_wait.is_none() {
@@ -2033,7 +2075,7 @@ mod pairing_wait_tests {
             true
         }
 
-        fn attach(&self, _: Mode, _: &GpuInfo) -> Result<(Attachment, Monitor)> {
+        fn attach(&self, _: Mode, _: &GpuInfo, _: bool) -> Result<(Attachment, Monitor)> {
             panic!("pair-only attempted to attach a display")
         }
 

@@ -43,6 +43,14 @@ windows-service = "0.8"
 [dependencies.windows]
 version = "0.58"
 features = [
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_Com",
+    "Win32_System_Pipes",
+    "Win32_Security_Authorization",
+    "Foundation_Metadata",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",

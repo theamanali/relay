@@ -21,12 +21,11 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11BlendState, ID3D11Buffer, ID3D11ClassLinkage, ID3D11DepthStencilView, ID3D11Device,
     ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
     ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BLEND_DESC, D3D11_BLEND_INV_DEST_COLOR,
-    D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_INV_SRC_COLOR, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
-    D3D11_BLEND_SRC_ALPHA, D3D11_BLEND_ZERO, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL,
-    D3D11_COMPARISON_NEVER, D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_SAMPLER_DESC,
-    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT,
-    D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
+    D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA, D3D11_BLEND_ZERO, D3D11_BUFFER_DESC,
+    D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_NEVER, D3D11_FILTER_MIN_MAG_MIP_POINT,
+    D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP,
+    D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
@@ -38,6 +37,7 @@ use windows::Win32::Graphics::Dxgi::{
 const SHADER: &[u8] = br#"
 cbuffer CursorRect : register(b0) {
     float4 rect;
+    uint maximum; uint3 padding;
 };
 
 struct VertexOut {
@@ -54,16 +54,25 @@ VertexOut vs_main(uint id : SV_VertexID) {
 }
 
 Texture2D cursor_texture : register(t0);
+Texture2D background_texture : register(t1);
 SamplerState cursor_sampler : register(s0);
 
 float4 ps_main(VertexOut input) : SV_Target {
     return cursor_texture.Sample(cursor_sampler, input.uv);
+}
+float4 ps_xor(VertexOut input) : SV_Target {
+    float4 mask = cursor_texture.Sample(cursor_sampler,input.uv);
+    if (mask.a < 0.5) discard;
+    uint3 desktop = (uint3)round(saturate(background_texture.Load(int3(int2(input.position.xy),0)).rgb) * maximum);
+    uint3 bits = (uint3)round(mask.rgb * maximum);
+    return float4(float3(desktop ^ bits) / maximum, 1);
 }
 "#;
 
 #[repr(C)]
 struct CursorConstants {
     rect: [f32; 4],
+    maximum: [u32; 4],
 }
 
 struct CursorShape {
@@ -81,7 +90,11 @@ pub struct CursorOverlay {
     constants: ID3D11Buffer,
     sampler: ID3D11SamplerState,
     blend: ID3D11BlendState,
-    xor_blend: ID3D11BlendState,
+    xor_shader: ID3D11PixelShader,
+    target_texture: ID3D11Texture2D,
+    background_texture: ID3D11Texture2D,
+    background_view: ID3D11ShaderResourceView,
+    maximum: u32,
     shape: Option<CursorShape>,
     x: i32,
     y: i32,
@@ -91,6 +104,59 @@ pub struct CursorOverlay {
 }
 
 impl CursorOverlay {
+    /// Controlled native diagnostic cursor. Uses the same conversion/upload
+    /// path as DXGI's shape; a few pixels, away from ramp sample centres.
+    pub(crate) fn diagnostic_shape(&mut self, kind: u32, x: i32, y: i32) -> Result<()> {
+        let (raw, info) = if kind == 1 {
+            (
+                vec![0x30, 0x50],
+                DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+                    Type: 1,
+                    Width: 4,
+                    Height: 2,
+                    Pitch: 1,
+                    ..Default::default()
+                },
+            )
+        } else if kind == 4 {
+            (
+                vec![10, 20, 30, 0, 255, 255, 255, 255, 17, 93, 201, 255],
+                DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+                    Type: 4,
+                    Width: 3,
+                    Height: 1,
+                    Pitch: 12,
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                vec![10, 20, 30, 255, 255, 255, 255, 255],
+                DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+                    Type: kind,
+                    Width: 2,
+                    Height: 1,
+                    Pitch: 8,
+                    ..Default::default()
+                },
+            )
+        };
+        let (rgba, xor, width, height, pitch) =
+            convert_shape(&raw, info)?.context("diagnostic shape missing")?;
+        self.shape = Some(CursorShape {
+            view: create_cursor_view(&self.device, &rgba, width, height, pitch)?,
+            xor_view: xor
+                .as_ref()
+                .map(|v| create_cursor_view(&self.device, v, width, height, pitch))
+                .transpose()?,
+            width,
+            height,
+        });
+        self.x = x;
+        self.y = y;
+        self.visible = true;
+        Ok(())
+    }
     pub fn new(
         device: &ID3D11Device,
         target_texture: &ID3D11Texture2D,
@@ -137,8 +203,38 @@ impl CursorOverlay {
         unsafe { device.CreateSamplerState(&sampler_desc, Some(&mut sampler)) }
             .context("CreateSamplerState(cursor)")?;
 
-        let blend = create_blend_state(device, false)?;
-        let xor_blend = create_blend_state(device, true)?;
+        let blend = create_blend_state(device)?;
+        let xor_blob = compile("ps_xor", "ps_5_0")?;
+        let mut xor_shader = None;
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe {
+            target_texture.GetDesc(&mut desc);
+        }
+        let maximum = if desc.Format
+            == windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R10G10B10A2_UNORM
+        {
+            1023
+        } else {
+            255
+        };
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32;
+        let mut background_texture = None;
+        let mut background_view = None;
+        unsafe {
+            device.CreatePixelShader(
+                blob_bytes(&xor_blob),
+                None::<&ID3D11ClassLinkage>,
+                Some(&mut xor_shader),
+            )?;
+            device.CreateTexture2D(&desc, None, Some(&mut background_texture))?;
+            device.CreateShaderResourceView(
+                background_texture
+                    .as_ref()
+                    .context("XOR background texture")?,
+                None,
+                Some(&mut background_view),
+            )?;
+        }
         let mut target = None;
         unsafe { device.CreateRenderTargetView(target_texture, None, Some(&mut target)) }
             .context("CreateRenderTargetView(encoder input)")?;
@@ -153,7 +249,11 @@ impl CursorOverlay {
             constants: constants.ok_or_else(|| anyhow!("cursor constants were not created"))?,
             sampler: sampler.ok_or_else(|| anyhow!("cursor sampler was not created"))?,
             blend,
-            xor_blend,
+            xor_shader: xor_shader.context("XOR shader")?,
+            target_texture: target_texture.clone(),
+            background_texture: background_texture.context("XOR background texture")?,
+            background_view: background_view.context("XOR background view")?,
+            maximum,
             shape: None,
             x: 0,
             y: 0,
@@ -218,6 +318,7 @@ impl CursorOverlay {
         let bottom = 1.0 - 2.0 * (self.y + shape.height as i32) as f32 / self.frame_height as f32;
         let constants = CursorConstants {
             rect: [left, top, right, bottom],
+            maximum: [self.maximum, 0, 0, 0],
         };
         let viewport = D3D11_VIEWPORT {
             Width: self.frame_width as f32,
@@ -228,6 +329,9 @@ impl CursorOverlay {
         };
 
         unsafe {
+            if shape.xor_view.is_some() {
+                context.CopyResource(&self.background_texture, &self.target_texture);
+            }
             context.UpdateSubresource(
                 &self.constants,
                 0,
@@ -240,6 +344,7 @@ impl CursorOverlay {
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             context.VSSetShader(&self.vertex_shader, None);
             context.VSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
+            context.PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
             context.PSSetShader(&self.pixel_shader, None);
             context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
             context.PSSetShaderResources(0, Some(&[Some(shape.view.clone())]));
@@ -252,32 +357,26 @@ impl CursorOverlay {
 
             if let Some(xor_view) = &shape.xor_view {
                 context.PSSetShaderResources(0, Some(&[Some(xor_view.clone())]));
-                context.OMSetBlendState(&self.xor_blend, None, u32::MAX);
+                context.PSSetShader(&self.xor_shader, None);
+                context.PSSetShaderResources(1, Some(&[Some(self.background_view.clone())]));
+                context.OMSetBlendState(None, None, u32::MAX);
                 context.Draw(4, 0);
             }
 
             // Release the references held by the immediate context before a
             // pointer-shape update replaces its small texture.
-            context.PSSetShaderResources(0, Some(&[None]));
+            context.PSSetShaderResources(0, Some(&[None, None]));
             context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
         }
     }
 }
 
-fn create_blend_state(device: &ID3D11Device, xor: bool) -> Result<ID3D11BlendState> {
+fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     let mut desc = D3D11_BLEND_DESC::default();
     let target = &mut desc.RenderTarget[0];
     target.BlendEnable = BOOL::from(true);
-    target.SrcBlend = if xor {
-        D3D11_BLEND_INV_DEST_COLOR
-    } else {
-        D3D11_BLEND_SRC_ALPHA
-    };
-    target.DestBlend = if xor {
-        D3D11_BLEND_INV_SRC_COLOR
-    } else {
-        D3D11_BLEND_INV_SRC_ALPHA
-    };
+    target.SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    target.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
     target.BlendOp = D3D11_BLEND_OP_ADD;
     target.SrcBlendAlpha = D3D11_BLEND_ONE;
     target.DestBlendAlpha = D3D11_BLEND_ZERO;
@@ -360,7 +459,11 @@ fn convert_shape(
             for x in 0..info.Width as usize {
                 let alpha = y * info.Pitch as usize + x * 4 + 3;
                 rgba[alpha] = if raw[alpha] == 0 { 0xff } else { 0 };
-                xor[alpha] = if raw[alpha] == 0 { 0 } else { 0xff };
+                if raw[alpha] == 0 {
+                    xor[alpha - 3..=alpha].fill(0);
+                } else {
+                    xor[alpha] = 0xff;
+                }
             }
         }
         return Ok(Some((rgba, Some(xor), info.Width, info.Height, info.Pitch)));
@@ -442,6 +545,7 @@ mod tests {
     fn cursor_shaders_compile() {
         assert!(unsafe { blob_bytes(&compile("vs_main", "vs_5_0").unwrap()) }.len() > 32);
         assert!(unsafe { blob_bytes(&compile("ps_main", "ps_5_0").unwrap()) }.len() > 32);
+        assert!(unsafe { blob_bytes(&compile("ps_xor", "ps_5_0").unwrap()) }.len() > 32);
     }
 
     #[test]
@@ -460,6 +564,7 @@ mod tests {
         assert_eq!(rgba[7], 0);
         let xor = xor.unwrap();
         assert_eq!(xor[3], 0);
+        assert_eq!(&xor[..3], &[0, 0, 0]);
         assert_eq!(xor[7], 0xff);
     }
 }

@@ -38,7 +38,7 @@ pub trait VirtualDisplay: Send + Sync {
     /// Make one virtual monitor exist, offering `mode` and rendered on `gpu`.
     /// It need not be on the desktop yet: the session activates it exclusively
     /// through `topology::exclusive`.
-    fn attach(&self, mode: Mode, gpu: &GpuInfo) -> Result<(Attachment, Monitor)>;
+    fn attach(&self, mode: Mode, gpu: &GpuInfo, ten_bit: bool) -> Result<(Attachment, Monitor)>;
 
     /// Prevent applications from reactivating physical monitor paths while a
     /// virtual-only session is running. Backends without an elevated device

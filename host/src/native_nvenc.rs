@@ -24,10 +24,14 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
-    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutput5, IDXGIOutput6,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
+    DXGI_OUTDUPL_FRAME_INFO,
 };
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod, TIMERR_NOERROR};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -42,11 +46,107 @@ use crate::encoder::{AccessUnit, AnnexBParser, EncoderConfig, EncoderTiming, Qua
 use crate::gpu::{GpuInfo, Luid};
 use crate::nvenc_caps::{codec_label, CodecCaps, EncoderCaps, Profile};
 use crate::protocol::{Codec, UNKNOWN_TIME};
+pub mod precision;
+mod sdr_capture;
+pub(crate) use sdr_capture::is_system as is_system_process;
+use sdr_capture::{Apartment, SdrCapture, SdrConverter};
+pub mod capture_source;
+use windows::Win32::Graphics::Gdi::HMONITOR;
+
+/// RGB10 is A2B10G10R10 in a little-endian 32-bit word, hence ABGR10,
+/// *not* ARGB10. Keep one choice for init, allocation and registration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputFormat {
+    Bgra8,
+    Rgb10,
+}
+
+impl InputFormat {
+    fn for_config(cfg: &EncoderConfig) -> Self {
+        Self::for_depth(cfg.codec == Codec::Hevc && cfg.ten_bit)
+    }
+    fn for_depth(ten_bit: bool) -> Self {
+        if ten_bit {
+            Self::Rgb10
+        } else {
+            Self::Bgra8
+        }
+    }
+    fn dxgi(self) -> DXGI_FORMAT {
+        match self {
+            Self::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
+            Self::Rgb10 => DXGI_FORMAT_R10G10B10A2_UNORM,
+        }
+    }
+    fn nvenc(self) -> NV_ENC_BUFFER_FORMAT {
+        match self {
+            Self::Bgra8 => NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB,
+            Self::Rgb10 => NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR10,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UnsupportedCaptureFormat;
+impl std::fmt::Display for UnsupportedCaptureFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("unsupported SDR capture precision/colour space")
+    }
+}
+impl std::error::Error for UnsupportedCaptureFormat {}
+
+pub(crate) fn is_unsupported_capture(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<UnsupportedCaptureFormat>().is_some()
+}
+
+pub(crate) fn check_virtual_sdr10(location: &crate::display::OutputLocation) -> Result<()> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+        let output: IDXGIOutput6 = factory
+            .EnumAdapters1(location.adapter_index)?
+            .EnumOutputs(location.output_index)?
+            .cast()?;
+        let desc = output.GetDesc1()?;
+        if desc.BitsPerColor < 10 || desc.ColorSpace != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 {
+            return Err(
+                anyhow::Error::new(UnsupportedCaptureFormat).context(format!(
+                    "virtual display did not activate 10-bit SDR: {} bits/channel, {:?}",
+                    desc.BitsPerColor, desc.ColorSpace
+                )),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_capture_format(
+    ten_bit: bool,
+    bits: u32,
+    colour: windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_TYPE,
+    format: DXGI_FORMAT,
+) -> Result<()> {
+    let valid = if ten_bit {
+        // DDA is cursor-only here; WGC supplies native FP16 independently of
+        // connector precision, including on an unchanged 8-bit dev monitor.
+        colour == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
+    } else {
+        format == DXGI_FORMAT_B8G8R8A8_UNORM
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(anyhow::Error::new(UnsupportedCaptureFormat).context(format!(
+        "requested {}-bit SDR; display {bits} bits/channel, {colour:?}, duplication {format:?}; need SDR colour space for FP16 -> RGB10 capture (HDR is not tone mapped)", if ten_bit { 10 } else { 8 })))
+}
 
 /// Open a short-lived NVENC session on a D3D11 device for the selected GPU and
 /// read what it can encode. No Desktop Duplication, no display change; safe
 /// while another process (the service) streams.
 pub fn query_caps(gpu: &GpuInfo) -> Result<EncoderCaps> {
+    // Initialize WinRT before opening NVIDIA's session, and keep it alive
+    // until that session and its driver DLL are destroyed. Tearing down the
+    // apartment from inside CodecCaps probing invalidates driver COM state.
+    let _apartment = Apartment::new()?;
     let session = CapsSession::open(gpu)?;
     let listed = session.list(
         "NvEncGetEncodeGUIDs",
@@ -236,6 +336,12 @@ impl CapsSession {
             .filter(|&p| profiles.contains(&profile_guid_of(p)))
             .collect(),
             argb_input: formats.contains(&(NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB as i32)),
+            high_precision_capture: sdr_capture::supported(&self._device).unwrap_or_else(|e| {
+                log::warn!("high-precision SDR capture unavailable: {e:#}");
+                false
+            }),
+            abgr10_input: formats
+                .contains(&(NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR10 as i32)),
             ull_presets,
             async_encode: cap(NV_ENC_CAPS::NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT)? != 0,
             cbr: rate_modes & NV_ENC_PARAMS_RC_MODE::NV_ENC_PARAMS_RC_CBR as i32 != 0,
@@ -283,13 +389,20 @@ pub fn trial_initialize(gpu: &GpuInfo, cfg: &EncoderConfig) -> Result<()> {
         width: cfg.width,
         height: cfg.height,
         fps: cfg.fps.max(1),
+        input_format: InputFormat::for_config(cfg),
         slots: Vec::new(),
     }));
-    trial
-        .0
-        .as_mut()
-        .expect("trial session present")
-        .configure(cfg)
+    let session = trial.0.as_mut().expect("trial session present");
+    session.initialize_encoder(cfg)?;
+    if session.input_format == InputFormat::Rgb10 {
+        SdrConverter::new(
+            &session.device,
+            &session.slots[0].texture,
+            cfg.width,
+            cfg.height,
+        )?;
+    }
+    Ok(())
 }
 
 /// Destroys a trial session on every path.
@@ -452,6 +565,13 @@ unsafe impl Send for OutputWorkerContext {}
 
 /// Everything the capture thread owns. Returned from the thread on exit so
 /// `Drop` can release the slots after both threads are gone.
+struct PrecisionPath {
+    converter: Option<SdrConverter>,
+    texture: ID3D11Texture2D,
+    monitor: HMONITOR,
+    display: String,
+}
+
 struct CaptureLoop {
     functions: NV_ENCODE_API_FUNCTION_LIST,
     encoder: *mut c_void,
@@ -460,6 +580,11 @@ struct CaptureLoop {
     duplication: IDXGIOutputDuplication,
     composition_texture: ID3D11Texture2D,
     cursor: CursorOverlay,
+    precision: Option<PrecisionPath>,
+    sdr_capture: Option<SdrCapture>,
+    broker_capture: Option<capture_source::Broker>,
+    cursor_dirty: bool,
+    capture_desktop: String,
     width: u32,
     height: u32,
     frame_interval: Duration,
@@ -559,6 +684,7 @@ struct EncoderSession {
     width: u32,
     height: u32,
     fps: u32,
+    input_format: InputFormat,
     slots: Vec<EncodeSlot>,
 }
 
@@ -566,6 +692,12 @@ impl NativeNvenc {
     pub fn spawn(cfg: &EncoderConfig) -> Result<Self> {
         if cfg.cross_adapter() {
             bail!("native NVENC requires capture and encode on the same DXGI adapter");
+        }
+        if InputFormat::for_config(cfg) == InputFormat::Rgb10
+            && crate::desktop::input_desktop_name() != "Default"
+        {
+            return Err(anyhow::Error::new(crate::encoder::DesktopNotCapturable)
+                .context("true 10-bit SDR capture waits for the signed-in user's Default desktop; use 8-bit for login/secure screens"));
         }
 
         let api = NvApi::load()?;
@@ -576,13 +708,40 @@ impl NativeNvenc {
             Ok(name) => log::debug!("capture bound to the {name} desktop"),
             Err(e) => log::debug!("not bound to the input desktop: {e:#}"),
         }
-        let (device, context, duplication, adapter_luid, width, height) =
-            create_capture(cfg.capture_adapter_idx, cfg.output_idx)?;
+        let (device, context, duplication, adapter_luid, width, height) = create_capture(
+            cfg.capture_adapter_idx,
+            cfg.output_idx,
+            cfg.codec == Codec::Hevc && cfg.ten_bit,
+        )?;
         // On every start and restart: the index may have moved to another
         // adapter, or the output changed size since STREAM_START.
         crate::encoder::check_capture(cfg, adapter_luid, width, height)?;
-        let composition_texture = create_texture(&device, width, height)?;
+        let input_format = InputFormat::for_config(cfg);
+        let composition_texture = create_texture(&device, width, height, input_format.dxgi())?;
         let cursor = CursorOverlay::new(&device, &composition_texture, width, height)?;
+        let precision = if input_format == InputFormat::Rgb10 {
+            let desktop = create_texture(&device, width, height, input_format.dxgi())?;
+            let converter = if sdr_capture::is_system()? || crate::test_fault("capture-broker") {
+                None
+            } else {
+                Some(SdrConverter::new(&device, &desktop, width, height)?)
+            };
+            let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
+            let output = unsafe {
+                factory
+                    .EnumAdapters1(cfg.capture_adapter_idx)?
+                    .EnumOutputs(cfg.output_idx)?
+                    .GetDesc()?
+            };
+            Some(PrecisionPath {
+                converter,
+                texture: desktop,
+                monitor: output.Monitor,
+                display: crate::display::wide_to_string(&output.DeviceName),
+            })
+        } else {
+            None
+        };
 
         let mut session = EncoderSession {
             api,
@@ -591,6 +750,7 @@ impl NativeNvenc {
             width,
             height,
             fps: cfg.fps.max(1),
+            input_format,
             slots: Vec::with_capacity(PIPELINE_DEPTH),
         };
         if let Err(error) = session.initialize_encoder(cfg) {
@@ -669,6 +829,11 @@ impl NativeNvenc {
             duplication,
             composition_texture,
             cursor,
+            precision,
+            sdr_capture: None,
+            broker_capture: None,
+            cursor_dirty: false,
+            capture_desktop: crate::desktop::input_desktop_name(),
             width,
             height,
             frame_interval: Duration::from_secs_f64(1.0 / f64::from(session.fps)),
@@ -813,9 +978,44 @@ impl EncoderSession {
         for _ in 0..PIPELINE_DEPTH {
             self.slots.push(self.create_slot()?);
         }
+        // Exercise registration AND mapping in preflight as well as real
+        // sessions; initialization alone can accept an unusable input format.
+        let mut map: NV_ENC_MAP_INPUT_RESOURCE = unsafe { zeroed() };
+        map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
+        map.registeredResource = self.slots[0].registered;
+        let map_input = self.api.required(
+            self.api.functions.nvEncMapInputResource,
+            "NvEncMapInputResource",
+        )?;
+        nv_check(
+            &self.api,
+            self.encoder,
+            unsafe { map_input(self.encoder, &mut map) },
+            "NvEncMapInputResource trial",
+        )?;
+        let unmap = self.api.required(
+            self.api.functions.nvEncUnmapInputResource,
+            "NvEncUnmapInputResource",
+        )?;
+        let mapped_format = map.mappedBufferFmt;
+        nv_check(
+            &self.api,
+            self.encoder,
+            unsafe { unmap(self.encoder, map.mappedResource) },
+            "NvEncUnmapInputResource trial",
+        )?;
+        anyhow::ensure!(
+            mapped_format == self.input_format.nvenc(),
+            "NVENC mapped unexpected input format {mapped_format:?}"
+        );
+        log::info!(
+            "NVENC input: {:?}, DXGI composition/slots {:?}",
+            self.input_format.nvenc(),
+            self.input_format.dxgi()
+        );
         let hevc_session = cfg.codec == Codec::Hevc;
         log::info!(
-            "native capture: Desktop Duplication -> D3D11 -> asynchronous NVENC, {}x{}@{} {} {}-bit, preset {} (GPU cursor overlay, {} buffers)",
+            "encoder initialized: D3D11 -> asynchronous NVENC, {}x{}@{} {} {}-bit, preset {} (GPU cursor overlay, {} buffers)",
             self.width,
             self.height,
             self.fps,
@@ -909,7 +1109,7 @@ impl EncoderSession {
         init.maxEncodeWidth = self.width;
         init.maxEncodeHeight = self.height;
         init.tuningInfo = tuning;
-        init.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+        init.bufferFormat = self.input_format.nvenc();
         let initialize = self.api.required(
             self.api.functions.nvEncInitializeEncoder,
             "NvEncInitializeEncoder",
@@ -923,7 +1123,12 @@ impl EncoderSession {
     }
 
     fn create_slot(&self) -> Result<EncodeSlot> {
-        let texture = create_texture(&self.device, self.width, self.height)?;
+        let texture = create_texture(
+            &self.device,
+            self.width,
+            self.height,
+            self.input_format.dxgi(),
+        )?;
 
         let mut register: NV_ENC_REGISTER_RESOURCE = unsafe { zeroed() };
         register.version = NV_ENC_REGISTER_RESOURCE_VER;
@@ -931,7 +1136,7 @@ impl EncoderSession {
         register.width = self.width;
         register.height = self.height;
         register.resourceToRegister = texture.as_raw();
-        register.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+        register.bufferFormat = self.input_format.nvenc();
         register.bufferUsage = NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE;
         let register_resource = self.api.required(
             self.api.functions.nvEncRegisterResource,
@@ -1025,6 +1230,36 @@ impl CaptureLoop {
         if let Ok(name) = crate::desktop::bind_input_desktop() {
             log::debug!("capture thread on the {name} desktop");
         }
+        let direct = self
+            .precision
+            .as_ref()
+            .is_some_and(|p| p.converter.is_some());
+        let apartment = if direct {
+            match Apartment::new() {
+                Ok(apartment) => Some(apartment),
+                Err(error) => {
+                    let _ = self.events_tx.try_send(OutputEvent::CaptureFailed(error));
+                    self.worker_tx.take();
+                    return self;
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(path) = &self.precision {
+            let result = if direct {
+                SdrCapture::new(&self._device, path.monitor, self.width, self.height)
+                    .map(|source| self.sdr_capture = Some(source))
+            } else {
+                capture_source::Broker::new(&self._device, &path.display, self.width, self.height)
+                    .map(|source| self.broker_capture = Some(source))
+            };
+            if let Err(error) = result {
+                let _ = self.events_tx.try_send(OutputEvent::CaptureFailed(error));
+                self.worker_tx.take();
+                return self;
+            }
+        }
         while !self.stop.load(Ordering::Relaxed) {
             match self.step() {
                 Ok(true) => {}
@@ -1045,6 +1280,11 @@ impl CaptureLoop {
                 }
             }
         }
+        // WGC objects must close/release on their capture thread before its
+        // WinRT apartment ends; only D3D/NVENC resources go to the janitor.
+        self.sdr_capture.take();
+        self.broker_capture.take();
+        drop(apartment);
         // Closing the pending channel lets the output worker finish and exit.
         self.worker_tx.take();
         self
@@ -1064,6 +1304,10 @@ impl CaptureLoop {
     /// NVENC's DirectX input pass then cannot finish the previous picture until
     /// the wait returns (measured: encode time became one frame interval).
     fn step(&mut self) -> Result<bool> {
+        if self.precision.is_some() && self.capture_desktop != crate::desktop::input_desktop_name()
+        {
+            return Ok(false);
+        }
         let slot_index = self.wait_for_free_slot()?;
 
         let tick = loop {
@@ -1081,6 +1325,7 @@ impl CaptureLoop {
                 Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => return Ok(false),
                 Err(e) => return Err(e).context("IDXGIOutputDuplication::AcquireNextFrame"),
             }
+            self.capture_sdr()?;
             let now = Instant::now();
             match self.next_tick {
                 // The first desktop frame sets the initial phase.
@@ -1133,6 +1378,44 @@ impl CaptureLoop {
         }
     }
 
+    fn capture_sdr(&mut self) -> Result<()> {
+        let Some(path) = &self.precision else {
+            return Ok(());
+        };
+        let started = Instant::now();
+        let fresh = if let Some(capture) = &self.sdr_capture {
+            if let Some(frame) = capture.latest()? {
+                path.converter
+                    .as_ref()
+                    .expect("direct converter")
+                    .convert(&self.context, &frame.texture()?)?;
+                self.pending_present_qpc = Some(frame.present_qpc(self.qpc_frequency)?);
+                true
+            } else {
+                false
+            }
+        } else if let Some(capture) = &self.broker_capture {
+            capture.copy_latest(&self.context, &path.texture)?
+        } else {
+            false
+        };
+        if fresh {
+            self.have_frame = true;
+            self.cursor_dirty = true;
+        }
+        if self.have_frame && self.cursor_dirty {
+            unsafe {
+                self.context
+                    .CopyResource(&self.composition_texture, &path.texture);
+            }
+            self.cursor.draw(&self.context);
+            self.cursor_dirty = false;
+            self.dirty = true;
+            self.pending_work += started.elapsed();
+        }
+        Ok(())
+    }
+
     /// Copy an acquired desktop frame into the composition texture and refresh
     /// the cursor overlay, then release the frame back to DWM.
     fn composite(
@@ -1147,17 +1430,38 @@ impl CaptureLoop {
             let desktop: ID3D11Texture2D = resource
                 .cast()
                 .context("desktop frame is not a D3D11 texture")?;
+            self.cursor.update(&self.duplication, info)?;
+            if self.precision.is_some() {
+                self.cursor_dirty = true;
+                return Ok(());
+            }
+            let mut source = D3D11_TEXTURE2D_DESC::default();
+            let mut target = D3D11_TEXTURE2D_DESC::default();
+            unsafe {
+                desktop.GetDesc(&mut source);
+                self.composition_texture.GetDesc(&mut target);
+            }
+            if source.Format != target.Format
+                || source.Width != target.Width
+                || source.Height != target.Height
+            {
+                return Err(anyhow::Error::new(UnsupportedCaptureFormat).context(format!(
+                    "acquired desktop changed: {:?} {}x{}, expected {:?} {}x{}; refusing a lossy/invalid CopyResource",
+                    source.Format, source.Width, source.Height, target.Format, target.Width, target.Height)));
+            }
             unsafe {
                 self.context
                     .CopyResource(&self.composition_texture, &desktop);
             }
-            self.cursor.update(&self.duplication, info)?;
             Ok(())
         })();
         if let Err(e) = unsafe { self.duplication.ReleaseFrame() } {
             log::warn!("Desktop Duplication ReleaseFrame failed: {e}");
         }
         copied?;
+        if self.precision.is_some() {
+            return Ok(());
+        }
         self.cursor.draw(&self.context);
 
         // LastPresentTime is 0 when only the cursor changed.
@@ -1257,9 +1561,15 @@ impl CaptureLoop {
             work: self.pending_work + work_start.elapsed(),
             age,
             reused: !self.dirty,
-            present_us: self
-                .pending_present_qpc
-                .map_or(UNKNOWN_TIME, crate::clock::qpc_to_us),
+            // WGC SystemRelativeTime is a render/capture timestamp, not the
+            // DXGI LastPresentTime promised on the wire. Use it for cadence
+            // only; do not manufacture a desktop-to-screen measurement.
+            present_us: if self.precision.is_some() {
+                UNKNOWN_TIME
+            } else {
+                self.pending_present_qpc
+                    .map_or(UNKNOWN_TIME, crate::clock::qpc_to_us)
+            },
             submit_us,
         };
         if self
@@ -1560,6 +1870,7 @@ fn nv_check_raw(
 fn create_capture(
     adapter_idx: u32,
     output_idx: u32,
+    ten_bit: bool,
 ) -> Result<(
     ID3D11Device,
     ID3D11DeviceContext,
@@ -1615,11 +1926,66 @@ fn create_capture(
         // game's own submissions and could wedge the GPU scheduler hard enough
         // to freeze the whole machine when a game engaged the GPU; the latency
         // it saved was negligible next to that risk.
-        let output1: IDXGIOutput1 = output.cast().context("IDXGIOutput1")?;
-        let duplication = output1
-            .DuplicateOutput(&device)
-            .map_err(duplicate_output_error)?;
+        let output6: IDXGIOutput6 = output
+            .cast()
+            .context("IDXGIOutput6 (display colour information)")?;
+        let colour = output6.GetDesc1().context("IDXGIOutput6::GetDesc1")?;
+        log::info!(
+            "display: requested {}-bit SDR, active {} bits/channel, colour space {:?}",
+            if ten_bit { 10 } else { 8 },
+            colour.BitsPerColor,
+            colour.ColorSpace
+        );
+        let duplication = if ten_bit {
+            // DDA supplies cursor shapes/positions only for a 10-bit session.
+            // Probe native formats but never feed its BGRA8 desktop to NVENC.
+            let output5: IDXGIOutput5 = output.cast().context("IDXGIOutput5")?;
+            match output5.DuplicateOutput1(
+                &device,
+                0,
+                &[
+                    windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                ],
+            ) {
+                Ok(duplication) => duplication,
+                Err(e) if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED => {
+                    // This driver sometimes rejects DuplicateOutput1 even
+                    // with BGRA8 alone. Classic DDA is sufficient for the
+                    // pointer; its desktop pixels are still never consumed.
+                    log::warn!("DuplicateOutput1 unsupported; using classic duplication for cursor only (desktop remains WGC FP16)");
+                    output
+                        .cast::<IDXGIOutput1>()?
+                        .DuplicateOutput(&device)
+                        .map_err(duplicate_output_error)?
+                }
+                Err(e) => return Err(duplicate_output_error(e)),
+            }
+        } else {
+            let output1: IDXGIOutput1 = output.cast().context("IDXGIOutput1")?;
+            output1
+                .DuplicateOutput(&device)
+                .map_err(duplicate_output_error)?
+        };
         let dupe_desc = duplication.GetDesc();
+        log::info!(
+            "duplication {}: {:?}; composition/slot {:?}; NVENC input {:?}, output {}-bit SDR",
+            if ten_bit {
+                "(cursor only; WGC FP16 desktop)"
+            } else {
+                "(desktop)"
+            },
+            dupe_desc.ModeDesc.Format,
+            InputFormat::for_depth(ten_bit).dxgi(),
+            InputFormat::for_depth(ten_bit).nvenc(),
+            if ten_bit { 10 } else { 8 }
+        );
+        validate_capture_format(
+            ten_bit,
+            colour.BitsPerColor,
+            colour.ColorSpace,
+            dupe_desc.ModeDesc.Format,
+        )?;
         let width = dupe_desc.ModeDesc.Width;
         let height = dupe_desc.ModeDesc.Height;
         if width == 0 || height == 0 {
@@ -1646,13 +2012,18 @@ fn duplicate_output_error(error: windows::core::Error) -> anyhow::Error {
     }
 }
 
-fn create_texture(device: &ID3D11Device, width: u32, height: u32) -> Result<ID3D11Texture2D> {
+fn create_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> Result<ID3D11Texture2D> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -1889,10 +2260,87 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires NVIDIA NVENC and Windows Graphics Capture; read-only, no display changes"]
+    fn capability_query_and_input_trials_can_repeat_without_invalidating_driver_state() {
+        let gpu = crate::gpu::choose(&crate::gpu::enumerate().unwrap(), None).unwrap();
+        for _ in 0..2 {
+            let caps = query_caps(&gpu).unwrap();
+            assert!(caps.video_caps(false).ten_bit);
+            for full_color in [false, true] {
+                let cfg = EncoderConfig {
+                    capture_adapter_idx: gpu.adapter_index,
+                    capture_luid: gpu.luid,
+                    encode_luid: gpu.luid,
+                    output_idx: 0,
+                    width: 1920,
+                    height: 1080,
+                    fps: 60,
+                    bitrate_mbps: 120,
+                    codec: Codec::Hevc,
+                    gop: 120,
+                    quality: Quality::Balanced,
+                    full_color,
+                    ten_bit: true,
+                    intra_refresh: false,
+                };
+                trial_initialize(&gpu, &cfg).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn sdr_capture_requires_real_precision_and_sdr_colour() {
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_R16G16B16A16_FLOAT,
+        };
+        assert!(validate_capture_format(
+            true,
+            10,
+            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        )
+        .is_ok());
+        // DDA may be 8-bit: in this mode it supplies cursor metadata only.
+        for format in [DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT] {
+            assert!(validate_capture_format(
+                true,
+                8,
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                format
+            )
+            .is_ok());
+        }
+        let e = validate_capture_format(
+            true,
+            10,
+            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+        )
+        .unwrap_err()
+        .context("recovery");
+        assert!(is_unsupported_capture(&e));
+        assert!(validate_capture_format(
+            false,
+            8,
+            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        )
+        .is_ok());
+        assert_eq!(
+            InputFormat::Rgb10.nvenc(),
+            NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR10
+        );
+        assert_eq!(
+            InputFormat::Bgra8.nvenc(),
+            NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB
+        );
+    }
+
+    #[test]
     #[ignore = "requires an interactive Windows desktop; duplicates the primary output, no display changes"]
     fn a_second_duplication_starts_once_the_first_is_released() {
-        let first = create_capture(0, 0).expect("first duplication of the primary output");
-        let busy = create_capture(0, 0).map(|_| ()).unwrap_err();
+        let first = create_capture(0, 0, false).expect("first duplication of the primary output");
+        let busy = create_capture(0, 0, false).map(|_| ()).unwrap_err();
         assert!(crate::encoder::is_output_busy(&busy), "{busy:#}");
         let release = thread::spawn(move || {
             thread::sleep(Duration::from_millis(300));
@@ -1902,7 +2350,7 @@ mod tests {
         let second = crate::encoder::retry_output_busy(
             Duration::from_secs(2),
             Duration::from_millis(50),
-            || create_capture(0, 0),
+            || create_capture(0, 0, false),
         );
         release.join().unwrap();
         assert!(second.is_ok(), "{:#}", second.err().unwrap());

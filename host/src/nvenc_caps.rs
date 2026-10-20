@@ -68,6 +68,10 @@ pub struct CodecCaps {
     /// `NV_ENC_BUFFER_FORMAT_ARGB`: what Desktop Duplication's BGRA texture
     /// is registered as.
     pub argb_input: bool,
+    /// Packed R10G10B10A2 desktop input (R in the low 10 bits).
+    pub abgr10_input: bool,
+    /// WGC FP16 plus same-GPU FP16 shader load and RGB10 render/blend.
+    pub high_precision_capture: bool,
     /// P1/P4/P6 that are listed and whose ultra-low-latency configuration the
     /// driver returns.
     pub ull_presets: Vec<Quality>,
@@ -134,6 +138,12 @@ impl CodecCaps {
         }
         if hevc && r.full_color && !self.yuv444 {
             problems.push("no 4:4:4 encoding".into());
+        }
+        if hevc && r.ten_bit && !self.abgr10_input {
+            problems.push("no ABGR10 high-precision input".into());
+        }
+        if hevc && r.ten_bit && !self.high_precision_capture {
+            problems.push("no usable high-precision SDR capture/conversion".into());
         }
         if hevc && r.ten_bit && !self.ten_bit {
             problems.push("no 10-bit encoding".into());
@@ -210,7 +220,12 @@ impl EncoderCaps {
             quality: self.codec_mask(intra_refresh) != 0,
             hevc: hevc.is_some(),
             full_color: hevc.is_some_and(|c| c.yuv444 && c.profiles.contains(&Profile::HevcRext)),
-            ten_bit: hevc.is_some_and(|c| c.ten_bit && c.profiles.contains(&Profile::HevcMain10)),
+            ten_bit: hevc.is_some_and(|c| {
+                c.ten_bit
+                    && c.abgr10_input
+                    && c.high_precision_capture
+                    && c.profiles.contains(&Profile::HevcMain10)
+            }),
         }
     }
 
@@ -252,13 +267,15 @@ impl EncoderCaps {
                 c.listed_input_formats.join(", "),
             ));
             s.push_str(&format!(
-                "  async {}, CBR {}, custom VBV {}, intra refresh {}, 4:4:4 {}, 10-bit {}\n",
+                "  async {}, CBR {}, custom VBV {}, intra refresh {}, 4:4:4 {}, 10-bit output {}, RGB10/ABGR10 input {}, FP16 SDR capture/conversion {}\n",
                 yes(c.async_encode),
                 yes(c.cbr),
                 yes(c.custom_vbv),
                 yes(c.intra_refresh),
                 yes(c.yuv444),
                 yes(c.ten_bit),
+                yes(c.abgr10_input),
+                yes(c.high_precision_capture),
             ));
             s.push_str(&format!(
                 "  size {}x{} to {}x{}, rated {}\n",
@@ -313,6 +330,8 @@ pub(crate) mod fixture {
             listed_input_formats: vec!["NV12".into(), "ARGB".into()],
             profiles: vec![Profile::HevcMain, Profile::HevcMain10, Profile::HevcRext],
             argb_input: true,
+            abgr10_input: true,
+            high_precision_capture: true,
             ull_presets: vec![Quality::Speed, Quality::Balanced, Quality::Quality],
             async_encode: true,
             cbr: true,
@@ -382,6 +401,31 @@ mod tests {
 
     fn problem(caps: &CodecCaps, requirement: &Requirement) -> String {
         format!("{:#}", caps.check(requirement).unwrap_err())
+    }
+
+    #[test]
+    fn output_depth_without_rgb10_input_is_not_ten_bit_support() {
+        let mut c = hevc();
+        c.abgr10_input = false;
+        let caps = fixture::caps(vec![c.clone()]);
+        assert!(!caps.video_caps(false).ten_bit);
+        let mut r = session(1920, 1080);
+        assert!(c.check(&r).is_ok(), "8-bit compatibility");
+        r.ten_bit = true;
+        assert!(problem(&c, &r).contains("ABGR10"));
+        r.full_color = true;
+        assert!(problem(&c, &r).contains("ABGR10"));
+    }
+
+    #[test]
+    fn conversion_and_capture_are_required_even_with_abgr10() {
+        let mut c = hevc();
+        c.high_precision_capture = false;
+        assert!(!fixture::caps(vec![c.clone()]).video_caps(false).ten_bit);
+        let mut r = session(1920, 1080);
+        assert!(c.check(&r).is_ok());
+        r.ten_bit = true;
+        assert!(problem(&c, &r).contains("capture/conversion"));
     }
 
     #[test]

@@ -208,6 +208,67 @@ post-attach revalidation, and the capture adapter/size check. Anything that
 actually changes the displays needs the real machine; `encoder-caps` exercises
 the NVENC calls on it without changing any.
 
+### 10-bit SDR precision
+
+The 10-bit toggle controls the virtual display (SDR10bit=true, HDRPlus=false)
+and the whole capture path. Its original colour switches are journaled in
+`%ProgramData%\Relay\vdd-colour.xml` before writing XML, restored after device
+disable, and recovered on cleanup before the next session. GPU/mode merges
+and unrelated XML are retained. Eight-bit and H.264 sessions select SDR10bit=false.
+
+On this PC, DuplicateOutput1 returns BGRA8 even with a 10-bit SDR MTT display.
+Ten-bit sessions therefore capture FP16 linear scRGB with Windows Graphics
+Capture, exclude its cursor, use a GPU sRGB OETF into R10G10B10A2, compose the
+DXGI pointer there, and register slots as **ABGR10** (R is in the low 10 bits).
+When DuplicateOutput1 is unsupported, classic duplication supplies only the
+pointer; the desktop remains FP16. No BGRA8 conversion precedes encoding. A SYSTEM worker starts a signed-in-user
+`capture-source` process from the same binary, because WGC activation itself
+requires that user's CaptureService (impersonation is insufficient). The local
+pipe checks the exact child PID before duplicating only an RGB10 texture
+handle; a keyed mutex transfers GPU ownership. Pixel data stays on the GPU,
+and topology, input, cursor composition, NVENC and keys stay with SYSTEM.
+The helper has no host-state or tray duties and dies with capture teardown.
+True 10-bit needs the signed-in user's Default desktop; select 8-bit for login
+or secure screens. Desktop changes remain recoverable without an 8-bit-source
+fallback.
+Normal, masked and monochrome cursors
+are supported; XOR uses integer operations on the destination's native codes.
+Eight-bit sessions retain Desktop Duplication/BGRA8/ARGB. The capability record
+requires FP16 shader load, RGB10 render/blend, WGC support and NVENC ABGR10;
+preflight initializes, registers and maps the real input and creates the SDR
+converter. HDR capture is refused rather than relabelled as SDR.
+
+`precision.exe` displays a small native RGB10 window on an existing display,
+reads actual captured and composed pixels, checks sub-8-bit ramps, range,
+channel order and cursor operations, and optionally writes a production dump:
+
+```powershell
+host\target\release\precision.exe --dump host\target\precision-420.hevc
+host\target\release\precision.exe --full-color --dump host\target\precision-444.hevc
+host\target\release\precision.exe --eight-bit --dump host\target\precision-8.hevc
+host\target\release\precision.exe --h264 --dump host\target\precision-h264.h264
+python tools/check-precision.py host/target/precision-420.hevc host/target/precision-444.hevc host/target/precision-8.hevc
+```
+
+This leaves the physical display's colour settings, DPI and layout alone.
+An unchanged 8-bit connector can still yield precise native FP16 application
+content; an 8-bit application does not gain new precision. Adjacent CSV files
+record expected/source/composed patch samples. The Python tool needs ffmpeg /
+ffprobe and compares decoded frame 10 at the same pixel centres; it reports
+lossy errors in 10-bit RGB codes and validates SDR VUI. A texture format or a
+Main10 SPS alone does not pass this diagnostic.
+
+With the service stopped, elevated `precision --virtual-display` adds a
+1920×1080@60 VDD **alongside** the physical monitors and restores the snapshot
+and colour settings afterwards. It never invokes the exclusive topology.
+Exclusive sessions/recovery checks belong to the user; results and remaining
+Mac/user checks are in [SESSION-HANDOFF.md](../SESSION-HANDOFF.md).
+
+WGC frames carry SystemRelativeTime, not DXGI LastPresentTime. That timestamp
+controls capture cadence, but `present_us` stays unknown for this source so
+the Mac does not present it as a measured Desktop → screen latency. Receive →
+screen, encode/work, transfer, clock sync and input timing remain available.
+
 ### `probe`: a fake Mac
 
 `probe` runs the real handshake and session from the PC itself:
@@ -299,7 +360,7 @@ second line.
    0.2 s). A refusal is `STREAM_STOP(ENCODER_FAILED)`; the reason is only in
    `host.log`.
 5. **Set up the display.** Snapshot the layout to disk, enable the driver's
-   device, make the virtual monitor the only active display at the Mac's exact
+   device with its negotiated SDR depth, make the virtual monitor the only active display at the Mac's exact
    mode, and disable the physical monitors' devices so a fullscreen game can't
    bring them back. Then revalidate: the display must be on the selected GPU,
    and a mode other than the requested one is checked (and initialized) again.
@@ -341,7 +402,9 @@ learns within seconds that the tray forgot it.
 | [`display.rs`](src/display.rs) | Monitors, modes, and mapping a display to its DXGI adapter and output |
 | [`gpu.rs`](src/gpu.rs) | GPU enumeration; telling the real GPU from the driver's look-alike adapter; NVIDIA-only selection |
 | [`nvenc_caps.rs`](src/nvenc_caps.rs) | The NVENC capability record and its checks (pure; filled by `native_nvenc::query_caps`) |
-| [`native_nvenc.rs`](src/native_nvenc.rs) | In-process Desktop Duplication → D3D11 → NVENC, phase-locked capture timer; capability query and trial initialization |
+| [`native_nvenc.rs`](src/native_nvenc.rs) | In-process D3D11/NVENC capture, cadence, capability query, real input resource preflight |
+| [`sdr_capture.rs`](src/native_nvenc/sdr_capture.rs) | WGC FP16 SDR capture and GPU conversion to RGB10 |
+| [`precision.rs`](src/bin/precision.rs) | Native desktop pixel precision/cursor/dump diagnostic |
 | [`cursor_overlay.rs`](src/cursor_overlay.rs) | Drawing the Windows cursor into the frame on the GPU |
 | [`encoder.rs`](src/encoder.rs) | The session's encoder: native start with retirement wait and busy-output retry, failure classification, Annex-B splitting |
 | [`nvenc_bindings/`](src/nvenc_bindings/) | NVENC API bindings, loaded at runtime (derived from `nvidia-video-codec-sdk`, MIT) |

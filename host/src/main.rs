@@ -42,6 +42,23 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    #[command(hide = true)]
+    CaptureProbe {
+        #[arg(long)]
+        dump: PathBuf,
+    },
+    /// Internal signed-in-user WGC source for a SYSTEM host.
+    #[command(hide = true)]
+    CaptureSource {
+        #[arg(long)]
+        pipe: String,
+        #[arg(long)]
+        display: String,
+        #[arg(long)]
+        width: u32,
+        #[arg(long)]
+        height: u32,
+    },
     /// List display adapters, monitors, modes and DXGI indices
     Displays,
     /// List GPUs and show which one would be used
@@ -208,6 +225,17 @@ fn main() -> Result<()> {
     // double-click: there is none, and the log goes to a file.
     let has_console = attach_parent_console();
     let cli = Cli::parse();
+    // The user capture source has no host state, tray, service or identity
+    // duties, and no permission to write the SYSTEM host's log/state.
+    if let Some(Command::CaptureSource {
+        pipe,
+        display,
+        width,
+        height,
+    }) = &cli.command
+    {
+        return relay_host::capture_source::run(pipe, display, *width, *height);
+    }
     let level = match cli.verbose {
         0 => "info",
         1 => "debug",
@@ -375,6 +403,25 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
             }
             serve(cli.serve, false)
         }
+        Some(Command::CaptureSource {
+            pipe,
+            display,
+            width,
+            height,
+        }) => relay_host::capture_source::run(&pipe, &display, width, height),
+        Some(Command::CaptureProbe { dump }) => {
+            let gpu = select_gpu(cli.serve.gpu.as_deref())?;
+            let display = display::primary().context("no primary display")?;
+            relay_host::precision::run(
+                &gpu,
+                &display.device_name,
+                true,
+                false,
+                Codec::Hevc,
+                Some(&dump),
+                Duration::ZERO,
+            )
+        }
         Some(Command::Displays) => {
             print!("{}", display::describe_all());
             Ok(())
@@ -415,7 +462,7 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
                 println!("Relay service started");
                 Ok(())
             }
-            ServiceAction::Run => service::run(),
+            ServiceAction::Run => service::run(cli.serve.no_vdd),
         },
         Some(Command::Worker) => serve(cli.serve, true),
         Some(Command::Layout { reapply }) => {
@@ -686,7 +733,8 @@ fn attach_test(args: &ServeArgs, want: Mode, seconds: u64, scale: Option<u16>) -
     let drv = open_driver()?;
 
     let started = std::time::Instant::now();
-    let source = server::acquire_display(Some(&drv), &gpu, want, true, scale::requested(scale))?;
+    let source =
+        server::acquire_display(Some(&drv), &gpu, want, true, scale::requested(scale), false)?;
     let monitor = source.monitor().clone();
     log::info!(
         "virtual display active after {:.1}s: {} ({}), {}",
@@ -772,7 +820,7 @@ fn serve(args: ServeArgs, worker: bool) -> Result<()> {
         .unwrap_or_else(|| "Relay".into());
 
     let gpu = select_gpu(args.gpu.as_deref())?;
-    let driver = if args.no_vdd {
+    let driver = if args.no_vdd || relay_host::test_fault("no-vdd") {
         log::warn!("--no-vdd: streaming the primary display instead of a virtual one");
         None
     } else {

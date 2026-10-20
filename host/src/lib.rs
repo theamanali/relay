@@ -14,6 +14,7 @@ mod field25519;
 pub mod gpu;
 pub mod input;
 mod native_nvenc;
+pub use native_nvenc::{capture_source, precision};
 mod nvenc_bindings;
 pub mod nvenc_caps;
 pub mod protocol;

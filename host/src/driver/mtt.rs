@@ -107,19 +107,29 @@ impl MttVdd {
 
     /// Merge `mode` (and the render GPU) into vdd_settings.xml. Returns true if
     /// the file changed, meaning the device must be (re)started to notice.
-    pub fn write_settings(&self, mode: Mode, gpu_name: &str) -> Result<bool> {
+    pub fn write_settings(&self, mode: Mode, gpu_name: &str, ten_bit: bool) -> Result<bool> {
         let _state = self.state();
-        self.write_settings_locked(mode, gpu_name)
+        self.write_settings_locked(mode, gpu_name, ten_bit)
     }
 
-    fn write_settings_locked(&self, mode: Mode, gpu_name: &str) -> Result<bool> {
+    fn write_settings_locked(&self, mode: Mode, gpu_name: &str, ten_bit: bool) -> Result<bool> {
         let original = fs::read_to_string(&self.settings)
             .with_context(|| format!("reading {}", self.settings.display()))?;
         let backup = self.settings.with_extension("xml.bak");
         if !backup.exists() {
             let _ = fs::write(&backup, &original);
         }
-        let updated = render_settings(&original, mode, gpu_name)?;
+        let updated = render_colour(&render_settings(&original, mode, gpu_name)?, ten_bit)?;
+        // Durable ownership of only the colour switches. Keep the original XML
+        // for extracting those elements on normal cleanup or after a crash;
+        // GPU/mode merges and unrelated edits are not rolled back.
+        let saved = self.state_dir.join("vdd-colour.xml");
+        if !saved.exists() {
+            let pending = saved.with_extension("xml.tmp");
+            fs::write(&pending, &original).context("saving VDD colour settings before override")?;
+            fs::rename(&pending, &saved)
+                .context("committing VDD colour journal before override")?;
+        }
         if updated == original {
             return Ok(false);
         }
@@ -132,6 +142,26 @@ impl MttVdd {
 
     fn physical_lock_file(&self) -> PathBuf {
         self.state_dir.join(PHYSICAL_LOCK_FILE)
+    }
+
+    fn restore_colour(&self) -> Result<()> {
+        let saved = self.state_dir.join("vdd-colour.xml");
+        if !saved.exists() {
+            return Ok(());
+        }
+        let original = fs::read_to_string(&saved)?;
+        anyhow::ensure!(
+            original.contains("<vdd_settings>") && original.contains("</vdd_settings>"),
+            "invalid VDD colour journal; retaining it and leaving settings untouched"
+        );
+        let current = fs::read_to_string(&self.settings)?;
+        let restored = restore_colour(&current, &original)?;
+        let tmp = self.settings.with_extension("xml.tmp");
+        fs::write(&tmp, restored)?;
+        fs::rename(&tmp, &self.settings)?;
+        fs::remove_file(saved)?;
+        log::info!("MTT VDD: original SDR10bit/HDRPlus settings restored (device disabled)");
+        Ok(())
     }
 
     /// The driver's device node, wherever the installer created it.
@@ -153,6 +183,7 @@ impl MttVdd {
         let started = Instant::now();
         let node = self.device_node()?;
         devnode::enable(&node.instance_id)?;
+        state.enabled_by_us = true;
         let deadline = started + APPEAR_TIMEOUT;
         while display::present_matching(&is_virtual).is_empty() {
             if Instant::now() >= deadline {
@@ -211,48 +242,16 @@ impl VirtualDisplay for MttVdd {
     /// Make sure the driver's monitor exists, offers the wanted mode and is
     /// rendered on the wanted GPU. Whether it is on the desktop is up to the
     /// session (`topology::exclusive`).
-    fn attach(&self, mode: Mode, gpu: &GpuInfo) -> Result<(Attachment, Monitor)> {
+    fn attach(&self, mode: Mode, gpu: &GpuInfo, ten_bit: bool) -> Result<(Attachment, Monitor)> {
         let mut state = self.state();
-        let is_virtual = |m: &Monitor| self.is_virtual(m);
-        let changed = self.write_settings_locked(mode, &gpu.name)?;
-        let present = display::present_matching(&is_virtual);
-        let stale = present
-            .iter()
-            .find(|m| m.attached)
-            .is_some_and(|m| !display::list_modes(&m.device_name).contains(&mode));
-        if !present.is_empty() && (changed || stale || !state.enabled_by_us) {
-            // Cycle it: the driver re-reads settings on start, and we want the
-            // helper watching this process for the rest of the session.
-            let why = if changed {
-                "settings changed"
-            } else if stale {
-                "mode list is stale"
-            } else {
-                "not started by this host"
-            };
-            log::info!("MTT VDD: restarting the device ({why})");
-            self.disable(&mut state)?;
+        self.cleanup_locked(&mut state)?;
+        let result = self.attach_locked(&mut state, mode, gpu, ten_bit);
+        if result.is_err() {
+            if let Err(e) = self.cleanup_locked(&mut state) {
+                log::warn!("VDD attach rollback failed (saved colour retained): {e:#}");
+            }
         }
-        if display::present_matching(&is_virtual).is_empty() {
-            log::info!(
-                "MTT VDD: enabling the device for {}x{}@{} on {}",
-                mode.width,
-                mode.height,
-                mode.hz,
-                gpu.name
-            );
-            self.enable(&mut state)?;
-        }
-        let monitor = display::present_matching(&is_virtual)
-            .into_iter()
-            .max_by_key(|m| m.attached)
-            .ok_or_else(|| anyhow!("MTT VDD monitor device not found"))?;
-        Ok((
-            Attachment::Mtt {
-                device_name: monitor.device_name.clone(),
-            },
-            monitor,
-        ))
+        result
     }
 
     fn lock_physical_outputs(&self) -> Result<()> {
@@ -286,7 +285,8 @@ impl VirtualDisplay for MttVdd {
         self.unlock_physical_outputs_locked(&mut state)?;
         let Attachment::Mtt { device_name } = attachment;
         log::debug!("MTT VDD: releasing {device_name}");
-        self.disable(&mut state)
+        self.disable(&mut state)?;
+        self.restore_colour()
     }
 
     fn cleanup(&self) -> Result<()> {
@@ -296,6 +296,55 @@ impl VirtualDisplay for MttVdd {
 }
 
 impl MttVdd {
+    fn attach_locked(
+        &self,
+        state: &mut State,
+        mode: Mode,
+        gpu: &GpuInfo,
+        ten_bit: bool,
+    ) -> Result<(Attachment, Monitor)> {
+        let is_virtual = |m: &Monitor| self.is_virtual(m);
+        let changed = self.write_settings_locked(mode, &gpu.name, ten_bit)?;
+        let present = display::present_matching(&is_virtual);
+        let stale = present
+            .iter()
+            .find(|m| m.attached)
+            .is_some_and(|m| !display::list_modes(&m.device_name).contains(&mode));
+        if !present.is_empty() && (changed || stale || !state.enabled_by_us) {
+            // Cycle it: the driver re-reads settings on start, and we want the
+            // helper watching this process for the rest of the session.
+            let why = if changed {
+                "settings changed"
+            } else if stale {
+                "mode list is stale"
+            } else {
+                "not started by this host"
+            };
+            log::info!("MTT VDD: restarting the device ({why})");
+            self.disable(state)?;
+        }
+        if display::present_matching(&is_virtual).is_empty() {
+            log::info!(
+                "MTT VDD: enabling the device for {}x{}@{} on {}",
+                mode.width,
+                mode.height,
+                mode.hz,
+                gpu.name
+            );
+            self.enable(state)?;
+        }
+        let monitor = display::present_matching(&is_virtual)
+            .into_iter()
+            .max_by_key(|m| m.attached)
+            .ok_or_else(|| anyhow!("MTT VDD monitor device not found"))?;
+        Ok((
+            Attachment::Mtt {
+                device_name: monitor.device_name.clone(),
+            },
+            monitor,
+        ))
+    }
+
     /// Re-enable every physical monitor in `physical-locked.txt` — ours from
     /// this session, or a crashed session's. Nodes that refuse stay listed
     /// for the next attempt.
@@ -332,11 +381,59 @@ impl MttVdd {
         self.unlock_physical_outputs_locked(state)?;
         let is_virtual = |m: &Monitor| self.is_virtual(m);
         if display::present_matching(&is_virtual).is_empty() {
-            return Ok(());
+            if state.enabled_by_us || self.state_dir.join("vdd-colour.xml").exists() {
+                self.disable(state)?;
+            }
+            return self.restore_colour();
         }
         log::info!("MTT VDD: disabling a device left enabled by an earlier session");
-        self.disable(state)
+        self.disable(state)?;
+        self.restore_colour()
     }
+}
+
+// MTT 25.7.23 reads these tags by name (its shipped XML uses <options>,
+// Relay's uses <colour>). Replace in place, inserting into <colour> only
+// when absent. Do not rewrite unrelated settings or turn SDR into HDR.
+fn colour_re(tag: &str) -> Regex {
+    Regex::new(&format!(r"<{tag}>\s*(?:true|false)\s*</{tag}>")).unwrap()
+}
+
+fn set_colour(xml: &str, tag: &str, value: bool) -> Result<String> {
+    let re = colour_re(tag);
+    let element = format!("<{tag}>{value}</{tag}>");
+    if re.is_match(xml) {
+        return Ok(re.replace_all(xml, element.as_str()).into_owned());
+    }
+    for close in ["</colour>", "</options>"] {
+        if xml.contains(close) {
+            return Ok(xml.replacen(close, &format!("    {element}\n    {close}"), 1));
+        }
+    }
+    anyhow::ensure!(xml.contains("</vdd_settings>"), "missing VDD settings root");
+    Ok(xml.replacen(
+        "</vdd_settings>",
+        &format!("<colour>{element}</colour>\n</vdd_settings>"),
+        1,
+    ))
+}
+
+fn render_colour(xml: &str, ten_bit: bool) -> Result<String> {
+    set_colour(&set_colour(xml, "SDR10bit", ten_bit)?, "HDRPlus", false)
+}
+
+fn restore_colour(current: &str, saved: &str) -> Result<String> {
+    let mut xml = current.to_string();
+    for tag in ["SDR10bit", "HDRPlus"] {
+        let re = colour_re(tag);
+        if let Some(original) = re.find(saved) {
+            xml = set_colour(&xml, tag, original.as_str().contains("true"))?;
+            xml = re.replace_all(&xml, original.as_str()).into_owned();
+        } else {
+            xml = re.replace_all(&xml, "").into_owned();
+        }
+    }
+    Ok(xml)
 }
 
 fn xml_escape(s: &str) -> String {
@@ -533,6 +630,51 @@ mod tests {
             height: 1964,
             hz: 120,
         }
+    }
+
+    #[test]
+    fn sdr_depth_transitions_are_idempotent_in_both_schemas() {
+        for section in ["colour", "options"] {
+            let original = format!("<vdd_settings><{section}><SDR10bit>false</SDR10bit><HDRPlus>true</HDRPlus><Other>keep</Other></{section}></vdd_settings>");
+            let on = render_colour(&original, true).unwrap();
+            assert!(on.contains("<SDR10bit>true</SDR10bit>"));
+            assert!(on.contains("<HDRPlus>false</HDRPlus>"));
+            assert_eq!(render_colour(&on, true).unwrap(), on);
+            let off = render_colour(&on, false).unwrap();
+            assert!(off.contains("<SDR10bit>false</SDR10bit>"));
+            assert_eq!(render_colour(&off, false).unwrap(), off);
+            assert_eq!(render_colour(&off, true).unwrap(), on);
+            assert_eq!(restore_colour(&on, &original).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn durable_colour_override_recovers_without_losing_mode_merge() {
+        let dir = std::env::temp_dir().join(format!("relay-colour-test-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let settings = dir.join("vdd_settings.xml");
+        fs::write(&settings, SAMPLE).unwrap();
+        let driver = MttVdd {
+            settings: settings.clone(),
+            state_dir: dir.clone(),
+            state: Mutex::default(),
+        };
+        driver.write_settings(mode(), "NVIDIA", true).unwrap();
+        assert!(dir.join("vdd-colour.xml").exists());
+        // Reopen as a new process would after a crash. Restore only owned tags.
+        let recovered = MttVdd {
+            settings,
+            state_dir: dir.clone(),
+            state: Mutex::default(),
+        };
+        recovered.restore_colour().unwrap();
+        let restored = fs::read_to_string(&recovered.settings).unwrap();
+        assert!(offers(&parse_settings(&restored), mode()));
+        assert!(!restored.contains("<SDR10bit>"));
+        assert!(!restored.contains("<HDRPlus>"));
+        assert!(!dir.join("vdd-colour.xml").exists());
+        recovered.restore_colour().unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
