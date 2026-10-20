@@ -8,6 +8,8 @@ final class SessionPipeline: HostConnectionDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var active: HostConnection?
     private let renderer: VideoRenderer
+    private let timingLog = ProcessInfo.processInfo.environment["RELAY_TIMING_LOG"] == "1"
+    private var nextTimingLog: UInt64 = 0
     private let stats: LatencyStats
     @MainActor private weak var owner: AppDelegate?
 
@@ -62,10 +64,17 @@ final class SessionPipeline: HostConnectionDelegate, @unchecked Sendable {
         withActive(c) { stats.recordInputSent(milliseconds: milliseconds) }
     }
     func connection(_ c: HostConnection, didSyncClock best: ClockSync.Sample) {
-        withActive(c) { stats.recordClock(best) }
+        withActive(c) { stats.recordClock(best); logTimingIfDue() }
     }
     func connection(_ c: HostConnection, didMeasureFrame timing: FrameEndToEnd) {
-        withActive(c) { stats.record(timing) }
+        withActive(c) { stats.record(timing); logTimingIfDue() }
+    }
+    private func logTimingIfDue() {
+        guard timingLog else { return }
+        let now = LatencyStats.now()
+        guard now >= nextTimingLog else { return }
+        nextTimingLog = now + 1_000_000_000
+        NSLog("%@", stats.timingLogLine(at: now))
     }
     func connection(_ c: HostConnection, didApplyInputAfter milliseconds: Double) {
         withActive(c) { stats.recordInputApplied(milliseconds: milliseconds) }

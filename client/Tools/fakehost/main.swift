@@ -123,6 +123,8 @@ let videoFormat = argument("--format").flatMap { UInt8($0) } ?? 0
 let streamSize = argument("--size").map { $0.split(separator: "x").compactMap { UInt16($0) } } ?? [1280, 720]
 // `--no-frames`: STREAM_START, then nothing (a PC that can't capture).
 let noFrames = args.contains("--no-frames")
+// Static > window, moving, a capture gap with clock replies, recovered moving, static.
+let sourceCycle = args.contains("--source-cycle")
 let timing = !args.contains("--no-timing")
 let displayScale = !args.contains("--no-display-scale")
 let clockOffsetMicros = Int64((Double(argument("--clock-offset-ms") ?? "0") ?? 0) * 1_000)
@@ -379,6 +381,7 @@ func serve(_ fd: Int32) {
         let interval = 1_000_000_000 / UInt64(streamFPS)
         let began = DispatchTime.now().uptimeNanoseconds
         var next = began
+        var recovered = false
         while !closed.isSet {
             let unit = clip.units[sent % clip.units.count]
             var body = Data()
@@ -388,6 +391,16 @@ func serve(_ fd: Int32) {
                 reply.appendBE64(request.client); reply.appendBE64(request.received); reply.appendBE64(hostMicros())
                 writeAll(fd, tx.seal(type: 0x09, payload: reply))
             }
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e9
+            if sourceCycle, elapsed >= 8, elapsed < 10 {
+                usleep(10_000)
+                continue // capture recovery still answers TIME_REQUEST
+            }
+            if sourceCycle, elapsed >= 10, !recovered {
+                writeAll(fd, tx.sealChunked(type: 0x03, payload: config))
+                recovered = true
+            }
+            let freshSource = sourceCycle ? ((6..<8).contains(elapsed) || (10..<12).contains(elapsed)) : sent % 5 != 4
             let tick = hostMicros()
             guard writeAll(fd, tx.sealChunked(type: 0x04, flags: unit.keyframe ? 0x01 : 0, payload: body)) else { break }
             let sentAt = hostMicros()
@@ -395,8 +408,8 @@ func serve(_ fd: Int32) {
                 let (inputs, lastInput) = clock.inputCounts
                 var ext = Data()
                 ext.appendBE64(UInt64(sent))
-                ext.appendBE64(sent % 5 == 4 ? .max : tick - 800)
-                ext.appendBE64(tick + 200)
+                ext.appendBE64(freshSource ? tick - 800 : .max)
+                ext.appendBE64(tick)
                 ext.appendBE64(sentAt)
                 for field: UInt32 in [300, 200, UInt32(min(sentAt - tick, 1_000_000)), .max, .max] { ext.appendBE32(field) }
                 ext.appendBE64(inputs)

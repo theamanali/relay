@@ -38,6 +38,9 @@ final class VideoRenderer: @unchecked Sendable {
     /// Receive-to-decode-and-display-enqueue timing for each completed frame.
     /// Final presentation timing comes from Metal drawable callbacks.
     var frameDecodedHandler: (@Sendable (UInt64, Double) -> Void)?
+    /// Optional diagnostic observation of the actual hardware-decoded buffer.
+    /// Installed before decoding; no readback/copy when absent.
+    var decodedBufferHandler: (@Sendable (CVPixelBuffer) -> Void)?
     /// Receive → on screen for each shown frame (Metal's callback thread).
     var framePresentedHandler: (@Sendable (_ sequence: UInt64, _ presentedAt: Double, _ milliseconds: Double) -> Void)? {
         get { metal.presentedHandler }
@@ -71,6 +74,7 @@ final class VideoRenderer: @unchecked Sendable {
     private var sessionLost = false
     private var displayedCount = 0
     private var displayedSize = CGSize.zero
+    private var loggedPixelGeneration = -1
 
     init(metalVSync: Bool = false) throws {
         guard let metal = MetalPresenter(vsync: metalVSync) else { throw InitializationError.metalUnavailable }
@@ -394,6 +398,14 @@ final class VideoRenderer: @unchecked Sendable {
         }
         guard let image else { return } // nothing to show for this frame
 
+        if loggedPixelGeneration != gen {
+            loggedPixelGeneration = gen
+            NSLog("VideoRenderer: decoded buffer %@, %dx%d, Metal %@",
+                  MetalPresenter.fourCC(CVPixelBufferGetPixelFormatType(image)),
+                  CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image),
+                  String(describing: MetalPresenter.layerFormat(for: image)))
+        }
+        decodedBufferHandler?(image)
         displayedCount += 1
         first = displayedCount == 1
         size = CGSize(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))

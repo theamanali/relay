@@ -267,9 +267,8 @@ final class MetalPresenter: @unchecked Sendable {
 
     // MARK: colour
 
-    /// BT.601/709/2020 matrix and range for a decoded buffer. NVENC signals
-    /// nothing in the VUI, so the decoder's default attachments decide; this
-    /// only reads them, the same as Core Image did.
+    /// BT.601/709/2020 matrix and range from the decoded buffer attachments
+    /// (including the host's SDR VUI); no intermediate 8-bit RGB surface.
     static func conversion(for image: CVPixelBuffer) -> (offset: SIMD3<Float>, matrix: simd_float3x3) {
         let format = CVPixelBufferGetPixelFormatType(image)
         let fullRange = isFullRange(format)
@@ -361,9 +360,9 @@ final class MetalPresenter: @unchecked Sendable {
         return true
     }
 
-    /// Test hook: render `image` into a fresh BGRA texture of the given size
-    /// and return its bytes (row-major, 4 bytes per pixel), or nil.
-    func renderOffscreen(_ image: CVPixelBuffer, width: Int, height: Int) -> [UInt8]? {
+    /// Test hook: the production shader and target format, with unmodified
+    /// readback bytes. RGB10 stays packed B:G:R:A = 10:10:10:2.
+    func renderNativeOffscreen(_ image: CVPixelBuffer, width: Int, height: Int) -> [UInt8]? {
         guard Self.pixelFormats.contains(CVPixelBufferGetPixelFormatType(image)),
               let (luma, chroma) = textures(for: image),
               let lumaTex = CVMetalTextureGetTexture(luma),
@@ -380,7 +379,14 @@ final class MetalPresenter: @unchecked Sendable {
         withExtendedLifetime((image, luma, chroma)) {}
         var out = [UInt8](repeating: 0, count: width * height * 4)
         target.getBytes(&out, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
-        guard format == .bgr10a2Unorm else { return out }
+        return out
+    }
+
+    /// Color-test convenience only: reduce native readback to BGRA8.
+    /// The live presentation path never calls this conversion.
+    func renderOffscreen(_ image: CVPixelBuffer, width: Int, height: Int) -> [UInt8]? {
+        guard var out = renderNativeOffscreen(image, width: width, height: height) else { return nil }
+        guard Self.layerFormat(for: image) == .bgr10a2Unorm else { return out }
         // Unpack 10:10:10:2 (blue in the low bits) to the same BGRA bytes.
         for i in stride(from: 0, to: out.count, by: 4) {
             let v = UInt32(out[i]) | UInt32(out[i + 1]) << 8 | UInt32(out[i + 2]) << 16 | UInt32(out[i + 3]) << 24

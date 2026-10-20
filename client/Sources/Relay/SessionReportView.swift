@@ -383,7 +383,7 @@ struct SessionReportView: View {
         func pick(_ names: [String]) -> [SessionReport.Row] { names.compactMap { rows[$0] } }
         return [
             DetailSection(name: "", color: nil, rows: pick(["Desktop → screen"])),
-            DetailSection(name: "PC", color: StatsHUD.Summary.pcColor, rows: pick(["Content age", "PC work"])),
+            DetailSection(name: "PC", color: StatsHUD.Summary.pcColor, rows: pick(["Content age", "PC work", "Encode & send"])),
             DetailSection(name: "Network", color: StatsHUD.Summary.networkColor,
                           // RTT/2 only stands in for a PC without clock sync, as in the Summary.
                           rows: pick([report.sentToReceived.count > 0 ? "Sent → received" : "Network (RTT/2 est.)",

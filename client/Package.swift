@@ -19,7 +19,7 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
             ]
         ),
-        .testTarget(name: "RelayTests", dependencies: ["Relay"]),
+        .testTarget(name: "RelayTests", dependencies: ["Relay"], resources: [.copy("Fixtures")]),
     ],
     swiftLanguageModes: [.v6]
 )

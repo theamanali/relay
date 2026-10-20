@@ -212,10 +212,12 @@ struct PresenterCounters: Equatable, Sendable {
 /// report once at the end. Every recording is a few additions under the lock.
 final class LatencyStats: @unchecked Sendable {
     struct Stage: Equatable, Sendable {
+        var count: Int
         var p50: Double?
         var p95: Double?
         var p99: Double?
         init(_ h: LatencyHistogram) {
+            count = h.count
             p50 = h.percentile(0.5); p95 = h.percentile(0.95); p99 = h.percentile(0.99)
         }
     }
@@ -237,6 +239,8 @@ final class LatencyStats: @unchecked Sendable {
         /// Measured across both clocks (FRAME_TIMING_EXT), once synced.
         var desktopToScreen = Stage(LatencyHistogram())
         var contentAge = Stage(LatencyHistogram())
+        /// Host submit → sent; independent of source time and clock sync.
+        var encodeSend = Stage(LatencyHistogram())
         var sentToReceived = Stage(LatencyHistogram())
         var inputApplied = Stage(LatencyHistogram())
         /// Video data arriving, in Mbps, and the bitrate the PC was asked for.
@@ -275,13 +279,16 @@ final class LatencyStats: @unchecked Sendable {
     private var inputSent = LatencyWindow(seconds: windowSeconds)
     private var desktopToScreen = LatencyWindow(seconds: windowSeconds)
     private var contentAge = LatencyWindow(seconds: windowSeconds)
+    private var encodeSend = LatencyWindow(seconds: windowSeconds)
     private var sentToReceived = LatencyWindow(seconds: windowSeconds)
     private var inputApplied = LatencyWindow(seconds: windowSeconds)
     private var sessionDesktopToScreen = LatencyHistogram()
     private var sessionContentAge = LatencyHistogram()
+    private var sessionEncodeSend = LatencyHistogram()
     private var sessionSentToReceived = LatencyHistogram()
     private var sessionInputApplied = LatencyHistogram()
     private var clock: ClockSync.Sample?
+    private var clockReplies = 0
     private var desktopSparkline = RecentSamples(capacity: sparklineFrames)
     private var toScreenTimeline = SecondMedians()
     private var desktopTimeline = SecondMedians()
@@ -317,13 +324,16 @@ final class LatencyStats: @unchecked Sendable {
             inputSent = LatencyWindow(seconds: Self.windowSeconds)
             desktopToScreen = LatencyWindow(seconds: Self.windowSeconds)
             contentAge = LatencyWindow(seconds: Self.windowSeconds)
+            encodeSend = LatencyWindow(seconds: Self.windowSeconds)
             sentToReceived = LatencyWindow(seconds: Self.windowSeconds)
             inputApplied = LatencyWindow(seconds: Self.windowSeconds)
             sessionDesktopToScreen = LatencyHistogram()
             sessionContentAge = LatencyHistogram()
+            sessionEncodeSend = LatencyHistogram()
             sessionSentToReceived = LatencyHistogram()
             sessionInputApplied = LatencyHistogram()
             clock = nil
+            clockReplies = 0
             desktopSparkline = RecentSamples(capacity: Self.sparklineFrames)
             toScreenTimeline = SecondMedians()
             desktopTimeline = SecondMedians()
@@ -410,13 +420,14 @@ final class LatencyStats: @unchecked Sendable {
         }
     }
 
-    func recordClock(_ best: ClockSync.Sample) { lock.withLock { clock = best } }
+    func recordClock(_ best: ClockSync.Sample) { lock.withLock { clock = best; clockReplies += 1 } }
 
     /// One frame across both clocks. Content age and sent → received count
     /// at once; desktop → screen waits for the frame's presentation.
     func record(_ timing: FrameEndToEnd, at nanos: UInt64 = LatencyStats.now()) {
         lock.withLock {
             guard nanos >= measuringFrom else { return }
+            if let ms = timing.encodeSendMs { encodeSend.record(ms, at: nanos); sessionEncodeSend.record(ms) }
             if let ms = timing.contentAgeMs { contentAge.record(ms, at: nanos); sessionContentAge.record(ms) }
             if let ms = timing.sentToReceivedMs { sentToReceived.record(ms, at: nanos); sessionSentToReceived.record(ms) }
             guard let present = timing.presentMacMicros else { return }
@@ -446,6 +457,7 @@ final class LatencyStats: @unchecked Sendable {
         if let p = entry.present, let s = entry.shown {
             pendingShown[sequence] = nil
             let ms = Double(s - p) / 1_000
+            guard ms.isFinite, ms >= 0 else { return }
             desktopToScreen.record(ms, at: nanos)
             sessionDesktopToScreen.record(ms)
             desktopSparkline.append(ms)
@@ -485,10 +497,11 @@ final class LatencyStats: @unchecked Sendable {
                 inputSent: Stage(inputSent.merged(at: nanos)),
                 desktopToScreen: Stage(desktopToScreen.merged(at: nanos)),
                 contentAge: Stage(contentAge.merged(at: nanos)),
+                encodeSend: Stage(encodeSend.merged(at: nanos)),
                 sentToReceived: Stage(sentToReceived.merged(at: nanos)),
                 inputApplied: Stage(inputApplied.merged(at: nanos)),
                 receivedMbps: elapsed > 0.05 ? Double(received.total(at: nanos)) * 8 / elapsed / 1e6 : nil,
-                desktopSparkline: desktopSparkline.ordered,
+                desktopSparkline: desktopToScreen.merged(at: nanos).count > 0 ? desktopSparkline.ordered : [],
                 clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
                 clockDelayMs: clock.map { Double($0.delay) / 1_000 },
                 sparkline: sparkline.ordered,
@@ -496,6 +509,20 @@ final class LatencyStats: @unchecked Sendable {
                 stream: stream,
                 warmingUp: nanos < measuringFrom)
         }
+    }
+
+    /// Opt-in once-per-second diagnostics for matched static/moving phases.
+    /// Counts disclose sparse source measurements; no stale-value substitution.
+    func timingLogLine(at nanos: UInt64 = LatencyStats.now()) -> String {
+        let s = hudSnapshot(at: nanos)
+        func stage(_ name: String, _ value: Stage) -> String {
+            "\(name)=\(SessionReport.ms(value.p50))/\(SessionReport.ms(value.p95))[n=\(value.count)]"
+        }
+        let replies = lock.withLock { clockReplies }
+        return String(format: "Timing window: uptime=%.3f fps=%.1f sync=%@ replies=%d ",
+                      Double(nanos) / 1e9, s.presentedFPS, s.clockOffsetMs == nil ? "no" : "yes", replies)
+            + [stage("source-age", s.contentAge), stage("pc-work", s.host), stage("encode-send", s.encodeSend),
+               stage("receive-screen", s.toScreen), stage("desktop-screen", s.desktopToScreen)].joined(separator: " ")
     }
 
     /// The whole session, or nil when nothing reached the screen.
@@ -514,6 +541,7 @@ final class LatencyStats: @unchecked Sendable {
                                  clock: clock,
                                  linkBitsPerSecond: lateNanos > 0 ? Double(lateBytes) * 8 / (Double(lateNanos) / 1e9) : nil,
                                  counters: counters,
+                                 encodeSend: sessionEncodeSend,
                                  receivedBytes: sessionBytes,
                                  timeline: sessionDesktopToScreen.count > 0 ? desktopTimeline.all : toScreenTimeline.all)
         }
@@ -548,6 +576,7 @@ struct SessionReport: Sendable {
     /// The rate frames' later records arrived at, over the whole session.
     let linkBitsPerSecond: Double?
     let counters: PresenterCounters
+    var encodeSend = LatencyHistogram()
     /// Video data received after the warm-up (wire bytes of FRAMEs).
     var receivedBytes = 0
     /// The headline measure's median per second (desktop → screen once
@@ -564,6 +593,7 @@ struct SessionReport: Sendable {
         [Row(name: "Desktop → screen", histogram: desktopToScreen),
          Row(name: "Content age", histogram: contentAge),
          Row(name: "PC work", histogram: host),
+         Row(name: "Encode & send", histogram: encodeSend),
          Row(name: "Sent → received", histogram: sentToReceived),
          Row(name: "Network (RTT/2 est.)", histogram: network),
          Row(name: "Frame transfer (est.)", histogram: transfer),
@@ -584,6 +614,9 @@ struct SessionReport: Sendable {
             sparkline: [], frameBudget: 1_000 / Double(max(stream.fps, 1)), stream: stream, counters: counters)
         s.desktopToScreen = .init(desktopToScreen)
         s.contentAge = .init(contentAge)
+        s.encodeSend = .init(encodeSend)
+        s.clockOffsetMs = clock.map { Double($0.offset) / 1_000 }
+        s.clockDelayMs = clock.map { Double($0.delay) / 1_000 }
         s.sentToReceived = .init(sentToReceived)
         s.inputApplied = .init(inputApplied)
         return s
@@ -650,8 +683,8 @@ struct SessionReport: Sendable {
         return text
     }
 
-    static let footnote = "Desktop → screen, Content age, Sent → received and Input → applied use the PC's clock, "
-        + "related to this Mac's by clock sync. Receive starts after decryption; Frame transfer is estimated. Not "
+    static let footnote = "Desktop → screen, Sent → received and Input → applied use clock sync. "
+        + "Content age and Encode & send use only the PC clock; PC work is capture + encode + send. Receive starts after decryption; Frame transfer is estimated. Not "
         + "measured: the Windows app's own frame, input device sampling and the display panel."
 
     static func ms(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "–" }

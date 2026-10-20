@@ -1,0 +1,2 @@
+# Controlled decoder fixtures are versioned despite the repo's capture-dump rule.
+!*.hevc

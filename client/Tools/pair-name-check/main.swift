@@ -25,8 +25,16 @@ final class Delegate: HostConnectionDelegate {
     }
     var started = false
     var frames = 0
-    func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) { started = true }
-    func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data]) {}
+    var began = 0.0
+    var clocks: [Double] = []
+    var source: [(seconds: Double, known: Bool, encode: Double?)] = []
+    var configs = 0
+    func connection(_ c: HostConnection, didSyncClock best: ClockSync.Sample) { clocks.append(ProcessInfo.processInfo.systemUptime - began) }
+    func connection(_ c: HostConnection, didMeasureFrame timing: FrameEndToEnd) {
+        source.append((ProcessInfo.processInfo.systemUptime - began, timing.presentMacMicros != nil, timing.encodeSendMs))
+    }
+    func connection(_ c: HostConnection, didStart stream: Proto.StreamStart) { started = true; began = ProcessInfo.processInfo.systemUptime }
+    func connection(_ c: HostConnection, didReceiveCodecConfig parameterSets: [Data]) { configs += 1 }
     func connection(_ c: HostConnection, didReceiveFrame nalUnits: Data, keyframe: Bool, sequence: UInt64, receivedAt: CMTime) { frames += 1 }
     func connection(_ c: HostConnection, didReceiveFrameTiming timing: Proto.FrameTiming) {}
     func connectionDidEnd(_ c: HostConnection, reason: String) {
@@ -98,7 +106,7 @@ final class FakeHost {
 func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: String? = "000000",
              pairOnly: Bool = true, verifyOnly: Bool = false, unpairOnly: Bool = false,
              streamTimeouts: TimeInterval? = nil, expectEnd: Bool = true,
-             displayScale: UInt16 = 0) throws -> (HostConnection, Delegate) {
+             displayScale: UInt16 = 0, watchSeconds: Double = 2) throws -> (HostConnection, Delegate) {
     var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
     options.expectedHostKey = try host.key
     options.clientName = name
@@ -117,7 +125,7 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     client.delegate = delegate
     client.start()
     // A healthy stream never ends by itself: watch it for a while instead.
-    let completed = delegate.ended.wait(timeout: .now() + (expectEnd ? 10 : 2)) == .success
+    let completed = delegate.ended.wait(timeout: .now() + (expectEnd ? 10 : watchSeconds)) == .success
     client.stop()
     client.queue.sync {} // finish callbacks and cancellation before inspecting state
     if expectEnd {
@@ -320,6 +328,18 @@ func run(_ root: URL) throws {
         let (_, delegate) = try connect(host, pin: nil, pairOnly: false, streamTimeouts: 0.5, expectEnd: false)
         try check(delegate.started && delegate.frames > 30, "stream-healthy: \(delegate.frames) frames")
         print("PASS stream-healthy: \(delegate.frames) frames in 2 s, no timeout")
+        let cycle = try FakeHost(root: root, label: "source-cycle", arguments: ["accept", "--clip", clipURL.path, "--source-cycle"])
+        defer { cycle.stop() }
+        _ = try connect(cycle)
+        let (_, d) = try connect(cycle, pin: nil, pairOnly: false, expectEnd: false, watchSeconds: 18)
+        try check(d.source.contains { $0.seconds > 5 && $0.seconds < 6 && !$0.known }, "static source missing")
+        try check(d.source.contains { $0.seconds > 6 && $0.seconds < 8 && $0.known }, "moving source missing")
+        try check(d.clocks.contains { $0 > 8.2 && $0 < 9.8 }, "no clock replies during capture recovery")
+        try check(d.configs == 2 && d.source.contains { $0.seconds > 10 && $0.seconds < 12 && $0.known }, "capture did not recover on same connection")
+        try check(d.source.contains { $0.seconds > 17 && !$0.known && $0.encode != nil }, "final static source/encode missing")
+        try check(d.clocks.contains { $0 > 16 }, "clock requests stopped on static content")
+        print("PASS source-cycle: static/moving/recovery/moving/static, \(d.clocks.count) clock replies (including gap), \(d.frames) frames, independent encode/send")
+
     }
 
     let host = try FakeHost(root: root, label: "pair-then-stream", arguments: ["busy"])

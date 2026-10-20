@@ -45,6 +45,9 @@ final class StatsHUDTests: XCTestCase {
     private func synced(_ base: LatencyStats.HUDSnapshot) -> LatencyStats.HUDSnapshot {
         var s = base
         func stage(_ v: Double) -> LatencyStats.Stage { var h = LatencyHistogram(); h.record(v); return .init(h) }
+        s.clockOffsetMs = 1
+        s.clockDelayMs = 0.5
+        s.encodeSend = stage(3.2)
         s.desktopToScreen = stage(16.2)
         s.contentAge = stage(3.3)
         s.sentToReceived = stage(0.4)
@@ -62,7 +65,7 @@ final class StatsHUDTests: XCTestCase {
         XCTAssertEqual(summary.groups.map(\.name), ["PC", "Network", "Mac"])
         // PC = image age + PC work; the network is measured one way.
         XCTAssertEqual(try XCTUnwrap(summary.groups[0].milliseconds), 3.3 + 4.1, accuracy: 0.1)
-        XCTAssertEqual(summary.groups[0].detail, "image age 3.3, encode & send 4.1")
+        XCTAssertEqual(summary.groups[0].detail, "image age 3.3, encode & send 3.2")
         XCTAssertEqual(try XCTUnwrap(summary.groups[1].milliseconds), 0.4, accuracy: 0.05)
         XCTAssertEqual(summary.groups[1].detail, "one way")
         XCTAssertEqual(summary.inputLabel, "Input → PC")

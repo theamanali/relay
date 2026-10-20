@@ -204,7 +204,7 @@ enum StatsHUD {
         /// The headline and its sparkline: desktop → screen once synced.
         /// The HUD leaves the label out; the session report names its measure with it.
         let label: String
-        /// Shown under the header only without clock sync.
+        /// Names the receive fallback and why source timing is unavailable.
         let unsyncedNote: String?
         let median: Double?
         let p95: Double?
@@ -225,9 +225,12 @@ enum StatsHUD {
         static let macColor = CGColor(srgbRed: 0.3, green: 0.84, blue: 0.74, alpha: 1)
 
         init(_ s: LatencyStats.HUDSnapshot) {
-            let endToEnd = s.desktopToScreen.p50 != nil
+            let synced = s.clockOffsetMs != nil && s.clockDelayMs != nil
+            let endToEnd = synced && s.desktopToScreen.p50 != nil
             label = endToEnd ? "PC → your screen, median" : "receive → screen, median"
-            unsyncedNote = endToEnd ? nil : "Receive → screen, clock not synced"
+            unsyncedNote = endToEnd ? nil : synced
+                ? "Receive → screen, source timing idle"
+                : "Receive → screen, clock not synced"
             median = endToEnd ? s.desktopToScreen.p50 : s.toScreen.p50
             p95 = endToEnd ? s.desktopToScreen.p95 : s.toScreen.p95
             sparkline = endToEnd ? s.desktopSparkline : s.sparkline
@@ -235,8 +238,9 @@ enum StatsHUD {
 
             let work = s.host.p50
             let pc: Double? = work.map { $0 + (s.contentAge.p50 ?? 0) }
-            let pcDetail = s.contentAge.p50.map { "image age \(StatsHUD.ms($0)), encode & send \(StatsHUD.ms(work))" }
-                ?? "capture, encode & send"
+            let pcDetail = s.encodeSend.p50 != nil || s.contentAge.p50 != nil
+                ? "image age \(StatsHUD.ms(s.contentAge.p50)), encode & send \(StatsHUD.ms(s.encodeSend.p50))"
+                : "capture, encode & send"
             let measured = s.sentToReceived.p50
             let network = measured ?? s.networkHalfRTT
             let mac = s.toScreen.p50
