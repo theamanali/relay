@@ -593,15 +593,28 @@ unsafe impl Send for PendingOutput {}
 struct CaptureInfo {
     /// GPU-side work (desktop copy + cursor + slot copy + encode call).
     work: Duration,
-    /// Age of the desktop content at submit, when DWM reported a present time.
+    /// Age of the source desktop frame at submit, when its timestamp is known.
     age: Option<Duration>,
     /// The desktop had nothing new; the previous frame was re-encoded.
     reused: bool,
-    /// DWM's present time of the newest content in this picture, host clock
-    /// (`crate::clock`); `UNKNOWN_TIME` without one (re-encode, cursor only).
+    /// Source desktop frame time, host clock (`crate::clock`): DDA's
+    /// LastPresentTime or WGC's compositor SystemRelativeTime.
+    /// `UNKNOWN_TIME` without a fresh source frame (including DDA cursor only).
     present_us: u64,
     /// Host clock when NvEncEncodePicture returned.
     submit_us: u64,
+}
+
+/// WGC can report a compositor timestamp slightly ahead of CPU submission
+/// on this Windows/driver stack. Keep the raw stamp for cadence, but omit
+/// an impossible source -> submit interval instead of clamping its age to 0,
+/// delaying video, or replacing it with the time we happened to acquire it.
+fn frame_present_us(source_qpc: Option<i64>, submit_us: u64) -> u64 {
+    source_qpc
+        .filter(|&time| time > 0)
+        .map(crate::clock::qpc_to_us)
+        .filter(|&time| time <= submit_us)
+        .unwrap_or(UNKNOWN_TIME)
 }
 
 struct CompletedOutput {
@@ -1503,8 +1516,13 @@ impl CaptureLoop {
             } else {
                 false
             }
-        } else if let Some(capture) = &self.broker_capture {
-            capture.copy_latest(&self.context, &path.texture)?
+        } else if let Some(capture) = &mut self.broker_capture {
+            if let Some(present_qpc) = capture.copy_latest(&self.context, &path.texture)? {
+                self.pending_present_qpc = Some(present_qpc);
+                true
+            } else {
+                false
+            }
         } else {
             false
         };
@@ -1666,19 +1684,16 @@ impl CaptureLoop {
             submitted_at,
         };
         let age = self.pending_present_qpc.map(|qpc| self.qpc_age(qpc));
+        let present_us = frame_present_us(self.pending_present_qpc, submit_us);
         let info = CaptureInfo {
             work: self.pending_work + work_start.elapsed(),
-            age: if self.precision.is_some() { None } else { age },
+            age: (present_us != UNKNOWN_TIME)
+                .then(|| Duration::from_micros(submit_us - present_us)),
             reused: !self.dirty,
-            // WGC SystemRelativeTime is a render/capture timestamp, not the
-            // DXGI LastPresentTime promised on the wire. Use it for cadence
-            // only; do not manufacture a desktop-to-screen measurement.
-            present_us: if self.precision.is_some() {
-                UNKNOWN_TIME
-            } else {
-                self.pending_present_qpc
-                    .map_or(UNKNOWN_TIME, crate::clock::qpc_to_us)
-            },
+            // Both capture APIs supply the source frame's QPC time. Carry
+            // it with this encoded picture through the existing Mac timing
+            // contract; never substitute acquisition or pipe arrival time.
+            present_us,
             submit_us,
         };
         if self
@@ -1699,7 +1714,7 @@ impl CaptureLoop {
         Ok(age)
     }
 
-    /// Elapsed time since a QPC timestamp (DXGI's `LastPresentTime`).
+    /// Elapsed time since the source frame's QPC timestamp (DDA or WGC).
     fn qpc_age(&self, present_time: i64) -> Duration {
         let mut now = 0i64;
         unsafe {
@@ -2367,6 +2382,19 @@ fn signal_colour(vui: &mut NV_ENC_CONFIG_H264_VUI_PARAMETERS) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_timing_is_unknown_for_repeats_and_future_compositor_stamps() {
+        let frequency = crate::clock::qpc_frequency();
+        assert_eq!(frame_present_us(Some(frequency), 2_000_000), 1_000_000);
+        assert_eq!(frame_present_us(Some(frequency * 2), 2_000_000), 2_000_000);
+        assert_eq!(frame_present_us(None, 2_000_000), UNKNOWN_TIME);
+        assert_eq!(frame_present_us(Some(0), 2_000_000), UNKNOWN_TIME);
+        assert_eq!(
+            frame_present_us(Some(frequency * 3), 2_000_000),
+            UNKNOWN_TIME
+        );
+    }
 
     fn config(codec: Codec, ten_bit: bool) -> EncoderConfig {
         EncoderConfig {

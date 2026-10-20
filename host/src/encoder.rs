@@ -313,7 +313,7 @@ pub struct AccessUnit {
 pub struct EncoderTiming {
     pub capture: Duration,
     pub encode: Duration,
-    /// DWM's present time of the newest content, host clock
+    /// Source desktop frame time (DDA present or WGC compositor), host clock
     /// (`crate::clock`); `protocol::UNKNOWN_TIME` for a re-encoded picture.
     pub present_us: u64,
     /// Host clock when the picture was submitted to the encoder.

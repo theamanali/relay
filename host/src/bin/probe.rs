@@ -491,7 +491,7 @@ fn main() -> Result<()> {
                 println!(
                     "frame {:>5} {}: present→submit {} ms, submit→sent {:.3} ms, sent→received {} ms, inputs {}",
                     t.sequence,
-                    if is_fresh { "DWM present known" } else { "DWM present unknown" },
+                    if is_fresh { "source present known" } else { "source present unknown" },
                     show(present_to_submit),
                     ms(submit_to_sent),
                     show(sent_to_received),
@@ -588,7 +588,7 @@ fn main() -> Result<()> {
             None => println!("clock: {time_requests} TIME_REQUESTs, no TIME_REPLY"),
         }
         println!(
-            "FRAME_TIMING_EXT on {ext_frames} frames: {fresh} with DWM present, {unknown_present} without DWM present (u64::MAX), {out_of_order} known-present frames out of order (present > submit or submit > sent)"
+            "FRAME_TIMING_EXT on {ext_frames} frames: {fresh} with source present, {unknown_present} without source present (u64::MAX), {out_of_order} known-present frames out of order (present > submit or submit > sent)"
         );
         for (label, values) in [
             ("present → submit", &mut present_submit),

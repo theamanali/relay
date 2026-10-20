@@ -41,11 +41,65 @@ fn acquired(status: windows::core::HRESULT) -> Result<bool> {
     }
 }
 
+const FRAME_TAG: &[u8; 8] = b"RLYSDR01";
+const FRAME_LEN: usize = 24;
+
+/// One metadata record per published GPU slot. Each broker has a new pipe,
+/// texture and process, so a restart also resets the sequence/generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameStamp {
+    sequence: u64,
+    present_qpc: i64,
+}
+
+impl FrameStamp {
+    fn bytes(self) -> [u8; FRAME_LEN] {
+        let mut bytes = [0; FRAME_LEN];
+        bytes[..8].copy_from_slice(FRAME_TAG);
+        bytes[8..16].copy_from_slice(&self.sequence.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.present_qpc.to_le_bytes());
+        bytes
+    }
+
+    fn parse(bytes: &[u8], previous: Option<Self>) -> Result<Option<Self>> {
+        if bytes.first() == Some(&1) {
+            bail!(
+                "user SDR capture failed: {}",
+                String::from_utf8_lossy(&bytes[1..])
+            );
+        }
+        let prefix = bytes.len().min(FRAME_TAG.len());
+        anyhow::ensure!(
+            bytes[..prefix] == FRAME_TAG[..prefix],
+            "invalid capture frame tag"
+        );
+        if bytes.len() < FRAME_LEN {
+            return Ok(None);
+        }
+        let stamp = Self {
+            sequence: u64::from_le_bytes(bytes[8..16].try_into()?),
+            present_qpc: i64::from_le_bytes(bytes[16..24].try_into()?),
+        };
+        let expected = previous.map_or(Some(1), |p| p.sequence.checked_add(1));
+        anyhow::ensure!(
+            Some(stamp.sequence) == expected,
+            "capture frame sequence mismatch"
+        );
+        anyhow::ensure!(stamp.present_qpc > 0, "invalid capture frame timestamp");
+        anyhow::ensure!(
+            previous.is_none_or(|p| stamp.present_qpc >= p.present_qpc),
+            "capture frame timestamp went backwards"
+        );
+        Ok(Some(stamp))
+    }
+}
+
 pub(super) struct Broker {
     pipe: File,
     process: crate::service::Process,
     texture: ID3D11Texture2D,
     mutex: IDXGIKeyedMutex,
+    previous: Option<FrameStamp>,
 }
 
 impl Broker {
@@ -142,6 +196,7 @@ impl Broker {
                 process,
                 texture,
                 mutex,
+                previous: None,
             };
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
@@ -216,22 +271,48 @@ impl Broker {
     }
 
     pub(super) fn copy_latest(
-        &self,
+        &mut self,
         context: &ID3D11DeviceContext,
         target: &ID3D11Texture2D,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         anyhow::ensure!(
             self.process.exit_code().is_none(),
             "user SDR capture source exited"
         );
-        if !acquire(&self.mutex, 1)? {
-            return Ok(false);
-        }
+        // Peek without consuming: metadata is written before key 1 is
+        // published. Neither a partial pipe record nor an unfinished GPU
+        // conversion may block this capture thread or advance the sequence.
+        let mut bytes = [0; FRAME_LEN];
+        let mut count = 0;
         unsafe {
-            context.CopyResource(target, &self.texture);
+            PeekNamedPipe(
+                handle(&self.pipe),
+                Some(bytes.as_mut_ptr().cast()),
+                FRAME_LEN as u32,
+                Some(&mut count),
+                None,
+                None,
+            )
+        }?;
+        let Some(stamp) = FrameStamp::parse(&bytes[..count as usize], self.previous)? else {
+            return Ok(None);
+        };
+        if !acquire(&self.mutex, 1)? {
+            return Ok(None);
+        }
+        // Only this thread reads the pipe; the full record was available
+        // above. Hold ownership until both its metadata and pixels are taken.
+        let copied = (|| -> Result<()> {
+            self.pipe.read_exact(&mut bytes)?;
+            unsafe { context.CopyResource(target, &self.texture) };
+            Ok(())
+        })();
+        unsafe {
             self.mutex.ReleaseSync(0)?;
         }
-        Ok(true)
+        copied?;
+        self.previous = Some(stamp);
+        Ok(Some(stamp.present_qpc))
     }
 }
 impl Drop for Broker {
@@ -295,16 +376,34 @@ pub fn run(pipe_name: &str, display: &str, width: u32, height: u32) -> Result<()
         let desktop = crate::desktop::input_desktop_name();
         raise_thread_priority("sdr-user-capture");
         let sleeper = HighResSleeper::new();
+        let mut sequence = 0u64;
         loop {
             if crate::desktop::input_desktop_name() != desktop {
                 bail!("capture desktop changed");
             }
             unsafe { PeekNamedPipe(handle(&pipe), None, 0, None, None, None) }?;
             if let Some(frame) = capture.latest()? {
+                let stamp = FrameStamp {
+                    sequence: sequence
+                        .checked_add(1)
+                        .context("capture sequence exhausted")?,
+                    present_qpc: frame.present_qpc(crate::clock::qpc_frequency())?,
+                };
                 if acquire(&mutex, 0)? {
-                    let converted = converter.convert(&context, &frame.texture()?);
-                    unsafe { mutex.ReleaseSync(1) }?;
-                    converted?;
+                    let published = (|| -> Result<()> {
+                        converter.convert(&context, &frame.texture()?)?;
+                        pipe.write_all(&stamp.bytes())?;
+                        // Metadata precedes publication; one slot limits the
+                        // pipe to one in-flight frame record. Never publish
+                        // pixels or a timestamp after a failed conversion.
+                        unsafe { mutex.ReleaseSync(1) }?;
+                        Ok(())
+                    })();
+                    if published.is_err() {
+                        let _ = unsafe { mutex.ReleaseSync(0) };
+                    }
+                    published?;
+                    sequence = stamp.sequence;
                 }
             }
             sleeper.sleep(Duration::from_micros(200));
@@ -327,5 +426,61 @@ mod tests {
         assert!(!acquired(windows::core::HRESULT(258)).unwrap());
         assert!(acquired(windows::core::HRESULT(128)).is_err());
         assert!(acquired(windows::Win32::Foundation::E_FAIL).is_err());
+    }
+
+    #[test]
+    fn frame_metadata_waits_for_the_whole_record_and_preserves_the_source_clock() {
+        let stamp = FrameStamp {
+            sequence: 1,
+            present_qpc: 123_456_789,
+        };
+        let bytes = stamp.bytes();
+        for length in 0..FRAME_LEN {
+            assert_eq!(FrameStamp::parse(&bytes[..length], None).unwrap(), None);
+        }
+        assert_eq!(FrameStamp::parse(&bytes, None).unwrap(), Some(stamp));
+        let next = FrameStamp {
+            sequence: 2,
+            present_qpc: stamp.present_qpc + 1,
+        };
+        assert_eq!(
+            FrameStamp::parse(&next.bytes(), Some(stamp)).unwrap(),
+            Some(next)
+        );
+        // A new helper cannot inherit records from a retired broker.
+        assert!(FrameStamp::parse(&next.bytes(), None).is_err());
+    }
+
+    #[test]
+    fn frame_metadata_rejects_mismatches_errors_and_invalid_clocks() {
+        let previous = FrameStamp {
+            sequence: 1,
+            present_qpc: 100,
+        };
+        for stamp in [
+            previous,
+            FrameStamp {
+                sequence: 3,
+                present_qpc: 110,
+            },
+            FrameStamp {
+                sequence: 2,
+                present_qpc: 99,
+            },
+            FrameStamp {
+                sequence: 2,
+                present_qpc: 0,
+            },
+            FrameStamp {
+                sequence: 2,
+                present_qpc: -1,
+            },
+        ] {
+            assert!(FrameStamp::parse(&stamp.bytes(), Some(previous)).is_err());
+        }
+        assert!(FrameStamp::parse(b"\x01conversion failed", Some(previous)).is_err());
+        let mut corrupt = previous.bytes();
+        corrupt[0] = b'X';
+        assert!(FrameStamp::parse(&corrupt, None).is_err());
     }
 }

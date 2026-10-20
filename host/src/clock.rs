@@ -1,6 +1,6 @@
 //! The host clock for TIME_REPLY and FRAME_TIMING_EXT: QueryPerformanceCounter
-//! in microseconds, the same base as DXGI's `LastPresentTime`, so DWM's
-//! present times convert with the same function. QPC never steps, unlike
+//! in microseconds, the same base as DXGI's `LastPresentTime` and WGC's
+//! `SystemRelativeTime` (after conversion from 100 ns units). QPC never steps, unlike
 //! `SystemTime`; its zero is arbitrary, so only differences mean anything.
 
 use std::sync::OnceLock;

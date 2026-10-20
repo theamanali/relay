@@ -224,9 +224,9 @@ impl TimeReply {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameTimingExt {
     pub sequence: u64,
-    /// DWM's present time of the newest desktop frame in this picture;
-    /// `UNKNOWN_TIME` when the tick re-encoded unchanged content (or only
-    /// the cursor moved).
+    /// Source desktop frame time: DDA LastPresentTime or WGC compositor
+    /// SystemRelativeTime, converted to the host clock. `UNKNOWN_TIME` on
+    /// re-encode without a fresh source (including DDA cursor-only ticks).
     pub present_us: u64,
     /// When NvEncEncodePicture returned for this picture.
     pub submit_us: u64,

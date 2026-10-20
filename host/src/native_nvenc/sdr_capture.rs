@@ -178,7 +178,7 @@ impl SdrCapture {
             log::warn!("Windows capture border could not be suppressed: {e}");
         }
         capture.session.StartCapture()?;
-        log::info!("SDR desktop + cursor source: Windows Graphics Capture FP16 linear scRGB -> GPU sRGB OETF -> RGB10; no DXGI cursor overlay; wire DWM present timing unknown");
+        log::info!("SDR desktop + cursor source: Windows Graphics Capture FP16 linear scRGB -> GPU sRGB OETF -> RGB10; no DXGI cursor overlay; source QPC timing through the existing frame timing contract");
         Ok(capture)
     }
 
@@ -223,10 +223,19 @@ impl Frame {
         unsafe { access.GetInterface() }.context("WGC D3D11 surface")
     }
     pub(super) fn present_qpc(&self, frequency: i64) -> Result<i64> {
-        let time = self.0.SystemRelativeTime()?.Duration;
-        anyhow::ensure!(time >= 0, "negative WGC SystemRelativeTime");
-        Ok(((time as u128 * frequency as u128) / 10_000_000).min(i64::MAX as u128) as i64)
+        system_relative_to_qpc(self.0.SystemRelativeTime()?.Duration, frequency)
     }
+}
+
+/// WGC returns the compositor's QPC time in 100 ns TimeSpan units, rather
+/// than raw counter ticks. Its epoch is shared by the helper and SYSTEM.
+fn system_relative_to_qpc(time: i64, frequency: i64) -> Result<i64> {
+    anyhow::ensure!(
+        time > 0 && frequency > 0,
+        "invalid WGC SystemRelativeTime/frequency"
+    );
+    i64::try_from(time as u128 * frequency as u128 / 10_000_000)
+        .context("WGC SystemRelativeTime exceeds QPC range")
 }
 
 const SHADER: &[u8] = br#"
@@ -381,6 +390,22 @@ impl SdrConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wgc_time_uses_the_host_qpc_epoch_without_a_process_offset() {
+        let year = 365 * 24 * 3600 * 10_000_000i64;
+        for time in [123_456_789, year, year + 765_432] {
+            for frequency in [10_000_000, 3_579_545, 24_000_000] {
+                let ticks = system_relative_to_qpc(time, frequency).unwrap();
+                assert!(
+                    crate::clock::ticks_to_us(ticks, frequency).abs_diff(time as u64 / 10) <= 1
+                );
+            }
+        }
+        assert!(system_relative_to_qpc(-1, 10_000_000).is_err());
+        assert!(system_relative_to_qpc(1, 0).is_err());
+        assert!(system_relative_to_qpc(i64::MAX, 24_000_000).is_err());
+    }
+
     #[test]
     fn sdr_conversion_shaders_compile() {
         compile(b"vs_main\0", b"vs_5_0\0").unwrap();

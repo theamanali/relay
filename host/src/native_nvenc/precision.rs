@@ -244,7 +244,7 @@ pub fn run(
         let deadline = Instant::now() + Duration::from_secs(8);
         let composition = create_texture(&device, width, height, format)?;
         let use_broker = ten_bit && crate::test_fault("capture-broker");
-        let broker = if use_broker {
+        let mut broker = if use_broker {
             Some(capture_source::Broker::new(
                 &device, display, width, height,
             )?)
@@ -279,8 +279,8 @@ pub fn run(
             );
             swap.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
                 .ok()?;
-            let result = if let Some(broker) = &broker {
-                if broker.copy_latest(&context, &composition)? {
+            let result = if let Some(broker) = &mut broker {
+                if broker.copy_latest(&context, &composition)?.is_some() {
                     Some(read_pixels(&device, &context, &composition)?)
                 } else {
                     None
@@ -499,8 +499,8 @@ pub fn run(
                     );
                     swap.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
                         .ok()?;
-                    let fresh = if let Some(broker) = &broker {
-                        broker.copy_latest(&context, &composition)?
+                    let fresh = if let Some(broker) = &mut broker {
+                        broker.copy_latest(&context, &composition)?.is_some()
                     } else if let Some(frame) = capture.as_ref().unwrap().latest()? {
                         converter
                             .as_ref()
@@ -566,15 +566,42 @@ pub fn run(
             };
             let mut encoder = NativeNvenc::spawn(&cfg)?;
             let mut file = File::create(path)?;
+            let mut known = 0;
+            let mut previous_present = 0;
             for _ in 0..12 {
                 let frame = encoder
                     .next_access_unit()?
                     .context("capture ended during diagnostic encode")?;
+                let timing = frame.timing.context("production encode omitted timing")?;
+                if timing.present_us != UNKNOWN_TIME {
+                    anyhow::ensure!(
+                        timing.present_us >= previous_present
+                            && timing.present_us <= timing.submit_us
+                            && timing.submit_us <= crate::clock::now_us(),
+                        "source/submit timestamp mismatch in production picture: previous {previous_present}, source {}, submit {}, now {}",
+                        timing.present_us, timing.submit_us, crate::clock::now_us()
+                    );
+                    previous_present = timing.present_us;
+                    known += 1;
+                    println!(
+                        "production picture timing: source {} us, submit {} us, age {} us",
+                        timing.present_us,
+                        timing.submit_us,
+                        timing.submit_us - timing.present_us
+                    );
+                }
                 for nal in frame.param_sets.iter().chain(&frame.nals) {
                     file.write_all(&[0, 0, 0, 1])?;
                     file.write_all(nal)?;
                 }
             }
+            if ten_bit && !crate::test_fault("secure-capture") {
+                anyhow::ensure!(
+                    known > 0,
+                    "WGC production pictures lost their source timestamps"
+                );
+            }
+            println!("production source timestamps: {known}/12 known, ordered; repeated pictures may be unknown");
             println!("production capture/encode dump: {} (12 frames, Best, 200 Mbps; decode and compare patch centres, lossy)",path.display());
         }
         drop(swap);
