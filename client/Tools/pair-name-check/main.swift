@@ -106,8 +106,7 @@ final class FakeHost {
 func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: String? = "000000",
              pairOnly: Bool = true, verifyOnly: Bool = false, unpairOnly: Bool = false,
              streamTimeouts: TimeInterval? = nil, expectEnd: Bool = true,
-             displayScale: UInt16 = 0, watchSeconds: Double = 2,
-             requestedRefresh: Int = 60) throws -> (HostConnection, Delegate) {
+             displayScale: UInt16 = 0, watchSeconds: Double = 2) throws -> (HostConnection, Delegate) {
     var options = HostConnection.Options(endpoint: .hostPort(host: "127.0.0.1", port: host.port))
     options.expectedHostKey = try host.key
     options.clientName = name
@@ -117,7 +116,6 @@ func connect(_ host: FakeHost, name: String = "Aman’s MacBook Pro", pin: Strin
     options.unpairOnly = unpairOnly
     options.dialTimeout = 5
     options.displayScale = displayScale
-    options.requestedRefresh = requestedRefresh
     if let streamTimeouts {
         options.streamStartTimeout = streamTimeouts
         options.firstFrameTimeout = streamTimeouts
@@ -330,13 +328,6 @@ func run(_ root: URL) throws {
         let (_, delegate) = try connect(host, pin: nil, pairOnly: false, streamTimeouts: 0.5, expectEnd: false)
         try check(delegate.started && delegate.frames > 30, "stream-healthy: \(delegate.frames) frames")
         print("PASS stream-healthy: \(delegate.frames) frames in 2 s, no timeout")
-        let extra = try FakeHost(root: root, label: "extra-frames", arguments: ["hang"])
-        defer { extra.stop() }
-        _ = try connect(extra, pairOnly: false, streamTimeouts: 0.5, requestedRefresh: 144)
-        _ = try connect(extra, pin: nil, pairOnly: false, streamTimeouts: 0.5, requestedRefresh: 144)
-        try check(extra.log.components(separatedBy: ", 144 fps, codecs").count == 3,
-                  "extra-frames: requested refresh lost on pairing/reconnect\n\(extra.log)")
-        print("PASS extra-frames: pairing and paired reconnect send 144 fps in CLIENT_HELLO")
         let cycle = try FakeHost(root: root, label: "source-cycle", arguments: ["accept", "--clip", clipURL.path, "--source-cycle"])
         defer { cycle.stop() }
         _ = try connect(cycle)

@@ -26,9 +26,6 @@ enum ScrollDirection: String, CaseIterable {
 /// Settings subtitles that describe the current choice, so each row says
 /// what it does now rather than what it can do.
 enum SettingDetail {
-    static func extraFrames(_ on: Bool, requestedRefresh: Int) -> String {
-        on ? "Requests \(requestedRefresh) fps on the next connection." : "Uses the selected refresh rate."
-    }
     static func automaticBitrate(_ on: Bool) -> String {
         on ? "Set for the resolution, refresh rate and connection." : "Uses the bitrate you choose below."
     }
@@ -62,9 +59,6 @@ struct SessionPrefs: Equatable {
     /// Follow the stream mode and link (`VideoBitrate.automatic`) until the
     /// user picks a bitrate.
     var bitrateAutomatic = true
-    /// Request 20% more frames than the selected refresh, up to 240 fps.
-    /// Applied to the Windows virtual display and encoder on next connect.
-    var extraFrames = false
     /// Metal VSync: no tearing, up to a frame more delay.
     var preventTearing = false
     var scrollDirection: ScrollDirection = .system
@@ -100,7 +94,6 @@ struct SessionPrefs: Equatable {
     private static let showSessionReportKey = "showSessionReport"
     private static let bitrateKey = "videoBitrateMbps"
     private static let bitrateAutomaticKey = "bitrateAutomatic"
-    private static let extraFramesKey = "extraFrames"
     private static let preventTearingKey = "preventTearing"
     private static let scrollDirectionKey = "scrollDirection"
     private static let encoderQualityKey = "encoderQuality"
@@ -126,7 +119,6 @@ struct SessionPrefs: Equatable {
             p.bitrateAutomatic = p.bitrateMbps == VideoBitrate.defaultValue
         }
         if d.object(forKey: preventTearingKey) != nil { p.preventTearing = d.bool(forKey: preventTearingKey) }
-        p.extraFrames = d.bool(forKey: extraFramesKey)
         if let raw = d.string(forKey: scrollDirectionKey), let s = ScrollDirection(rawValue: raw) { p.scrollDirection = s }
         if let q = EncoderQuality(rawValue: d.integer(forKey: encoderQualityKey)) { p.encoderQuality = q }
         p.fullColor = d.bool(forKey: fullColorKey)
@@ -148,7 +140,6 @@ struct SessionPrefs: Equatable {
         d.set(showSessionReport, forKey: Self.showSessionReportKey)
         d.set(VideoBitrate.clamp(bitrateMbps), forKey: Self.bitrateKey)
         d.set(bitrateAutomatic, forKey: Self.bitrateAutomaticKey)
-        d.set(extraFrames, forKey: Self.extraFramesKey)
         d.set(preventTearing, forKey: Self.preventTearingKey)
         d.set(scrollDirection.rawValue, forKey: Self.scrollDirectionKey)
         d.set(encoderQuality.rawValue, forKey: Self.encoderQualityKey)
@@ -162,14 +153,6 @@ struct SessionPrefs: Equatable {
     /// to a screen `pointWidth` points wide.
     func requestedDisplayScale(pixelWidth: Int, pointWidth: Double) -> Int {
         displayScaleAutomatic ? DisplayScale.automatic(pixelWidth: pixelWidth, pointWidth: pointWidth) : displayScale
-    }
-
-    /// Existing CLIENT_HELLO refresh field; host preflight checks the actual
-    /// requested mode. An explicit --max-fps remains a cap with extra frames.
-    func requestedRefresh(displayRefresh: Int, maxFPS: Int = 240) -> Int {
-        let cap = min(240, max(1, maxFPS))
-        let base = min(cap, max(1, displayRefresh))
-        return extraFrames ? min(cap, (base * 6 + 4) / 5) : base
     }
 
     /// Command-line flags override the remembered values for this launch.

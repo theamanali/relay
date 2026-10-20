@@ -4,33 +4,6 @@ import XCTest
 @testable import Relay
 
 final class VideoOptionsTests: XCTestCase {
-    @MainActor func testExtraFramesChangesRequestAndAutomaticBitrateTogether() {
-        let model = PickerModel()
-        model.configure(native: CGSize(width: 3024, height: 1964), pointWidth: 1512, maxRefresh: 120,
-                        initial: StreamMode(scale: 1, refresh: 120))
-        XCTAssertEqual(model.requestedRefresh, 120)
-        XCTAssertEqual(model.effectiveBitrate, 120)
-        var prefs = model.prefs
-        prefs.extraFrames = true
-        model.setPrefs(prefs)
-        XCTAssertEqual(model.requestedRefresh, 144)
-        XCTAssertEqual(model.effectiveBitrate, 140)
-        XCTAssertEqual(model.mode.refresh, 120, "selected display cadence stays unchanged")
-        let hello = Proto.clientHello(width: 3024, height: 1964, refresh: model.requestedRefresh,
-                                      bitrateMbps: model.effectiveBitrate, wantsInput: false,
-                                      codecs: Proto.Codec.hevc.bit, name: "Mac")
-        let payload = Data(hello.dropFirst(Proto.headerSize))
-        XCTAssertEqual(payload.be16(at: 6), 144, "existing wire refresh field carries extra frames")
-        XCTAssertEqual(payload.be16(at: 8), 140)
-        model.maxStreamFPS = 130
-        XCTAssertEqual(model.requestedRefresh, 130)
-        model.setBitrate(500)
-        XCTAssertEqual(model.effectiveBitrate, 500, "manual bitrate is preserved")
-        model.configure(native: CGSize(width: 2560, height: 1440), pointWidth: 2560, maxRefresh: 165, initial: nil)
-        model.maxStreamFPS = 240
-        XCTAssertEqual(model.requestedRefresh, 198, "extra frames follow the picker onto a new display")
-    }
-
     func testAutomaticBitrateKeepsEachFramesShare() {
         // The old fixed default, and what follows from it.
         XCTAssertEqual(VideoBitrate.automatic(width: 3024, height: 1964, refresh: 120, overWiFi: false), 120)

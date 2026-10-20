@@ -188,16 +188,11 @@ struct StreamInfo: Equatable, Sendable {
     var format: String
     var link: String?
     var vsync: Bool
-    /// Selected Mac display cadence, independent of an oversupplied stream.
-    var displayRefresh: Int? = nil
-
-    var frameBudget: Double { 1_000 / Double(max(1, min(fps, displayRefresh ?? fps))) }
 
     var summary: String {
         var parts = ["\(codec) \(width)×\(height) @ \(fps) Hz", "\(bitrateMbps) Mbps"]
         if !format.isEmpty { parts.append(format) }
         if let link { parts.append(link) }
-        if let refresh = displayRefresh, fps > refresh { parts.append("screen \(refresh) Hz") }
         parts.append(vsync ? "VSync on" : "VSync off")
         return parts.joined(separator: ", ")
     }
@@ -208,8 +203,7 @@ struct StreamInfo: Equatable, Sendable {
     static let widest = StreamInfo(
         host: "", codec: "H.264", width: 7680, height: 4320, fps: 240,
         bitrateMbps: VideoBitrate.maximum,
-        format: "4:4:4, 10-bit, \(EncoderQuality.best.title)", link: "This MacBook", vsync: false,
-        displayRefresh: 200
+        format: "4:4:4, 10-bit, \(EncoderQuality.best.title)", link: "This MacBook", vsync: false
     )
 }
 
@@ -548,7 +542,7 @@ final class LatencyStats: @unchecked Sendable {
                 clockOffsetMs: clock.map { Double($0.offset) / 1_000 },
                 clockDelayMs: clock.map { Double($0.delay) / 1_000 },
                 sparkline: sparkline.ordered,
-                frameBudget: stream?.frameBudget ?? (1_000.0 / 60),
+                frameBudget: 1_000 / Double(max(stream?.fps ?? 60, 1)),
                 stream: stream,
                 warmingUp: nanos < measuringFrom)
         }
@@ -654,7 +648,7 @@ struct SessionReport: Sendable {
             presentedFPS: presentedFPS, decodedFPS: duration > 0 ? Double(decode.count) / duration : 0,
             toScreen: .init(toScreen), decode: .init(decode), host: .init(host),
             networkHalfRTT: network.percentile(0.5), transfer: .init(transfer), inputSent: .init(inputSent),
-            sparkline: [], frameBudget: stream.frameBudget, stream: stream, counters: counters)
+            sparkline: [], frameBudget: 1_000 / Double(max(stream.fps, 1)), stream: stream, counters: counters)
         s.desktopToScreen = .init(desktopToScreen)
         s.contentAge = .init(contentAge)
         s.encodeSend = .init(encodeSend)

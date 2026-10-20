@@ -928,18 +928,12 @@ documented there. What follows is only the mechanics that are easy to break:
   the footer fits), following the window between displays. A user-reported
   stream at 2560×1440@144 to an external monitor worked on the real PC;
   165 Hz has not been streamed. `--max-fps` picks the highest offered rate
-  at or under it. Optional **Extra frames** (2026-10-20) is a persisted switch
-  below Refresh rate in Video, default off: `SessionPrefs.requestedRefresh`
-  asks for ceil(selected × 1.2), capped at 240 and any explicit `--max-fps`.
-  Both the picker bitrate preview and the connection use this requested
-  rate; Windows' VDD/encoder use the existing CLIENT_HELLO refresh field.
-  The selected Mac cadence stays separate in `StreamInfo.displayRefresh`
-  for HUD/report budgets and the Display row. Carries and FPS counting are
-  unchanged; oversupplying can intentionally replace frames. 211 Swift
-  tests, 24 isolated loopback checks, release bundle/signature and live
-  Settings checks pass (120 → 144,
-  60 → 72, dynamic bitrate, restored to off). Real-PC 144-on-120 latency,
-  pacing, load and restore remain pending in SESSION-HANDOFF.md.
+  at or under it. **Extra frames** was removed at the user's request on
+  2026-10-20: the request and automatic bitrate again use the selected
+  refresh rate. Saved `extraFrames` values are no longer read or written.
+  Removal verified with 208 Swift tests, 23 isolated loopback checks and
+  release bundle/signature verification. Reopened the idle app and checked
+  Video: no Extra frames control, Native/120 Hz with automatic 120 Mbps.
   Per user request, the HUD's headline FPS text has a fixed 120 ceiling;
   raw rates in telemetry/report and skipped-frame calculations are unchanged.
 - Build arm64 only, minimum macOS 26 (raised from 14 on 2026-10-18, user

@@ -20,43 +20,6 @@ session (`host/`, `tools/`). Do not create other handoff or retest files.
 
 ## Open
 
-### → user / Mac + PC: compare optional Extra frames (2026-10-20)
-
-The user requested an optional way to oversupply frames. Video ▸ Extra
-frames is now a persisted switch below Refresh rate, **off by default**.
-It requests ceil(selected rate × 1.2), capped at 240 fps and an explicit
-`--max-fps`; 120 Hz → 144 fps, 60 Hz → 72 fps. Applies on the next connection.
-The existing CLIENT_HELLO refresh field drives both the Windows VDD and
-encoder, so no wire/host change is needed. Automatic bitrate preview and
-the actual request both follow this rate; manual bitrate is preserved.
-The HUD/report distinguish the received stream rate from the selected Mac
-cadence, and keep the latter's latency budget. At the user's subsequent
-request, only the HUD's headline FPS text is capped at 120. Raw presentation
-rates remain in logs/reports, and skipped counts still use raw measurements,
-including intentional replacement of extra frames. This text ceiling does
-not pace Metal or change the requested Windows rate.
-
-Local checks: **211 Swift tests pass**, covering preference default/round
-trip, rates/caps, screen changes, bitrate, serialized hello and HUD/report
-budgets. Isolated `test-pair-name.sh`: **24 PASS**, including 144 fps in
-CLIENT_HELLO after initial pairing and on a paired reconnect. Fakehost now
-logs the requested refresh alongside size/options. Release bundle and
-signature verification pass. In the bundled
-Settings UI, verified off → 144 fps at 120 Hz, 72 fps at 60 Hz, automatic
-bitrate following each, then restored the user's 120 Hz choice and Extra
-frames off. The app was reopened after the user accidentally quit it;
-no agent started an exclusive Windows connection.
-
-**Pending user-run comparison:** with the same resolution, encoder,
-depth/chroma and input workload, compare Extra frames off/on at the Mac's
-120 Hz target. The user starts each exclusive session. Record the actual
-host/VDD/STREAM_START rate, bitrate, source availability, PC work, decode,
-presented FPS, presentation gaps and end-to-end p50/p95. Check disconnect
-restore. Establish whether latency/pacing improves without overload;
-increased decoded/skipped counts alone do not show improvement. Record
-results here before claiming a benefit. Keep the Windows source-timestamp
-investigation below separate from this optional setting.
-
 ### → user / Mac: verify fixed SDR timing HUD on installed host (2026-10-19)
 
 The user reports no image age / encode & send detail and "clock not synced"

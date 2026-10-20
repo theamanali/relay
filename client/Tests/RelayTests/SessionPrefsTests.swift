@@ -84,28 +84,6 @@ final class SessionPrefsTests: XCTestCase {
         XCTAssertFalse(prefs.naturalScrolling(macNatural: true))
     }
 
-    func testExtraFramesDefaultsOffPersistsAndRespectsRateCaps() {
-        let suite = "RelayTests.ExtraFrames.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        var prefs = SessionPrefs.load(from: defaults)
-        XCTAssertFalse(prefs.extraFrames)
-        XCTAssertEqual(prefs.requestedRefresh(displayRefresh: 120), 120)
-        prefs.extraFrames = true
-        prefs.save(to: defaults)
-        prefs = SessionPrefs.load(from: defaults)
-        XCTAssertTrue(prefs.extraFrames)
-        for (refresh, expected) in [(60, 72), (75, 90), (120, 144), (144, 173), (165, 198), (240, 240)] {
-            XCTAssertEqual(prefs.requestedRefresh(displayRefresh: refresh), expected)
-        }
-        XCTAssertEqual(prefs.requestedRefresh(displayRefresh: 120, maxFPS: 130), 130)
-        XCTAssertEqual(prefs.requestedRefresh(displayRefresh: 60, maxFPS: 60), 60)
-        XCTAssertEqual(prefs.requestedRefresh(displayRefresh: 300), 240)
-        prefs.extraFrames = false
-        prefs.save(to: defaults)
-        XCTAssertFalse(SessionPrefs.load(from: defaults).extraFrames)
-    }
-
     @MainActor func testHUDModePersistsAndTheFlagShowsCompact() async {
         let suite = "RelayTests.SessionPrefs.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -131,7 +109,6 @@ final class SessionPrefsTests: XCTestCase {
     /// line: no wider than the widest one seen on one line in the 380 pt pane.
     func testSettingSubtitlesFollowTheChoiceAndFitOneLine() {
         let pairs = [
-            (SettingDetail.extraFrames(true, requestedRefresh: 240), SettingDetail.extraFrames(false, requestedRefresh: 120)),
             (SettingDetail.automaticBitrate(true), SettingDetail.automaticBitrate(false)),
             (SettingDetail.automaticScaling(true), SettingDetail.automaticScaling(false)),
             (SettingDetail.fullColor(true), SettingDetail.fullColor(false)),

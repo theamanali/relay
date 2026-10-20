@@ -117,22 +117,6 @@ final class StatsHUDTests: XCTestCase {
         }
     }
 
-    func testExtraFramesUseSelectedDisplayBudgetAndExposeBothRates() throws {
-        let stats = LatencyStats()
-        let stream = StreamInfo(host: "PC", codec: "HEVC", width: 3024, height: 1964, fps: 144,
-                                bitrateMbps: 140, format: "", link: nil, vsync: false, displayRefresh: 120)
-        stats.reset(stream: stream, at: 0)
-        stats.recordPresented(milliseconds: 5, at: 4_000_000_000)
-        let hud = stats.hudSnapshot(at: 5_000_000_000)
-        XCTAssertEqual(hud.frameBudget, 1_000.0 / 120, accuracy: 1e-9)
-        XCTAssertTrue(StatsHUD.streamRows(stream, receivedMbps: nil).contains { $0.0 == "Display" && $0.1 == "120 Hz, VSync off" })
-        XCTAssertTrue(stream.summary.contains("@ 144 Hz"))
-        XCTAssertTrue(stream.summary.contains("screen 120 Hz"))
-        let report = try XCTUnwrap(stats.sessionReport(at: 5_000_000_000, counters: .zero))
-        XCTAssertEqual(report.snapshot.frameBudget, hud.frameBudget)
-        XCTAssertTrue(report.markdown.contains("screen 120 Hz"))
-    }
-
     func testDetailedHeightMatchesWhatIsDrawn() throws {
         let image = try XCTUnwrap(StatsHUD.render(synced(snapshot()), mode: .detailed, scale: 1))
         XCTAssertEqual(CGFloat(image.height), StatsHUD.height(for: synced(snapshot()), mode: .detailed).rounded(.up))

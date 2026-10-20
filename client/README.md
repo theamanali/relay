@@ -118,20 +118,6 @@ use the picker. Each subtitle describes the current choice (e.g. VSync off:
 "Lowest delay, but fast motion may tear."). Video starts with the same
 Resolution and Refresh rate choices as the footer:
 
-- **Extra frames** (Video, below Refresh rate): off by default. Requests 20%
-  more frames than the selected rate, rounded up and capped at 240 fps:
-  120 Hz → 144 fps, 144 Hz → 173 fps. The subtitle shows the request for the
-  next connection. Windows' virtual display and encoder both use this rate;
-  the Mac's selected target stays unchanged. An explicit `--max-fps` still
-  caps the request. Automatic bitrate follows the extra frames; a manual
-  bitrate is kept. The HUD/report show both rates when the stream exceeds
-  the selected target, and their latency budgets use the selected target.
-  The HUD's headline FPS readout is capped at 120 (user preference); raw
-  presentation rates remain in timing logs and session reports. Skipped-frame
-  counts use the raw measurements, so
-  intentionally oversupplying frames can increase the skipped count.
-  This is optional for comparison; a latency/smoothness benefit on the real
-  PC has not yet been established.
 - **Bitrate**: **Automatic bitrate** is on by default: each frame gets the share 120 Mbps gave
   Native at 120 Hz on a 14-inch MacBook Pro, so 60 Hz or a smaller size asks
   for less (20–200 Mbps), capped at 80 Mbps over Wi-Fi. Over a gigabit cable
@@ -164,6 +150,8 @@ Resolution and Refresh rate choices as the footer:
   across both machines; a PC without clock sync shows the Mac's own share,
   receive → screen), with frame rate, p95, skipped frames per second when
   there are any, and a sparkline.
+  The FPS readout is capped at 120 (user preference); timing logs, session
+  reports and skipped-frame calculations retain the raw measured rate.
   A healthy synchronized clock with no source samples in the last ten
   seconds shows “Receive → screen, source timing idle”. Fresh content resumes
   Desktop → screen on the same connection; the app never substitutes receipt

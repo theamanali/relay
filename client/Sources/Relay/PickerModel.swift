@@ -49,8 +49,6 @@ final class PickerModel {
     /// The picker screen's width in points, for the automatic display scale.
     var screenPointWidth: Double = 1
     var maxRefresh = 60
-    /// Explicit launch cap, otherwise the host's 240 fps session limit.
-    var maxStreamFPS = 240
     var renamingID: String?
     var renameDraft = ""
     var pinPrompt: PINPrompt?
@@ -131,7 +129,6 @@ final class PickerModel {
     var selected: Row? { rows.first { $0.id == selection } }
     var canConfigure: Bool { selected?.paired == true && !connecting }
     var refreshRates: [Int] { StreamMode.refreshRates(max: maxRefresh) }
-    var requestedRefresh: Int { prefs.requestedRefresh(displayRefresh: mode.refresh, maxFPS: maxStreamFPS) }
     /// Pair only for a selected available PC; Connect otherwise, as before SwiftUI.
     var connectTitle: String { connecting ? "Cancel" : selected?.paired == false ? "Pair" : "Connect" }
     /// What the list shows, top to bottom. Plain rows rather than Section
@@ -279,7 +276,7 @@ final class PickerModel {
         guard prefs.bitrateAutomatic else { return prefs.bitrateMbps }
         let (width, height) = StreamMode.size(native: nativePixelSize, scale: mode.scale)
         let overWiFi = selected.map { connectsOverWiFi($0.host) } ?? false
-        return VideoBitrate.automatic(width: width, height: height, refresh: requestedRefresh, overWiFi: overWiFi)
+        return VideoBitrate.automatic(width: width, height: height, refresh: mode.refresh, overWiFi: overWiFi)
     }
 
     /// The display scale the settings show: the step the PC would use for

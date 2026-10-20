@@ -527,10 +527,6 @@ struct SessionSettingsView: View {
             ForEach(model.refreshRates, id: \.self) { Text(verbatim: "\($0) Hz").tag($0) }
         }
         .disabled(model.refreshRates.count < 2)
-        SettingSwitch("Extra frames",
-                      detail: SettingDetail.extraFrames(model.prefs.extraFrames, requestedRefresh: model.requestedRefresh),
-                      isOn: preference(\.extraFrames))
-            .help("Requests 20% more frames, up to 240 fps, on the next connection. The PC's virtual display uses that rate too.")
         // Automatic follows the resolution, refresh rate and link;
         // the Bitrate row below shows its value, greyed out, until
         // Automatic is switched off.
