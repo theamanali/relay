@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_USAGE_STAGING,
 };
@@ -72,6 +72,44 @@ impl Drop for Window {
     }
 }
 
+struct CursorPosition(POINT);
+impl Drop for CursorPosition {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SetCursorPos(self.0.x, self.0.y);
+        }
+    }
+}
+
+fn pump_window() {
+    unsafe {
+        let mut message = MSG::default();
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+}
+
+/// Actual pointer pixels against the known native test image, not an
+/// artificial CursorOverlay shape. Ignore <=2-code conversion roundoff.
+fn pointer_pixels(pixels: &[u32], width: u32, at: (u32, u32)) -> usize {
+    let mut changed = 0;
+    for y in at.1..(at.1 + 80).min(HEIGHT) {
+        for x in at.0..(at.0 + 80).min(WIDTH) {
+            let actual = unpack(pixels[((y + 64) * width + x + 64) as usize], true);
+            if actual
+                .iter()
+                .zip(patch(x, y))
+                .any(|(a, b)| a.abs_diff(b) > 2)
+            {
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
 fn read_pixels(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
@@ -121,6 +159,12 @@ fn read_pixels(
 /// No topology or colour changes here. The caller chooses an already active
 /// output; the small window is destroyed on every return path. Optional dump
 /// uses the actual production capture/encode pipeline, not synthetic input.
+#[derive(Default)]
+pub struct Options {
+    pub hold: Duration,
+    pub check_cursor: bool,
+}
+
 pub fn run(
     gpu: &GpuInfo,
     display: &str,
@@ -128,8 +172,13 @@ pub fn run(
     full_color: bool,
     codec: Codec,
     dump: Option<&Path>,
-    hold: Duration,
+    options: Options,
 ) -> Result<()> {
+    let Options { hold, check_cursor } = options;
+    anyhow::ensure!(
+        !check_cursor || ten_bit,
+        "--cursor-check requires the FP16/RGB10 source"
+    );
     let _apartment = Apartment::new()?;
     let placement = crate::display::current_placement(display)?;
     anyhow::ensure!(
@@ -153,6 +202,7 @@ pub fn run(
         let class = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
             lpszClassName: w!("RelaySdrPrecision"),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
             ..Default::default()
         };
         RegisterClassW(&class);
@@ -217,6 +267,7 @@ pub fn run(
             None
         };
         let captured = loop {
+            pump_window();
             let back: ID3D11Texture2D = swap.GetBuffer(0)?;
             context.UpdateSubresource(
                 &back,
@@ -423,8 +474,63 @@ pub fn run(
                 "RGB10 texture contains quantized 8-bit source; precision NOT established"
             );
         }
+        if check_cursor {
+            let mut old = POINT::default();
+            GetCursorPos(&mut old)?;
+            let _restore = CursorPosition(old);
+            let mut previous = None;
+            for at in [(160, 4), (800, 4)] {
+                SetCursorPos(
+                    placement.x + 64 + at.0 as i32,
+                    placement.y + 64 + at.1 as i32,
+                )?;
+                SetCursor(LoadCursorW(None, IDC_ARROW)?);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                loop {
+                    pump_window();
+                    let back: ID3D11Texture2D = swap.GetBuffer(0)?;
+                    context.UpdateSubresource(
+                        &back,
+                        0,
+                        None,
+                        pixels.as_ptr().cast(),
+                        WIDTH * 4,
+                        WIDTH * HEIGHT * 4,
+                    );
+                    swap.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
+                        .ok()?;
+                    let fresh = if let Some(broker) = &broker {
+                        broker.copy_latest(&context, &composition)?
+                    } else if let Some(frame) = capture.as_ref().unwrap().latest()? {
+                        converter
+                            .as_ref()
+                            .unwrap()
+                            .convert(&context, &frame.texture()?)?;
+                        true
+                    } else {
+                        false
+                    };
+                    if fresh {
+                        let sampled = read_pixels(&device, &context, &composition)?;
+                        let visible = pointer_pixels(&sampled, width, at);
+                        let trails =
+                            previous.map_or(0, |last| pointer_pixels(&sampled, width, last));
+                        if visible >= 8 && trails == 0 {
+                            println!("actual WGC cursor at {at:?}: {visible} changed pixels, previous-position trails {trails}");
+                            break;
+                        }
+                    }
+                    anyhow::ensure!(
+                        Instant::now() < deadline,
+                        "WGC cursor missing or left trails at {at:?}"
+                    );
+                }
+                previous = Some(at);
+            }
+        }
         let until = Instant::now() + hold;
         while Instant::now() < until {
+            pump_window();
             let back: ID3D11Texture2D = swap.GetBuffer(0)?;
             context.UpdateSubresource(
                 &back,

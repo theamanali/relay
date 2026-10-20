@@ -219,15 +219,19 @@ and unrelated XML are retained. Eight-bit and H.264 sessions select SDR10bit=fal
 
 On this PC, DuplicateOutput1 returns BGRA8 even with a 10-bit SDR MTT display.
 Ten-bit sessions therefore capture FP16 linear scRGB with Windows Graphics
-Capture, exclude its cursor, use a GPU sRGB OETF into R10G10B10A2, compose the
-DXGI pointer there, and register slots as **ABGR10** (R is in the low 10 bits).
-When DuplicateOutput1 is unsupported, classic duplication supplies only the
-pointer; the Default desktop remains FP16 without a BGRA8 conversion. A SYSTEM worker starts a signed-in-user
+Capture **including its cursor**, use a GPU sRGB OETF into R10G10B10A2, and
+register slots as **ABGR10** (R is in the low 10 bits). DDA observes output
+loss/recovery; classic duplication is sufficient if DuplicateOutput1 is
+unsupported. DDA's pointer can already be baked into its BGRA8 desktop instead
+of separately visible, so relying on its metadata while discarding those
+pixels lost the pointer on the VDD. WGC owns cursor composition now, with no
+second DDA overlay. The Default desktop remains FP16 without a BGRA8 conversion.
+A SYSTEM worker starts a signed-in-user
 `capture-source` process from the same binary, because WGC activation itself
 requires that user's CaptureService (impersonation is insufficient). The local
 pipe checks the exact child PID before duplicating only an RGB10 texture
 handle; a keyed mutex transfers GPU ownership. Pixel data stays on the GPU,
-and topology, input, cursor composition, NVENC and keys stay with SYSTEM.
+and topology, input, NVENC and keys stay with SYSTEM.
 The helper has no host-state or tray duties and dies with capture teardown.
 With 10-bit selected, Winlogon (lock/login/UAC) uses the existing SYSTEM
 DDA/BGRA8 cursor/composition/ARGB input path temporarily. The virtual display,
@@ -252,6 +256,7 @@ channel order and cursor operations, and optionally writes a production dump:
 
 ```powershell
 host\target\release\precision.exe --dump host\target\precision-420.hevc
+host\target\release\precision.exe --cursor-check --dump host\target\precision-cursor.hevc
 host\target\release\precision.exe --full-color --dump host\target\precision-444.hevc
 host\target\release\precision.exe --eight-bit --dump host\target\precision-8.hevc
 host\target\release\precision.exe --h264 --dump host\target\precision-h264.h264
@@ -265,6 +270,15 @@ record expected/source/composed patch samples. The Python tool needs ffmpeg /
 ffprobe and compares decoded frame 10 at the same pixel centres; it reports
 lossy errors in 10-bit RGB codes and validates SDR VUI. A texture format or a
 Main10 SPS alone does not pass this diagnostic.
+
+`--cursor-check` additionally samples the **actual Windows cursor** at two
+positions against the known RGB10 image and checks the old position has no
+trail. It briefly moves/restores the pointer and pumps the test window's
+messages. `RELAY_TEST_FAULT=capture-broker relay-host capture-probe
+--cursor-check --dump ...` exercises the shared-GPU helper; the negative
+control `RELAY_TEST_FAULT=omit-wgc-cursor precision --cursor-check` must fail.
+Keep these hooks off in normal use. An artificial overlay shape alone does
+not prove WGC includes the real pointer.
 
 With the service stopped, elevated `precision --virtual-display` adds a
 1920×1080@60 VDD **alongside** the physical monitors and restores the snapshot

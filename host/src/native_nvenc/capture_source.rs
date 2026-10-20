@@ -206,7 +206,7 @@ impl Broker {
                 );
                 thread::sleep(Duration::from_millis(10));
             }
-            log::info!("SDR source: signed-in-user WGC FP16 -> GPU RGB10 shared texture (PID {}); host retains cursor/NVENC/input/topology",broker.process.pid);
+            log::info!("SDR source: signed-in-user WGC FP16 desktop + cursor -> GPU RGB10 shared texture (PID {}); host retains NVENC/input/topology",broker.process.pid);
             Ok(broker)
         })();
         unsafe {

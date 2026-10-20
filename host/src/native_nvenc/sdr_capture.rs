@@ -1,5 +1,5 @@
-//! High-precision SDR source. DXGI duplication remains the cursor source, but
-//! its SDR desktop is BGRA8 even on MTT's 10-bit display on this machine.
+//! High-precision SDR source, including Windows' cursor composition. DXGI's
+//! SDR desktop is BGRA8 even on MTT's 10-bit display on this machine.
 //! WGC FP16 retains native sub-8-bit content. Convert linear scRGB to the same
 //! full-range SDR RGB codes used by the 8-bit path, on the encoding GPU.
 use super::*;
@@ -164,14 +164,21 @@ impl SdrCapture {
             closed,
             closed_token,
         };
-        capture.session.SetIsCursorCaptureEnabled(false)?;
+        // A pointer can already be baked into DDA's BGRA8 desktop rather
+        // than supplied as separate shape metadata (notably on an IDD).
+        // That desktop is deliberately discarded here. Let WGC compose the
+        // cursor into its FP16 frame instead, and never draw a DDA cursor on
+        // top: one cursor owner, including in the SYSTEM user's helper.
+        capture
+            .session
+            .SetIsCursorCaptureEnabled(!crate::test_fault("omit-wgc-cursor"))?;
         // Unpackaged desktop apps can request border suppression directly.
         // Never invoke a consent picker or change any global privacy setting.
         if let Err(e) = capture.session.SetIsBorderRequired(false) {
             log::warn!("Windows capture border could not be suppressed: {e}");
         }
         capture.session.StartCapture()?;
-        log::info!("SDR desktop source: Windows Graphics Capture FP16 linear scRGB -> GPU sRGB OETF -> RGB10; DXGI supplies cursor only; wire DWM present timing unknown");
+        log::info!("SDR desktop + cursor source: Windows Graphics Capture FP16 linear scRGB -> GPU sRGB OETF -> RGB10; no DXGI cursor overlay; wire DWM present timing unknown");
         Ok(capture)
     }
 

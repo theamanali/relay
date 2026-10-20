@@ -26,6 +26,9 @@ struct Args {
     /// Keep the native ramp visible while another host/probe captures it.
     #[arg(long, default_value_t = 0)]
     hold_seconds: u64,
+    /// Verify actual WGC cursor pixels at two positions; restores the pointer.
+    #[arg(long)]
+    cursor_check: bool,
 }
 
 fn main() -> Result<()> {
@@ -50,7 +53,10 @@ fn main() -> Result<()> {
             args.full_color,
             codec,
             args.dump.as_deref(),
-            std::time::Duration::from_secs(args.hold_seconds),
+            precision::Options {
+                hold: std::time::Duration::from_secs(args.hold_seconds),
+                check_cursor: args.cursor_check,
+            },
         );
     }
     // This test never acquires an exclusive topology or disables a physical
@@ -94,7 +100,10 @@ fn main() -> Result<()> {
                 args.full_color,
                 codec,
                 args.dump.as_deref(),
-                std::time::Duration::from_secs(args.hold_seconds),
+                precision::Options {
+                    hold: std::time::Duration::from_secs(args.hold_seconds),
+                    check_cursor: args.cursor_check,
+                },
             )
         })();
         let restored = snapshot.restore();

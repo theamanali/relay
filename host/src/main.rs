@@ -46,6 +46,8 @@ enum Command {
     CaptureProbe {
         #[arg(long)]
         dump: PathBuf,
+        #[arg(long)]
+        cursor_check: bool,
     },
     /// Internal signed-in-user WGC source for a SYSTEM host.
     #[command(hide = true)]
@@ -409,7 +411,7 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
             width,
             height,
         }) => relay_host::capture_source::run(&pipe, &display, width, height),
-        Some(Command::CaptureProbe { dump }) => {
+        Some(Command::CaptureProbe { dump, cursor_check }) => {
             let gpu = select_gpu(cli.serve.gpu.as_deref())?;
             let display = display::primary().context("no primary display")?;
             relay_host::precision::run(
@@ -419,7 +421,10 @@ fn run(cli: Cli, has_console: bool) -> Result<()> {
                 false,
                 Codec::Hevc,
                 Some(&dump),
-                Duration::ZERO,
+                relay_host::precision::Options {
+                    check_cursor: cursor_check,
+                    ..Default::default()
+                },
             )
         }
         Some(Command::Displays) => {

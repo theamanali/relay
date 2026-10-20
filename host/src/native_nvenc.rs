@@ -537,6 +537,7 @@ pub struct NativeNvenc {
     // re-encoded so the client keeps receiving pictures.
     stat_age: Duration,
     stat_age_max: Duration,
+    stat_age_samples: u32,
     stat_fresh: u32,
     stat_reused: u32,
 }
@@ -952,6 +953,7 @@ impl NativeNvenc {
             stat_encode: Duration::ZERO,
             stat_age: Duration::ZERO,
             stat_age_max: Duration::ZERO,
+            stat_age_samples: 0,
             stat_fresh: 0,
             stat_reused: 0,
         })
@@ -991,17 +993,26 @@ impl NativeNvenc {
         if let Some(age) = completed.capture.age {
             self.stat_age += age;
             self.stat_age_max = self.stat_age_max.max(age);
+            self.stat_age_samples += 1;
         }
         if self.stat_frames >= STAT_INTERVAL {
             let n = f64::from(self.stat_frames.max(1));
-            let fresh = f64::from(self.stat_fresh.max(1));
+            let age = if self.stat_age_samples == 0 {
+                "unavailable (source presentation time unknown)".to_string()
+            } else {
+                format!(
+                    "avg {:.2} ms, max {:.2} ms over {} samples",
+                    self.stat_age.as_secs_f64() * 1000.0 / f64::from(self.stat_age_samples),
+                    self.stat_age_max.as_secs_f64() * 1000.0,
+                    self.stat_age_samples
+                )
+            };
             log::info!(
-                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms; desktop frame age at submit avg {:.2} ms, max {:.2} ms ({} fresh, {} reused)",
+                "native latency avg over {} frames: capture {:.2} ms, encode {:.2} ms; desktop frame age at submit {} ({} fresh, {} reused)",
                 self.stat_frames,
                 self.stat_capture.as_secs_f64() * 1000.0 / n,
                 self.stat_encode.as_secs_f64() * 1000.0 / n,
-                self.stat_age.as_secs_f64() * 1000.0 / fresh,
-                self.stat_age_max.as_secs_f64() * 1000.0,
+                age,
                 self.stat_fresh,
                 self.stat_reused,
             );
@@ -1010,6 +1021,7 @@ impl NativeNvenc {
             self.stat_encode = Duration::ZERO;
             self.stat_age = Duration::ZERO;
             self.stat_age_max = Duration::ZERO;
+            self.stat_age_samples = 0;
             self.stat_fresh = 0;
             self.stat_reused = 0;
         }
@@ -1505,7 +1517,8 @@ impl CaptureLoop {
                 self.context
                     .CopyResource(&self.composition_texture, &path.texture);
             }
-            self.cursor.draw(&self.context);
+            // WGC already composed the pointer at FP16 precision. A second
+            // DDA overlay would duplicate it on GPUs exposing separate shapes.
             self.cursor_dirty = false;
             self.dirty = true;
             self.pending_work += started.elapsed();
@@ -1527,11 +1540,10 @@ impl CaptureLoop {
             let desktop: ID3D11Texture2D = resource
                 .cast()
                 .context("desktop frame is not a D3D11 texture")?;
-            self.cursor.update(&self.duplication, info)?;
             if self.precision.is_some() {
-                self.cursor_dirty = true;
                 return Ok(());
             }
+            self.cursor.update(&self.duplication, info)?;
             let mut source = D3D11_TEXTURE2D_DESC::default();
             let mut target = D3D11_TEXTURE2D_DESC::default();
             unsafe {
@@ -1656,7 +1668,7 @@ impl CaptureLoop {
         let age = self.pending_present_qpc.map(|qpc| self.qpc_age(qpc));
         let info = CaptureInfo {
             work: self.pending_work + work_start.elapsed(),
-            age,
+            age: if self.precision.is_some() { None } else { age },
             reused: !self.dirty,
             // WGC SystemRelativeTime is a render/capture timestamp, not the
             // DXGI LastPresentTime promised on the wire. Use it for cadence
@@ -2034,8 +2046,8 @@ fn create_capture(
             colour.ColorSpace
         );
         let duplication = if mode == CaptureMode::Desktop10 {
-            // DDA supplies cursor shapes/positions only for a 10-bit session.
-            // Probe native formats but never feed its BGRA8 desktop to NVENC.
+            // DDA observes output loss/recovery for a 10-bit session. WGC
+            // owns both desktop and pointer; never use DDA's BGRA8 pixels.
             let output5: IDXGIOutput5 = output.cast().context("IDXGIOutput5")?;
             match output5.DuplicateOutput1(
                 &device,
@@ -2049,8 +2061,8 @@ fn create_capture(
                 Err(e) if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED => {
                     // This driver sometimes rejects DuplicateOutput1 even
                     // with BGRA8 alone. Classic DDA is sufficient for the
-                    // pointer; its desktop pixels are still never consumed.
-                    log::warn!("DuplicateOutput1 unsupported; using classic duplication for cursor only (desktop remains WGC FP16)");
+                    // loss notifications; its pixels are never consumed.
+                    log::warn!("DuplicateOutput1 unsupported; classic duplication observes output recovery only (desktop/cursor remain WGC FP16)");
                     output
                         .cast::<IDXGIOutput1>()?
                         .DuplicateOutput(&device)
@@ -2068,7 +2080,7 @@ fn create_capture(
         log::info!(
             "duplication {}: {:?}; composition/slot {:?}; NVENC input {:?}, output {}-bit SDR",
             if mode == CaptureMode::Desktop10 {
-                "(cursor only; WGC FP16 desktop)"
+                "(recovery only; WGC FP16 desktop + cursor)"
             } else {
                 "(desktop)"
             },
