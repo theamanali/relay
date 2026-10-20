@@ -95,7 +95,8 @@ enum StatsHUD {
         let big = canvas.text(summary.median.map { String(format: "%.1f", $0) } ?? "––",
                               font: font(26, .semibold), color: level?.color ?? primary, x: padding, baseline: y + 25)
         canvas.text("ms", font: font(13, .medium), color: secondary, x: padding + big + 3, baseline: y + 25)
-        canvas.text(String(format: "%.0f fps", s.presentedFPS), font: font(13, .semibold), color: primary,
+        // User-facing ceiling; raw presentation rates stay in telemetry/report.
+        canvas.text(String(format: "%.0f fps", min(s.presentedFPS, 120)), font: font(13, .semibold), color: primary,
                     right: padding + inner, baseline: y + 25)
         y += 32
         // Two columns: p95 under the latency it qualifies, skipped frames

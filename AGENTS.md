@@ -940,6 +940,8 @@ documented there. What follows is only the mechanics that are easy to break:
   Settings checks pass (120 → 144,
   60 → 72, dynamic bitrate, restored to off). Real-PC 144-on-120 latency,
   pacing, load and restore remain pending in SESSION-HANDOFF.md.
+  Per user request, the HUD's headline FPS text has a fixed 120 ceiling;
+  raw rates in telemetry/report and skipped-frame calculations are unchanged.
 - Build arm64 only, minimum macOS 26 (raised from 14 on 2026-10-18, user
   decision: 14 was never tested, and every Apple silicon Mac runs 26;
   swift-tools-version 6.2). Latest stable OS is the

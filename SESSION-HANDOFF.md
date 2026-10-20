@@ -30,8 +30,11 @@ The existing CLIENT_HELLO refresh field drives both the Windows VDD and
 encoder, so no wire/host change is needed. Automatic bitrate preview and
 the actual request both follow this rate; manual bitrate is preserved.
 The HUD/report distinguish the received stream rate from the selected Mac
-cadence, and keep the latter's latency budget. FPS/skipped counts remain
-actual measurements, including intentional replacement of extra frames.
+cadence, and keep the latter's latency budget. At the user's subsequent
+request, only the HUD's headline FPS text is capped at 120. Raw presentation
+rates remain in logs/reports, and skipped counts still use raw measurements,
+including intentional replacement of extra frames. This text ceiling does
+not pace Metal or change the requested Windows rate.
 
 Local checks: **211 Swift tests pass**, covering preference default/round
 trip, rates/caps, screen changes, bitrate, serialized hello and HUD/report

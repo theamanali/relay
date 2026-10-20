@@ -126,7 +126,9 @@ Resolution and Refresh rate choices as the footer:
   caps the request. Automatic bitrate follows the extra frames; a manual
   bitrate is kept. The HUD/report show both rates when the stream exceeds
   the selected target, and their latency budgets use the selected target.
-  Presented FPS and skipped-frame counts remain actual measurements, so
+  The HUD's headline FPS readout is capped at 120 (user preference); raw
+  presentation rates remain in timing logs and session reports. Skipped-frame
+  counts use the raw measurements, so
   intentionally oversupplying frames can increase the skipped count.
   This is optional for comparison; a latency/smoothness benefit on the real
   PC has not yet been established.
