@@ -233,6 +233,30 @@ on the PC as described below.
 During fast-paced 3D gaming (e.g. Valorant), the Mac HUD frequently switches to
 "Receive → screen, source timing idle" even though the game is rendering actively at
 high frame rates (60–120+ fps) and video is streaming smoothly.
+
+**Current Mac behavior / reproduction baseline (updated 2026-10-20):**
+
+- The message means clock sync is accepted but the roughly ten-second
+  rolling window contains no valid **joined Desktop → screen samples**.
+  It does not establish that the clock, game or capture is idle. A frame
+  must have valid source timing and actually reach presentation for that
+  sample to exist; investigate missing/rejected timing and frame association,
+  rather than assuming a source API failure from the caption alone.
+- The Mac rejects unknown/zero/out-of-range source stamps, source after
+  submit, reversed submit/send, source mapped after Mac receipt, and
+  presentation before source. Encode/send and clock exchanges are separate
+  measurements and can remain healthy. Check which side first loses usable
+  timing instead of treating every empty Mac window as a host future stamp.
+- Current Mac runtime: `acf6724` removes **Extra frames**; a selected 120 Hz
+  again requests a 120 Hz VDD/120 fps target. Use this matched-rate baseline,
+  not the withdrawn 144-on-120 experiment. The HUD's FPS **text** is capped
+  at 120; use raw timing-log, report and host/probe counts to judge throughput.
+  The cap changes neither pacing nor source-timing validation.
+- The caption “source timing idle” remains in the current app. “Source timing
+  unavailable” would be clearer during games, but a wording-only change
+  does not solve the measurement loss. Any Mac wording/runtime follow-up
+  belongs in this file for the Mac session; PC owns `host/` + `tools/`.
+
 Microsoft documents `SystemRelativeTime` as the QPC time at which the
 compositor rendered the frame, not as a target VSync timestamp
 ([API documentation](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.direct3d11captureframe.systemrelativetime)).
@@ -243,17 +267,33 @@ Missing/reused source frames, timestamp conversion, helper metadata and
 capture/presentation modes also need to be distinguished with actual traces.
 
 **Steps for the PC session:**
-1. Add bounded/opt-in diagnostics around the production WGC/helper → NVENC
+1. Identify the running service/worker build and installed/release hashes,
+   actual session mode, capture source and helper use before diagnosing it.
+   Preserve service/display restoration and the existing 8-bit/H.264 paths.
+   Add bounded/opt-in diagnostics around the production WGC/helper → NVENC
    timing path. For the same picture record raw WGC 100 ns time, converted
    host QPC µs, helper sequence where applicable, CPU submit/send time and
-   the reason a source stamp is unavailable. Keep acquisition time separate
-   as diagnostic context, never as a substitute source time.
+   the reason a source stamp is unavailable. Record QPC frequency and frame
+   sequence/association through encode and wire output. Keep acquisition
+   time separate as diagnostic context, never as a substitute source time.
+   Aggregate counters at a bounded rate; any detailed sample buffer must be
+   bounded/opt-in and must not block video or extend GPU-slot ownership.
 2. During user-run Valorant sessions and matched desktop controls, record
    stream depth/chroma, actual capture path, windowed/fullscreen mode, fps
    and timestamps of static/moving phases. Count fresh/known, reused/missing,
    future, invalid/backwards and helper-rejected stamps. For future stamps,
    report lead distribution/max and sample count; correlate the same phases
    with Mac timing logs and its ten-second source window.
+   Compare static desktop, continuously moving desktop and active gameplay
+   at the same resolution/120 Hz, preset, bitrate and chroma; compare 8-bit
+   DDA with true 10-bit WGC, recording the actual path in each run. Record
+   game display mode rather than assuming exclusive fullscreen behavior.
+   First localize loss: no fresh capture timestamp → helper/host rejected →
+   wire UNKNOWN → client validation/presentation join. If the host emits
+   ordered known stamps through an affected interval, save the correlated
+   frame data and hand off the Mac validation/join investigation instead of
+   loosening host checks. The Mac can log with `RELAY_TIMING_LOG=1`; its
+   `Timing window:` lines include sync/reply state, raw fps and stage counts.
 3. Verify clock-unit conversion and per-picture timestamp association before
    choosing a fix. Start with non-exclusive `--no-vdd` checks; the user runs
    exclusive VDD sessions. Keep unknown timing unknown, retain
@@ -270,6 +310,12 @@ capture/presentation modes also need to be distinguished with actual traces.
 **What counts as done:**
 Reproducible traces explain which path loses source timing during active
 gaming, with measured rejection counts/reasons and comparison controls.
+For an implemented correction, verify valid ordered samples reach the Mac
+and refresh Desktop → screen during continuous gameplay, while true static
+re-encodes and invalid source times still remain unknown. Confirm clock and
+encode/send telemetry continue through missing-source intervals. Record
+unchanged/unrun paths explicitly and keep real-game qualification pending
+until actual correlated results exist.
 Record the validated correction or remaining blocker here; do not call
 invented source times or merely suppressing “source timing idle” a pass.
 
